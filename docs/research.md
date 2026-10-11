@@ -1,0 +1,237 @@
+# Research: facts the design relies on
+
+Collected 2026-10-11 by three research subagents (Obsidian, Microsoft Graph/OneDrive, Microsoft identity platform) and one follow-up agent (cost and tooling). Each fact has an ID that other documents cite (for example `[G-UP-3]`) and the source URL it came from.
+
+How the sources were read:
+- **Obsidian docs.** `docs.obsidian.md` did not resolve from the research environment, so these pages were read from their GitHub source, `https://github.com/obsidianmd/obsidian-developer-docs` (path `en/...`). That repository is what docs.obsidian.md is built from. Links below point to the published URL; the GitHub path is given where they differ.
+- **Microsoft docs** were read through the Microsoft Learn MCP server.
+- **Quotes.** Text inside "quotes" is verbatim. Everything else is a summary.
+
+Status tags used below:
+- **VERIFIED**: stated by a primary source.
+- **INFERRED**: follows from documented rules but is not stated anywhere as one fact.
+- **SILENT**: the docs don't say. Each SILENT item has a milestone that tests it on a real device or account (see section 6).
+- **CONFLICT**: two primary sources disagree.
+
+---
+
+## 1. Obsidian platform and policy
+
+### Policy and submission
+| ID | Fact | Status | Source |
+|---|---|---|---|
+| O-POL-1 | The README must disclose network use: "Network use. Clearly explain which remote services are used and why they're needed." | VERIFIED | https://docs.obsidian.md/Developer+policies |
+| O-POL-2 | The README must also disclose "An account is required for full access." and "Accessing files outside of Obsidian vaults. Clearly explain why this is needed." | VERIFIED | https://docs.obsidian.md/Developer+policies |
+| O-POL-3 | Plugins must not "Obfuscate code to hide its purpose", must not "Include client-side telemetry", and must not "Install or update themselves or their dependencies" (so no remote code loading). | VERIFIED | https://docs.obsidian.md/Developer+policies |
+| O-POL-4 | A LICENSE file is required. Don't use "Obsidian" in a way that implies a first-party product. | VERIFIED | https://docs.obsidian.md/Developer+policies |
+| O-SUB-1 | The plugin `id` must be unique and must not contain "obsidian". Versions are `x.y.z`. The repo root needs `README.md`, `LICENSE` and `manifest.json`. The directory reads `manifest.json` from the default branch. | VERIFIED | https://docs.obsidian.md/Plugins/Releasing/Submit+your+plugin |
+| O-SUB-2 | The release tag must equal the manifest `version`, with no `v` prefix. Release assets are `main.js` and `manifest.json`, plus `styles.css` if the plugin has one. | VERIFIED | https://docs.obsidian.md/Plugins/Releasing/Submit+your+plugin ; https://github.com/obsidianmd/obsidian-sample-plugin |
+| O-SUB-3 | The description is at most 250 characters, starts with an action verb, ends with a period and has no emoji. Set `minAppVersion` to the real minimum. Use `fundingUrl` only for donation links. Command IDs must not contain the plugin ID. Remove all sample code. | VERIFIED | https://docs.obsidian.md/Plugins/Releasing/Submission+requirements+for+plugins |
+| O-SUB-4 | Set `isDesktopOnly: true` if the plugin uses Node or Electron APIs. `SubtleCrypto` works on mobile. | VERIFIED | https://docs.obsidian.md/Plugins/Releasing/Submission+requirements+for+plugins |
+| O-SUB-5 | Plugins are submitted through community.obsidian.md ("Add a plugin") with a linked GitHub account. Automated review runs four checks: Manifest, Releases, Source code, and Build verification (the release build must match the committed source). The scanner runs the first script it finds named `build`, `build:plugin` or `compile`. It skips `node_modules`, `dist`, test files and `scripts`. Errors block installs; warnings don't. "Review branch" previews a branch, tag or commit. The plugin ID can't change after publication. | VERIFIED | https://docs.obsidian.md/Community+directory/Frequently+asked+questions ; https://docs.obsidian.md/Community+directory/Manage+your+plugin+or+theme |
+| O-SUB-6 | The `obsidian-releases` README still describes the old `community-plugins.json` pull-request flow. | CONFLICT with O-SUB-5; follow the newer community.obsidian.md docs | https://github.com/obsidianmd/obsidian-releases |
+
+### Guidelines
+| ID | Fact | Status | Source |
+|---|---|---|---|
+| O-GL-1 | Use `this.app`, not the global `app`. By default the console should show only errors. | VERIFIED | https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines |
+| O-GL-2 | Settings tab rules: no top-level heading, no word "settings" in headings, sentence case, and `new Setting(el).setName(...).setHeading()` instead of HTML headings. | VERIFIED | same |
+| O-GL-3 | No `innerHTML`, `outerHTML` or `insertAdjacentHTML`. Use `createEl`/`createDiv` and `el.empty()`. | VERIFIED | same |
+| O-GL-4 | Register cleanup with `registerEvent`, `registerInterval` and similar. No default hotkeys. Use CSS classes, not inline styles. | VERIFIED | same |
+| O-GL-5 | Prefer the Vault API over the Adapter API (the Vault API caches and serializes). Prefer `Vault.process` for background edits. Use `getFileByPath` rather than iterating files. Run `normalizePath()` on any path the plugin builds. | VERIFIED | same |
+| O-GL-6 | The guidelines say nothing about `requestUrl` versus `fetch`, or about storing secrets. | SILENT | same |
+
+### API (`obsidian.d.ts`)
+| ID | Fact | Status | Source |
+|---|---|---|---|
+| O-API-1 | `requestUrl(RequestUrlParam)` requests a URL "without any CORS restrictions". Its parameters are `url`, `method`, `contentType`, `body: string \| ArrayBuffer`, `headers`, and `throw` (default true: throw on status 400 or above). The response has `status`, `headers`, `arrayBuffer`, `json` and `text`. | VERIFIED | https://github.com/obsidianmd/obsidian-api/blob/master/obsidian.d.ts |
+| O-API-2 | `requestUrl` documentation says nothing about size limits, timeouts, streaming, progress, cancellation or redirects. Bodies are fully buffered in memory. | SILENT, test in M3 | same |
+| O-API-3 | `registerObsidianProtocolHandler(action, handler)`, since 0.11.0, handles `obsidian://<action>?k=v` and passes decoded params as `ObsidianProtocolData`. Behavior on iOS is not documented. Forum reports say text after `#` is dropped, so the auth code must arrive in the query string (`response_mode=query`). | VERIFIED (API) / SILENT (iOS) | same |
+| O-API-4 | `App.secretStorage: SecretStorage`, since 1.11.4, has synchronous `setSecret(id, secret)`, `getSecret(id): string \| null` and `listSecrets()`. IDs must be lowercase alphanumeric plus dashes, otherwise it throws. There is no delete method. | VERIFIED | same |
+| O-API-5 | SecretStorage is a shared store across plugins, "kept in local storage and is keyed to the specific vault". Settings should store a secret's name, not its value. | VERIFIED | https://docs.obsidian.md/Plugins/Guides/Store+secrets |
+| O-API-6 | How secrets are stored on iOS and desktop, whether they sync, and how encryption works are not documented. A third-party report says Linux uses libsecret and falls back to "encryption of the secrets is unavailable due to missing system secret storage provider". | SILENT; third-party claim unverified | https://forum.obsidian.md/t/how-does-obsidian-linux-find-system-secret-storage/113465 |
+| O-API-7 | `FileManager.trashFile(file)`, since 1.6.6, follows the user's "Deleted files" preference. The lint rule `prefer-file-manager-trash-file` enforces it. `Vault.delete` is permanent. | VERIFIED | obsidian.d.ts ; https://github.com/obsidianmd/eslint-plugin |
+| O-API-8 | `Vault.rename` does not update links. `FileManager.renameFile` updates links according to user preference. | VERIFIED | obsidian.d.ts |
+| O-API-9 | Vault methods: `createBinary` throws if the file exists; also `modifyBinary`, `readBinary`, `getFileByPath` (since 1.5.7), `createFolder`, and `configDir` (use it instead of hard-coding `.obsidian`). | VERIFIED | obsidian.d.ts |
+| O-API-10 | Adapter methods: `exists`, `stat` (returns `Stat \| null`), `writeBinary` (overwrites), `rename`, `remove`, `trashSystem`, `trashLocal`. Whether `rename` atomically replaces an existing target is not documented. | VERIFIED / SILENT (rename overwrite), test in M6 | obsidian.d.ts |
+| O-API-11 | The Vault API can't see files in hidden folders; only the Adapter API can. | VERIFIED | https://docs.obsidian.md/Plugins/Vault |
+| O-API-12 | Vault events are `create`, `modify`, `delete` and `rename(file, oldPath)`. `create` also fires for every existing file when the vault loads, so register handlers inside `workspace.onLayoutReady`. | VERIFIED | obsidian.d.ts |
+| O-API-13 | `addStatusBarItem()`: "Not available on mobile." | VERIFIED | obsidian.d.ts |
+| O-API-14 | `Platform` flags: `isDesktopApp`, `isMobileApp`, `isIosApp`, `isLinux` and others. | VERIFIED | obsidian.d.ts |
+| O-API-15 | `loadData` and `saveData` use `<configDir>/plugins/<id>/data.json`. `onExternalSettingsChange`, since 1.5.7, fires when that file changes on disk. | VERIFIED | obsidian.d.ts |
+| O-API-16 | `normalizePath` also applies Unicode NFC normalization. | VERIFIED | obsidian.d.ts |
+| O-API-17 | Node and Electron APIs are unavailable on mobile. Regex lookbehind needs iOS 16.4 or later. Mobile can be emulated on desktop with `app.emulateMobile(true)`. | VERIFIED | https://docs.obsidian.md/Plugins/Getting+started/Mobile+development |
+| O-API-18 | The npm `obsidian` package latest is 1.14.4. Declarative settings need 1.13.0. | VERIFIED | https://registry.npmjs.org/obsidian/latest ; https://docs.obsidian.md/Plugins/Guides/Migrate+to+declarative+settings |
+
+### Tooling
+| ID | Fact | Status | Source |
+|---|---|---|---|
+| O-ESL-1 | `eslint-plugin-obsidianmd` v0.4.2 has peer dependencies eslint ≥9.19, @eslint/js ^9.30, typescript-eslint ^8.35 and @eslint/json 0.14. It is a flat config, `obsidianmd.configs.recommended`, and needs type-checked TypeScript (`projectService`). | VERIFIED | https://github.com/obsidianmd/eslint-plugin |
+| O-ESL-2 | Relevant rules: `no-unsupported-api` (checked against `minAppVersion`), `prefer-file-manager-trash-file`, `hardcoded-config-path`, `no-nodejs-modules`, `platform`, `regex-lookbehind`, `settings-tab/*`, `ui/sentence-case`, `commands/no-default-hotkeys`, `commands/no-plugin-id-in-command-id`, `no-sample-code`, `validate-manifest`, `validate-license`. There is no rule preferring `requestUrl` over `fetch`. | VERIFIED | same |
+| O-SMP-1 | The sample plugin has `src/main.ts`, `esbuild.config.mjs`, `eslint.config.mts`, `manifest.json`, `versions.json`, `version-bump.mjs`, `tsconfig.json`, `styles.css`, `.github/workflows/{lint,release}.yml` and `AGENTS.md`. | VERIFIED | https://github.com/obsidianmd/obsidian-sample-plugin |
+| O-SMP-2 | Sample scripts: `dev` = `node esbuild.config.mjs`; `build` = `tsc -noEmit -skipLibCheck && node esbuild.config.mjs production`; `version` = `node version-bump.mjs && git add manifest.json versions.json`; `lint` = `eslint .`. | VERIFIED | same |
+| O-SMP-3 | Sample tsconfig: target ES2021, module ESNext, `strict`, `noUncheckedIndexedAccess`, `isolatedModules`, lib ES2021 + DOM. Sample esbuild: CJS output, `obsidian`/`electron`/`@codemirror/*`/`@lezer/*` external, minified in production. | VERIFIED | same |
+| O-SMP-4 | Sample devDependencies: esbuild 0.25.5, eslint ^9.39.4, @eslint/js, eslint-plugin-obsidianmd ^0.4.0, typescript ^5.8.3, typescript-eslint ^8.59.1, globals, jiti, @types/node ^22, obsidian latest. | VERIFIED | same |
+| O-REL-1 | The "Release with GitHub Actions" doc triggers on tag push, needs `contents`, `id-token` and `attestations: write`, runs `actions/attest`, and creates a draft release with `main.js`, `manifest.json` and `styles.css`. It uses Node 18 and `@v3` actions; the sample's lint workflow uses Node 20–24 and newer actions. | VERIFIED / CONFLICT (versions); follow the sample's newer versions | https://docs.obsidian.md/Plugins/Releasing/Release+your+plugin+with+GitHub+Actions |
+| O-BRAT-1 | BRAT downloads `manifest.json`, `main.js` and optionally `styles.css` from GitHub release assets. Tags are semver. The tag, release name and released manifest version should match; if they differ, the tag wins. `manifest-beta.json` is deprecated and ignored since BRAT 1.1.0. Public repos need no token. | VERIFIED | https://github.com/TfTHacker/obsidian42-brat/blob/main/BRAT-DEVELOPER-GUIDE.md |
+| O-BRAT-2 | Obsidian's beta-testing doc says: "we recommend that you use the BRAT plugin". | VERIFIED | https://docs.obsidian.md/Plugins/Releasing/Beta-testing+plugins |
+
+---
+
+## 2. Microsoft Graph and OneDrive
+
+### App Folder
+| ID | Fact | Status | Source |
+|---|---|---|---|
+| G-AF-1 | `GET /me/drive/special/approot` (`approot` is case-sensitive) creates the folder on first request at `Apps/{application name}`. The folder name is fixed when it is created, and renaming the app later doesn't rename it. | VERIFIED | https://learn.microsoft.com/en-us/graph/onedrive-sharepoint-appfolder ; https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/special-folders-appfolder |
+| G-AF-2 | The user can rename or move the folder and the alias still resolves. If the user deletes it, it is recreated on the next request with a new item ID. | VERIFIED (alias) / INFERRED (new ID) | https://learn.microsoft.com/en-us/graph/api/drive-get-specialfolder?view=graph-rest-1.0 |
+| G-AF-3 | Users have full control of app folder contents, which count against their quota. | VERIFIED | https://learn.microsoft.com/en-us/graph/onedrive-sharepoint-appfolder |
+| G-AF-4 | `Files.ReadWrite.AppFolder` is the least-privileged permission for the special-folder GET on personal accounts. It is labeled "(preview)" in the permissions reference. Older OneDrive docs say it "is only valid for personal accounts". | VERIFIED | https://learn.microsoft.com/en-us/graph/api/drive-get-specialfolder?view=graph-rest-1.0 ; https://learn.microsoft.com/en-us/graph/permissions-reference |
+| G-AF-5 | No current permission table for delta, PUT content, createUploadSession, PATCH, DELETE or `GET /me/drive` lists `Files.ReadWrite.AppFolder`. | SILENT, verify in M3 probe | the per-endpoint pages cited below |
+
+### Delta
+| ID | Fact | Status | Source |
+|---|---|---|---|
+| G-DL-1 | The OneDrive App Folder doc lists `GET /drive/special/approot:/{path}:/delta`. The Graph v1.0 delta page documents only `root/delta` forms. | CONFLICT/SILENT; probe in M3 | https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/special-folders-appfolder ; https://learn.microsoft.com/en-us/graph/api/driveitem-delta?view=graph-rest-1.0 |
+| G-DL-2 | Follow `@odata.nextLink` until an `@odata.deltaLink` arrives, then persist the full deltaLink. Apply changes only after all pages arrive. | VERIFIED | https://learn.microsoft.com/en-us/graph/api/driveitem-delta?view=graph-rest-1.0 |
+| G-DL-3 | `?token=latest` returns no items, only a deltaLink. A full local mirror must start from a delta with no token. | VERIFIED | same |
+| G-DL-4 | An expired token returns **410 Gone** with a `Location` header holding a fresh link. Resync codes: `resyncChangesApplyDifferences` and `resyncChangesUploadDifferences` (delta page); `resyncApplyDifferences`, `resyncUploadDifferences` and `resyncRequired` (errors page). | VERIFIED / CONFLICT (names); handle any code starting with `resync` and any 410 | same ; https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/errors |
+| G-DL-5 | Deleted items carry a `deleted` facet. On consumer OneDrive, deleted items omit `cTag` and `size`. Delete a local folder only when it is empty after all changes are applied. | VERIFIED | https://learn.microsoft.com/en-us/graph/api/driveitem-delta?view=graph-rest-1.0 |
+| G-DL-6 | The same item can appear more than once; use the last occurrence. Delta returns no `parentReference.path`. Descendants of a renamed folder are not re-emitted. | VERIFIED | same |
+| G-DL-7 | No parent-before-child ordering is guaranteed. Build the tree after collecting all pages. | SILENT | same |
+| G-DL-8 | Whether hashes appear in delta responses isn't stated. On consumer accounts, create and modify entries omit nothing, so `file.hashes` should be present. | INFERRED, verify in M3 | same |
+| G-DL-9 | Delta with a token costs 1 resource unit; without one it costs 2. | VERIFIED | https://learn.microsoft.com/en-us/sharepoint/dev/general-development/how-to-avoid-getting-throttled-or-blocked-in-sharepoint-online |
+
+### Upload
+| ID | Fact | Status | Source |
+|---|---|---|---|
+| G-UP-1 | Simple upload `PUT .../content` takes up to 250 MB. Replace: `/items/{id}/content`. Create: `/items/{parent-id}:/{name}:/content`. | VERIFIED | https://learn.microsoft.com/en-us/graph/api/driveitem-put-content?view=graph-rest-1.0 |
+| G-UP-2 | `@microsoft.graph.conflictBehavior` (`fail`, `replace` or `rename`) goes in the URL query for PUT. For createUploadSession it goes in the body under `item`. | VERIFIED / CONFLICT (placement differs by endpoint) | https://learn.microsoft.com/en-us/graph/api/resources/driveitem?view=graph-rest-1.0 ; createUploadSession page |
+| G-UP-3 | **If-Match is not documented for `PUT /content`.** | SILENT, probe in M3 (owner decision D-11) | https://learn.microsoft.com/en-us/graph/api/driveitem-put-content?view=graph-rest-1.0 |
+| G-UP-4 | "Use resumable file transfers for files larger than 10 MiB." | VERIFIED | https://learn.microsoft.com/en-us/graph/api/driveitem-createuploadsession?view=graph-rest-1.0 |
+| G-UP-5 | createUploadSession supports `if-match`, which returns 412 on an eTag or cTag mismatch. The body is `{"item":{"@microsoft.graph.conflictBehavior":..., "name":..., "fileSize":...}, "deferCommit": bool}`, and the default conflictBehavior is `fail`. If `fileSize` exceeds quota the response is 507. | VERIFIED | same |
+| G-UP-6 | Each fragment request must be under 60 MiB and a multiple of 320 KiB (327,680 bytes); the final fragment may be shorter. The recommended size is 5–10 MiB. Fragments are sent in order with `Content-Range: bytes a-b/total`, and the total must not change between requests. | VERIFIED | same |
+| G-UP-7 | Do not send `Authorization` to the `uploadUrl`. | VERIFIED | same |
+| G-UP-8 | Responses: 202 with `nextExpectedRanges` until the last fragment, then 200 or 201 with the driveItem. 416 means already-received bytes were re-sent. 409 `nameAlreadyExists` can come at commit. | VERIFIED | same |
+| G-UP-9 | Resume: `GET uploadUrl` returns `nextExpectedRanges` and `expirationDateTime`. A 404 means the session is gone and the upload restarts. Retry 5xx with exponential backoff. `DELETE uploadUrl` cancels. No absolute session lifetime is documented. | VERIFIED / SILENT (lifetime) | same |
+| G-UP-10 | The maximum file size is 250 GB. | VERIFIED | https://support.microsoft.com/en-us/office/restrictions-and-limitations-in-onedrive-and-sharepoint-64883a5d-228e-48f5-b3d2-eb39e07630fa |
+
+### Delete, move, conditional requests
+| ID | Fact | Status | Source |
+|---|---|---|---|
+| G-DEL-1 | `DELETE /me/drive/items/{id}` "moves the items to the recycle bin instead of permanently deleting". It supports `if-match` (412) and returns 204 on success. `permanentDelete` is a separate endpoint and is never used here. | VERIFIED | https://learn.microsoft.com/en-us/graph/api/driveitem-delete?view=graph-rest-1.0 |
+| G-DEL-2 | Recycle-bin bytes still count toward quota (`quota.deleted`). | VERIFIED | https://learn.microsoft.com/en-us/graph/api/resources/quota?view=graph-rest-1.0 |
+| G-MV-1 | Move or rename with `PATCH /me/drive/items/{id}` and body `{"parentReference":{"id":...},"name":...}`. It supports `if-match` (412). Use a real parent ID, not `"root"`. conflictBehavior on PATCH is not documented. | VERIFIED / SILENT | https://learn.microsoft.com/en-us/graph/api/driveitem-move?view=graph-rest-1.0 ; https://learn.microsoft.com/en-us/graph/api/driveitem-update?view=graph-rest-1.0 |
+| G-TAG-1 | `eTag` covers metadata and content. `cTag` covers content only, "isn't changed if only the metadata is changed", and isn't returned for folders (a note on the same page contradicts that for folders). | VERIFIED / CONFLICT (folders) | https://learn.microsoft.com/en-us/graph/api/resources/driveitem?view=graph-rest-1.0 |
+| G-TAG-2 | 412 maps to the codes `resourceModified` and `entityTagDoesNotMatch`. "ETags must be quoted strings" (`malformedEntityTag`), so send the eTag verbatim. eTags are opaque. | VERIFIED | https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/errors |
+| G-TAG-3 | `If-None-Match` on `GET /content` returns 304. | VERIFIED | https://learn.microsoft.com/en-us/graph/api/driveitem-get-content?view=graph-rest-1.0 |
+
+### Hashes, download, errors, throttling, quota
+| ID | Fact | Status | Source |
+|---|---|---|---|
+| G-HASH-1 | `file.hashes`: `sha256Hash` "isn't supported. Don't use."; `sha1Hash` is present "if available"; `quickXorHash` "is the only value that is guaranteed to be available for both" business and personal accounts. | VERIFIED | https://learn.microsoft.com/en-us/graph/api/resources/hashes?view=graph-rest-1.0 |
+| G-HASH-2 | The QuickXorHash algorithm and a C# reference implementation produce a 160-bit, base64-encoded result. | VERIFIED | https://learn.microsoft.com/en-us/onedrive/developer/code-snippets/quickxorhash |
+| G-DLD-1 | `GET /content` returns 302 to a pre-authenticated URL, which is also exposed as `@microsoft.graph.downloadUrl` (select it explicitly). Don't send Authorization to that URL. Range requests work against it (206, or 200 if the server ignores Range). | VERIFIED | https://learn.microsoft.com/en-us/graph/api/driveitem-get-content?view=graph-rest-1.0 |
+| G-DLD-2 | The downloadUrl is valid for "~1 hour" according to the driveItem page and "might expire within minutes" according to get-content. | CONFLICT; fetch the URL just before downloading | driveItem page ; get-content page |
+| G-ERR-1 | Error shape: `{"error":{"code","message","innerError":{...}}}`. Branch on `code` and walk inner errors; never parse `message`. Codes include `itemNotFound`, `nameAlreadyExists`, `resourceModified`, `resyncRequired`, `quotaLimitReached`, `activityLimitReached` and `malwareDetected`. Inner codes include `pathIsTooLong`, `invalidPath`, `uploadSessionNotFound`, `fragmentOverlap` and `entityTagDoesNotMatch`. 507 means insufficient storage. | VERIFIED | https://learn.microsoft.com/en-us/graph/errors ; https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/errors |
+| G-THR-1 | On 429 or 503 with `Retry-After` (seconds), wait that long. Without the header, use exponential backoff. Throttled requests still count toward the limits. | VERIFIED | https://learn.microsoft.com/en-us/graph/throttling |
+| G-THR-2 | Pause all requests while throttled, not only the one that failed. | VERIFIED | https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/scan-guidance |
+| G-THR-3 | Decorate the User-Agent as `ISV\|CompanyName\|AppName/Version`. Don't rely on RateLimit headers: the same page both recommends them and says SharePoint Online doesn't send them. | VERIFIED / CONFLICT (RateLimit) | https://learn.microsoft.com/en-us/sharepoint/dev/general-development/how-to-avoid-getting-throttled-or-blocked-in-sharepoint-online |
+| G-THR-4 | Per-user limits listed: 3,000 requests per 5 minutes, 50 GB/h ingress, 100 GB/h egress. | VERIFIED (SharePoint Online table; applying it to consumer OneDrive is INFERRED) | same |
+| G-QT-1 | `GET /me/drive` returns `quota` (total, used, remaining, deleted, state). Its documented least-privileged permission is `Files.Read`, not AppFolder. | VERIFIED; whether AppFolder can read it is probed in M3 | https://learn.microsoft.com/en-us/graph/api/drive-get?view=graph-rest-1.0 |
+
+### Naming and paths
+| ID | Fact | Status | Source |
+|---|---|---|---|
+| G-NM-1 | Invalid characters: `" * : < > ? / \ \|`. Leading and trailing spaces aren't allowed. | VERIFIED | https://support.microsoft.com/en-us/office/restrictions-and-limitations-in-onedrive-and-sharepoint-64883a5d-228e-48f5-b3d2-eb39e07630fa |
+| G-NM-2 | Invalid names: `.lock`, `CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9`, `LPT0`–`LPT9`, `desktop.ini`, `_vti_` anywhere in a name, and names starting with `~$`. | VERIFIED | same |
+| G-NM-3 | "Folder names can't end with a period." "File or folder names cannot begin with a tilde." | VERIFIED | https://learn.microsoft.com/en-us/graph/onedrive-addressing-driveitems |
+| G-NM-4 | "The entire decoded file path, including the file name, can't contain more than 400 characters." | VERIFIED | https://learn.microsoft.com/en-us/office365/servicedescriptions/sharepoint-online-service-description/sharepoint-online-limits |
+| G-NM-5 | Case-insensitivity of names is not stated in Graph docs. It is treated as case-insensitive (Windows heritage) and verified in M3. | SILENT | — |
+| G-NM-6 | No per-segment name length limit was found. 255 is assumed until the M3 probe. | SILENT | — |
+| G-ADR-1 | Path addressing uses colon syntax, `/approot:/a/b.md:/content`. Percent-encode each segment as UTF-8. The doc's JavaScript advice to use `escape()` is wrong for non-Latin-1 characters; use `encodeURIComponent` per segment. | VERIFIED / INFERRED (fix) | https://learn.microsoft.com/en-us/graph/onedrive-addressing-driveitems |
+
+---
+
+## 3. Microsoft identity platform
+
+| ID | Fact | Status | Source |
+|---|---|---|---|
+| I-AC-1 | The endpoints are `https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize` and `.../token`. `consumers` limits sign-in to personal accounts. | VERIFIED | https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow |
+| I-AC-2 | PKCE `code_challenge` is "recommended for all application types". The method should be S256; if it's omitted, the challenge is treated as `plain`, so always send S256. The verifier is 43–128 characters from `[A-Za-z0-9-._~]` (RFC 7636). | VERIFIED | same ; https://www.rfc-editor.org/rfc/rfc7636 |
+| I-AC-3 | Authorization codes expire after about 1 minute. Public clients "must not use secrets or certificates". The token request sends `client_id`, `code`, `redirect_uri`, `grant_type=authorization_code` and `code_verifier`. | VERIFIED | same |
+| I-AC-4 | Refresh: `grant_type=refresh_token`, `refresh_token`, `client_id`, and `scope` (equal to or a subset of the original). | VERIFIED | same |
+| I-AC-5 | A `spa` redirect URI requires an `Origin` header at token redemption. A token request that carries `Origin` for a non-SPA client fails with AADSTS9002326. | VERIFIED (doc) / Q&A for error code | same ; https://learn.microsoft.com/answers/a/12772412 |
+| I-AC-6 | The redirect platform decides the client type: Web means confidential (needs a secret, otherwise AADSTS7000218); "Mobile and desktop applications" means public. | VERIFIED | https://learn.microsoft.com/troubleshoot/entra/entra-id/app-integration/confidential-client-application-authentication-error-aadsts7000218 |
+| I-AC-7 | Whether `requestUrl` sends an `Origin` header on iOS or Electron is unknown. If it does, token redemption against a Mobile and desktop registration fails (I-AC-5). | SILENT, test in M2 | — |
+| I-RU-1 | Mobile and desktop apps may register custom redirect URIs. Electron's documented example is `msal{clientId}://auth`. The reply-url page says redirects "must begin with the scheme https" except localhost. | VERIFIED / CONFLICT; custom schemes are documented on the platform pages | https://learn.microsoft.com/en-us/entra/identity-platform/how-to-add-redirect-uri ; https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-app-registration ; https://learn.microsoft.com/en-us/entra/identity-platform/reply-url |
+| I-RU-2 | "Query parameters are not allowed in redirect URIs for any app registration configured to sign in users with personal Microsoft accounts." Wildcards aren't supported for personal-account apps. Maximum 256 characters; case-sensitive. | VERIFIED | https://learn.microsoft.com/en-us/entra/identity-platform/reply-url |
+| I-RU-3 | Redirect URIs registered without a path come back with a trailing slash. How this applies to custom schemes isn't documented, so `obsidian://mdvaultsync-auth/?code=` is possible. | VERIFIED (http) / SILENT (custom scheme), test in M2 | same |
+| I-RU-4 | `https://login.microsoftonline.com/common/oauth2/nativeclient` is Microsoft's default redirect for embedded or native clients. | VERIFIED (exists as default) / SILENT (behavior with `/consumers` in a system browser), test in M2 | https://learn.microsoft.com/en-us/entra/identity-platform/reply-url |
+| I-DC-1 | Device code flow is supported on `/consumers`, but it requires "Allow public client flows". `verification_uri_complete` is not supported. Microsoft: "Device code flow is a high-risk authentication method that can be part of a phishing attack… Microsoft recommends blocking device code flow wherever possible." | VERIFIED | https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code ; https://learn.microsoft.com/entra/identity/conditional-access/concept-authentication-flows |
+| I-TL-1 | Access tokens last a random 60–90 minutes; trust `expires_in`. | VERIFIED | https://learn.microsoft.com/entra/identity-platform/access-tokens#token-lifetime |
+| I-TL-2 | Refresh tokens last "24 hours for single-page applications… 90 days for all other scenarios". The auth-code page says they "don't have specified lifetimes". | VERIFIED / CONFLICT; design for 90 days and handle `invalid_grant` at any time | https://learn.microsoft.com/en-us/entra/identity-platform/refresh-tokens |
+| I-TL-3 | "Refresh tokens replace themselves with a fresh token upon every use. The Microsoft identity platform doesn't revoke old refresh tokens." Persist the newest one and delete the old one. | VERIFIED | same |
+| I-TL-4 | No revocation endpoint for public clients is documented. Revocation happens on password change or user action. | VERIFIED (absence) | same |
+| I-TL-5 | Don't parse Microsoft access tokens; consumer tokens may be encrypted. | VERIFIED | https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow |
+| I-REG-1 | "Starting June 2024, all applications must be registered in a directory." The routes offered are the Microsoft 365 Developer Program or signing up for Azure. | VERIFIED | https://learn.microsoft.com/entra/identity-platform/reference-breaking-changes#june-2024 |
+| I-REG-2 | The tenant quickstart prerequisite is "An Azure account that has an active subscription. Create an account for free." Only paid customers can create additional workforce tenants. | VERIFIED | https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-create-new-tenant ; https://learn.microsoft.com/en-us/entra/fundamentals/create-new-tenant |
+| I-REG-3 | The M365 Developer Program sandbox now requires a paid Visual Studio subscription, partner membership or support plan. Personal accounts are not eligible. | VERIFIED | https://learn.microsoft.com/office/developer-program/microsoft-365-developer-program |
+| I-REG-4 | Account type "Personal Microsoft accounts only" sets `signInAudience: PersonalMicrosoftAccount`, which requires `api.requestedAccessTokenVersion = 2` (the portal sets it). | VERIFIED | https://learn.microsoft.com/entra/identity-platform/supported-accounts-validation ; https://learn.microsoft.com/entra/identity-platform/reference-microsoft-graph-app-manifest |
+| I-REG-5 | Delegated `Files.ReadWrite.AppFolder` "is available for consent in personal Microsoft accounts". Admin consent: No. Consent text: "Have full access to the application's folder (preview)". | VERIFIED | https://learn.microsoft.com/graph/permissions-reference |
+| I-REG-6 | Apps without publisher verification show "unverified" on the consent screen. Verification requires Microsoft Cloud Partner Program membership. | VERIFIED | https://learn.microsoft.com/entra/identity-platform/publisher-verification-overview |
+| I-BR-1 | Use the system browser as the authentication surface (RFC 8252). | VERIFIED | https://learn.microsoft.com/entra/identity-platform/mobile-sso-support-overview |
+| I-MSAL-1 | msal-node needs Node 20 or later and doesn't run on iOS. msal-browser is built around the SPA platform (Origin header, 24-hour refresh tokens). Neither fits; a minimal client using `requestUrl` is used instead. | VERIFIED | https://learn.microsoft.com/entra/msal/javascript/node/faq ; https://learn.microsoft.com/entra/msal/javascript/browser/login-user |
+
+---
+
+## 4. Cost and tooling
+
+Several primary pages (azure.microsoft.com, support.microsoft.com, docs.github.com, obsidian.md) were blocked by the research environment's proxy. Facts marked **SUMMARY** come from search-engine summaries of those pages rather than a full read. For GitHub, the docs source in the `github/docs` repository was read instead.
+
+| ID | Fact | Status | Source |
+|---|---|---|---|
+| C-AZ-1 | Azure free account sign-up requires a phone number (no VoIP) and a non-prepaid credit or debit card. The card is not charged, but a temporary verification hold of about $1 may appear. | SUMMARY | https://azure.microsoft.com/en-us/free/free-account-faq/ ; https://azure.microsoft.com/en-us/pricing/purchase-options/azure-account |
+| C-AZ-2 | The free account includes "$200 Azure credit … for 30 days and 12 months of free services. At the end of 30 days, Azure disables your subscription" unless the user upgrades. | VERIFIED | https://learn.microsoft.com/azure/cost-management-billing/manage/avoid-charges-free-account ; https://learn.microsoft.com/azure/cost-management-billing/manage/subscription-disabled |
+| C-AZ-3 | The spending limit is on by default for free accounts and equals the credit. It can be removed but not changed. | VERIFIED | https://learn.microsoft.com/azure/cost-management-billing/manage/spending-limit |
+| C-AZ-4 | "When a subscription expires, the trusted instance remains, but the security principals lose access to Azure resources." The directory survives subscription expiry. That app registrations keep issuing tokens afterwards is INFERRED, not stated. | VERIFIED / INFERRED | https://learn.microsoft.com/entra/fundamentals/how-subscriptions-associated-directory |
+| C-EN-1 | Entra ID Free: 50,000 directory objects by default; new tenants are capped at 600 objects for their first 2 days; a non-admin user can create at most 250 Entra resources. | VERIFIED | https://learn.microsoft.com/entra/identity/users/directory-service-limits-restrictions ; https://learn.microsoft.com/entra/identity/role-based-access-control/quickstart-app-registration-limits |
+| C-GR-1 | Since Aug 25 2025 the only metered Graph API is `assignSensitivityLabel` (OneDrive/SharePoint for Business). Metered APIs require confidential clients. Ordinary file APIs are free within throttling limits. | VERIFIED | https://learn.microsoft.com/graph/metered-api-list ; https://learn.microsoft.com/graph/metered-api-overview |
+| C-OD-1 | A free Microsoft account has 5 GB of cloud storage shared across OneDrive, Outlook.com attachments (since Feb 1 2023) and Microsoft 365 apps. | SUMMARY | https://support.microsoft.com/en-us/onedrive/microsoft-storage-faqs |
+| C-GH-1 | Standard GitHub-hosted Actions runners are free for public repos. | SUMMARY | https://docs.github.com/en/billing/reference/actions-runner-pricing |
+| C-GH-2 | CodeQL code scanning is available for public repos. Secret-scanning partner alerts are on by default for public repos, and user push protection is on by default. | VERIFIED (github/docs source) | https://docs.github.com/en/code-security/code-scanning/introduction-to-code-scanning/about-code-scanning ; https://docs.github.com/en/code-security/concepts/secret-security/push-protection |
+| C-GH-3 | Artifact attestations are available for public repos on the Free, Pro and Team plans; private repos need Enterprise Cloud. Current docs use `actions/attest@v4`. | VERIFIED (github/docs source) | https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds |
+| C-GH-4 | Dependabot jobs run on standard runners, which are free for public repos. No primary quote was found that Dependabot alerts and updates themselves are free. | SUMMARY | https://docs.github.com/en/billing/reference/actions-runner-pricing |
+| C-NODE-1 | Node strips TypeScript types without flags from v22.18.0 and v23.6.0, with no warning from v24.3.0. It is stable since v24.12.0 and v25.2.0. Enums, runtime namespaces, parameter properties, import aliases and decorators are unsupported. Relative imports need explicit extensions, type-only imports need `type`, and tsconfig is ignored. | VERIFIED | https://nodejs.org/api/typescript.html |
+| C-NODE-2 | `node --test` discovers `**/*.test.{cts,mts,ts}` by default when type stripping is on. | VERIFIED | https://nodejs.org/api/test.html |
+| C-NODE-3 | As of Oct 2026, v24 "Krypton" is Active LTS, v22 is Maintenance LTS, and v26 is Current (it may be promoted to LTS this month). | VERIFIED (v26 promotion unverified) | https://nodejs.org/en/about/previous-releases |
+| C-OBS-1 | Obsidian has been free for commercial use since Feb 20 2025, with the commercial license optional. Sync and Publish are paid add-ons. | SUMMARY | https://obsidian.md/blog/free-for-work/ |
+| C-MSA-1 | A personal Microsoft account can remove an app's access at `https://account.microsoft.com/privacy/app-access` (also reachable as `account.live.com/consent/Manage`). Source is a Microsoft Q&A answer, not a support article. | SUMMARY, verify in M2 | https://learn.microsoft.com/en-us/answers/questions/4375979/article-managing-apps-and-services-connected-to-ou |
+
+---
+
+## 5. Conflicts and how the design resolves them
+| Conflict | Resolution |
+|---|---|
+| Delta on approot is only in the legacy OneDrive doc (G-DL-1) | Probe both forms in M3. If both fail, fall back to a recursive children walk compared on cTag (design §5.2). |
+| Resync code names differ (G-DL-4) | Treat any 410, or any code starting with `resync`, as "full reconcile, no deletes". |
+| Refresh token lifetime (I-TL-2) | Assume 90 days. Handle `invalid_grant` and `interaction_required` at any time by asking for sign-in. |
+| Custom-scheme redirects versus "must be https" (I-RU-1) | Custom scheme as primary, plus the https `nativeclient` paste fallback. Both are verified in M2. |
+| conflictBehavior placement (G-UP-2) | URL query for PUT, body for createUploadSession, exactly as each page says. |
+| downloadUrl lifetime (G-DLD-2) | Fetch metadata and downloadUrl right before each download. On 401, 403 or 404, refetch once. |
+| Release workflow action versions (O-REL-1) | Use current major versions, pinned by commit SHA, updated by Dependabot. |
+| Community submission flow (O-SUB-6) | Follow community.obsidian.md. |
+
+## 6. Silences and where they get tested
+| Silence | Milestone and test |
+|---|---|
+| If-Match on PUT content (G-UP-3) | M3 diagnostic `probe-put-if-match`: PUT with a stale eTag; expect 412. |
+| Approot delta form and whether approot appears in it (G-DL-1) | M3 diagnostic `probe-delta`. |
+| AppFolder scope covers delta, PATCH, DELETE and `/me/drive` (G-AF-5, G-QT-1) | M3 diagnostic runs each call once. |
+| Hashes in delta (G-DL-8) | M3 diagnostic. |
+| Case-insensitive names and per-segment length (G-NM-5, G-NM-6) | M3 diagnostic: create `a.md`, then `A.md` with conflictBehavior=fail; expect 409. |
+| requestUrl size limit, redirects, Origin header (O-API-2, I-AC-7) | M2 (Origin, via token redemption success); M3 (10 MiB round trip on iPad). |
+| Protocol handler on iOS and trailing slash (O-API-3, I-RU-3) | M2 manual test on iPad and Ubuntu. |
+| nativeclient redirect with `/consumers` (I-RU-4) | M2 manual test. |
+| SecretStorage behavior on iOS and Linux (O-API-6) | M2: write, restart, read; record the result. |
+| `adapter.rename` overwrite behavior (O-API-10) | M6 integration test on both devices. |

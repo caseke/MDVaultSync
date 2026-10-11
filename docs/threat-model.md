@@ -1,0 +1,117 @@
+# MDVaultSync threat model
+
+This model follows STRIDE (Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege). It covers token theft, malicious remote content, path traversal, the supply chain, and data loss. Each mitigation has an ID (`T-…`) and the milestone in [plan.md](plan.md) that delivers it. The security-reviewer subagent from M1 checks each milestone's diff against the rows for that milestone.
+
+## 1. Assets
+| Asset | Why it matters |
+|---|---|
+| A1 Refresh token | About 90 days of read and write access to the App Folder, renewed on each use [I-TL-2], [I-TL-3] |
+| A2 Access token | 60–90 minutes of the same access [I-TL-1] |
+| A3 Vault contents (local) | The owner's notes and attachments |
+| A4 Vault copy in the App Folder | The same data, plus the propagation channel to every other device |
+| A5 Sync state (`sync-state.json`) | Wrong state causes wrong deletes and overwrites |
+| A6 Release artifacts (`main.js`) | Code that runs with full vault access on every device |
+| A7 Source repo and CI | The origin of A6 |
+
+## 2. Trust boundaries and data flow
+```mermaid
+flowchart LR
+  subgraph Device["Device (trusted: OS + Obsidian)"]
+    P["MDVaultSync plugin"]
+    OP["Other installed plugins<br/>(same JS realm: NOT isolated)"]
+    V[("Vault files")]
+    S[("SecretStorage / data.json")]
+  end
+  B["System browser"]
+  MS["login.microsoftonline.com"]
+  G["graph.microsoft.com"]
+  CDN["OneDrive download/upload hosts"]
+  OD[("App Folder<br/>(user and any device can edit)")]
+  GH["GitHub (repo, Actions, Releases)"]
+  BRAT["BRAT"]
+  P -- authorize URL --> B --> MS
+  MS -- "obsidian:// code+state" --> P
+  P -- token POST --> MS
+  P -- REST --> G --> OD
+  P -- bytes --> CDN --> OD
+  P --> V
+  P --> S
+  OP -. can read .-> S
+  OP -. can read/write .-> V
+  GH --> BRAT --> P
+```
+Boundaries:
+- **TB1** Plugin ↔ network, via `requestUrl`.
+- **TB2** Plugin ↔ the other plugins in the same JavaScript realm.
+- **TB3** OS ↔ protocol-handler callers, since any app or web page can open `obsidian://` URLs.
+- **TB4** GitHub build ↔ the installed artifact.
+- **TB5** App Folder content ↔ the local vault. Remote content is untrusted: it can come from the OneDrive web UI, other devices, or a compromised device.
+
+Out of the attacker model: a fully compromised OS or Obsidian binary (the attacker already has everything), and Microsoft's own services.
+
+## 3. Threats and mitigations
+
+### Spoofing
+| ID | Threat | Mitigation | Milestone |
+|---|---|---|---|
+| S1 | A malicious web page or app opens `obsidian://mdvaultsync-auth?code=X&state=Y` to inject an attacker's authorization code. This is login CSRF, and it would connect the vault to the attacker's OneDrive. | **T-S1.** Accept a callback only while a sign-in is pending (10-minute expiry). Compare `state` (32 random bytes) in constant time, use it once, and use PKCE: the attacker's code can't be redeemed without our `code_verifier` [I-AC-2]. | M2 |
+| S2 | Another iOS app registers the `obsidian://` scheme and intercepts the code. | **T-S2.** PKCE S256 makes an intercepted code useless [I-AC-2]. The code lifetime is about 1 minute [I-AC-3]. | M2 |
+| S3 | A phishing page imitates the Microsoft sign-in. | **T-S3.** Sign-in happens only in the system browser, never an embedded webview, so the user sees the real URL and their password manager works [I-BR-1]. Device code flow, a known phishing vector, is not enabled [I-DC-1]. | M2 |
+| S4 | The paste fallback is fed a URL from an attacker's site. | **T-S4.** Parse with `new URL()` and require origin `https://login.microsoftonline.com` and path `/common/oauth2/nativeclient`. Then apply the same `state` and PKCE checks as T-S1. | M2 |
+| S5 | DNS or TLS interception impersonates Graph or login. | **T-S5.** HTTPS only, through `requestUrl` (platform TLS validation). Transfer URLs must use `https:` and an allowlisted host suffix (design §8). | M3 |
+
+### Tampering
+| ID | Threat | Mitigation | Milestone |
+|---|---|---|---|
+| T1 | **Path traversal.** Remote names or parent chains resolve outside the vault (`..`, absolute paths, backslashes, NUL) or into `.obsidian`, which would plant a plugin and run code. | **T-T1.** Validate in `validate.ts` and `paths.ts`: no `.`, `..`, empty segments, `/` or `\` inside names, NUL or control characters. Reject any hidden segment and any configDir segment. The `normalizePath` round-trip must be unchanged and the path must not be absolute. The containment check runs *again* immediately before `writeAtomic` (defense in depth). Fuzz-style unit tests cover hostile names. | M4 (rules), M6 (pre-write check) |
+| T2 | **Malicious remote JSON.** Wrong types, huge pages or unexpected shapes crash the engine or corrupt state. | **T-T2.** Hand-written type guards on every response. Required fields are type-checked and unknown fields ignored. JSON bodies over 32 MiB are rejected. IDs, eTags and hashes are checked for format and length. Downloads larger than the declared size are rejected. | M3 |
+| T3 | **Malicious remote content** (a note with a script, a crafted PDF). | **T-T3.** The plugin never renders, parses or runs file contents; it moves bytes. Rendering is Obsidian's job and carries the same risk as any file the user adds. The README states this. Hidden and config paths are never written (T-T1), so remote content can't become plugin code. | M6, M9 (README) |
+| T4 | Remote bytes corrupted or swapped in transit or at rest. | **T-T4.** Check QuickXorHash of the downloaded bytes against the item's hash before the atomic rename. Check upload results against the local hash [G-HASH-1]. QuickXorHash is not cryptographic; it detects corruption, not a deliberate attacker who controls Graph, and Graph is trusted here. | M6 |
+| T5 | Tampered upload or download URL sends our bytes to a third party. | **T-T5.** Host allowlist for `uploadUrl` and `downloadUrl` (design §8). Never attach `Authorization` to them [G-UP-7], [G-DLD-1]. | M3 |
+| T6 | Another plugin edits `sync-state.json` or `data.json`. | **T-T6.** Accepted risk: plugins share one realm (TB2). State is schema-validated on load, and a malformed file triggers a first-sync (union, no deletes) instead of acting on it. | M5 |
+| T7 | **Supply chain:** a compromised npm dev dependency injects code into `main.js`. | **T-T7.** Zero runtime dependencies. A short, justified dev-dependency list (SPEC §8) with committed lockfile and `npm ci`. Dependabot, `npm audit --audit-level=high` in CI, CodeQL, and GitHub Actions pinned by SHA. Release built only in Actions from a tag, with `actions/attest` provenance [C-GH-3]. The README documents `gh attestation verify`. | M1 (CI, Dependabot, CodeQL, audit), M9 (release + attestation) |
+| T8 | **Supply chain:** maintainer account takeover pushes a malicious release. | **T-T8.** 2FA on the GitHub account (owner action, checklist in M9). Tag protection rule. Releases are drafted by CI and published by hand. The attestation ties each release to its commit. Secret scanning and push protection are enabled [C-GH-2]. | M1, M9 |
+
+### Repudiation
+| ID | Threat | Mitigation | Milestone |
+|---|---|---|---|
+| R1 | The user can't tell what the plugin did, or which device deleted or overwrote a file. | **T-R1.** A per-run `SyncReport` lists every path touched, with conflicts and skips. Conflict copies carry the device name. Remote deletes go to the OneDrive recycle bin, and local deletes go to the trash. The log ring buffer records operation counts and codes. | M5 (report), M7 (UI) |
+
+### Information disclosure
+| ID | Threat | Mitigation | Milestone |
+|---|---|---|---|
+| I1 | **Token theft by another plugin.** SecretStorage is a shared store that every plugin can list and read [O-API-5]. `data.json` is readable too. | **T-I1.** Residual risk, accepted and documented. A secret store can't isolate code in the same realm. The scope is limited to the App Folder (D-3), so a stolen token reaches only the vault copy, not the rest of OneDrive. The README tells users to install only plugins they trust and how to revoke access [C-MSA-1]. Access tokens are never persisted. | M2, M9 |
+| I2 | **Token theft from disk.** SecretStorage storage on iOS is undocumented. On Linux without a keyring it may be unencrypted [O-API-6]. The `data.json` fallback is plaintext. | **T-I2.** Use SecretStorage first. Show a standing settings warning when the fallback is in use. configDir is never synced, so `data.json` doesn't reach OneDrive (D-6). M2 records the observed behavior on both devices in research.md. Residual risk: an attacker with file access to the device or its backups can take the token. Mitigation for users: device encryption (iPad passcode, LUKS on Ubuntu) and revoking access from the Microsoft account page. | M2 |
+| I3 | Tokens, file names or contents leak into logs, console or bug reports. | **T-I3.** The typed logger API has no free-text field, and codes are regex-filtered. `console.error` is used only for errors and without payloads. A sentinel test asserts no path, content or token appears in serialized logs. Error objects from `requestUrl` are reduced to status and code before logging. | M3 (logger), M8 (sentinel test) |
+| I4 | Authorization header sent to non-Graph hosts. | **T-I4.** The transport adds `Authorization` only when the URL host is `graph.microsoft.com`; that rule is unit tested. Upload and download URLs never get it [G-UP-7]. | M3 |
+| I5 | OneDrive content readable by Microsoft or by someone with the account password. | **T-I5.** Accepted for v1 (plain files). The `ContentTransform` seam allows E2EE later (D-10). The README says files are stored unencrypted in OneDrive. | M4 (seam), M9 (README) |
+| I6 | Sensitive notes leak to a device the user didn't intend. | **T-I6.** Exclude patterns, and syncing only within the user's own account. | M7 |
+
+### Denial of service and data loss
+Data loss is the top risk for a sync tool.
+
+| ID | Threat | Mitigation | Milestone |
+|---|---|---|---|
+| D1 | **Mass delete.** A bug, emptied remote folder, cleared state or new device makes the engine think everything was deleted. | **T-D1.** First-sync union mode with no deletes (R-FIRST-1). An App Folder ID change or resync forces union mode (D-18). The mass-delete guard with confirmation (R-GUARD-1). A malformed state file triggers union mode (T-T6). Deletes are recoverable from the recycle bin and trash (D-8). | M5, M6, M7 |
+| D2 | **Lost edits in a conflict.** | **T-D2.** The local copy is written before the original is touched. The conflict copy is uploaded. Edits beat deletes in both directions. The planner table is fully unit tested, including a property-style test that checks no input combination drops bytes that only one side had. | M5, M6 |
+| D3 | **Partial write or crash corrupts a note.** | **T-D3.** Temp-then-rename writes. The hash is checked before rename. State is saved only after each operation succeeds. M6 verifies `adapter.rename` overwrite semantics on both devices and documents the fallback [O-API-10]. | M6 |
+| D4 | **Interrupted sync** (iOS suspension, network loss). | **T-D4.** Idempotent phases: the delta link and index are saved together, and completed operations are recorded per op. Upload sessions are persisted and resumed [G-UP-9]. | M6 |
+| D5 | **Throttling or blocking by Microsoft** from aggressive polling. | **T-D5.** Delta with a token (1 resource unit) [G-DL-9]. Retry-After honored with a global pause. Exponential backoff with jitter. A 10-minute backoff budget per run. Minimum interval of 1 minute, or 15 minutes on the listing fallback. The single-flight lock. | M3, M7 |
+| D6 | **Memory exhaustion on iPad** from large files, since requestUrl buffers whole bodies [O-API-2]. | **T-D6.** 100 MiB default cap (D-12). 10 MiB upload fragments. JSON size cap. M3 checks a large-file round trip on the iPad. | M3, M6 |
+| D7 | **Quota exhaustion** (5 GB free; recycle bin counts too) [C-OD-1], [G-DEL-2]. | **T-D7.** Handle 507 and `quotaLimitReached` as a clear notice. Read quota for the settings display when the scope allows it [G-QT-1]. | M8 |
+| D8 | **Sync loop:** the plugin's own writes trigger vault events that look like new edits. | **T-D8.** Echo filter for in-flight writes (design §3). Hash comparison makes any leftover echo a no-op. | M7 |
+
+### Elevation of privilege
+| ID | Threat | Mitigation | Milestone |
+|---|---|---|---|
+| E1 | Remote content turns into executable plugin code by being written under configDir. | **T-E1.** Same as T-T1: configDir and hidden paths are never written from remote. | M4, M6 |
+| E2 | Plugin asks for more Graph scope than it needs. | **T-E2.** Only `Files.ReadWrite.AppFolder offline_access` (R-AUTH-4). A unit test asserts the exact scope string. | M2 |
+| E3 | The plugin loads remote code, which the developer policies forbid [O-POL-3]. | **T-E3.** No `eval`, no `new Function`, no dynamic `import()` of URLs. Enforced by ESLint (`no-eval`, `no-implied-eval`, `no-new-func`) and the security-reviewer agent. | M1 |
+| E4 | CI workflows abused (e.g. `pull_request_target`, overly broad token permissions). | **T-E4.** Workflows set `permissions: contents: read` by default. The release job alone gets `contents: write`, `id-token: write` and `attestations: write` [O-REL-1]. No `pull_request_target`. Actions pinned by SHA. | M1, M9 |
+
+## 4. Residual risks, stated plainly (copied into the README in M9)
+1. Any other Obsidian plugin you install can read MDVaultSync's refresh token and your vault. This is true of every Obsidian plugin. The token reaches only the MDVaultSync folder in your OneDrive.
+2. On Linux without a working keyring, and possibly on iOS, the token may be stored unencrypted on disk. Use full-disk encryption or a device passcode.
+3. Files are stored unencrypted in your OneDrive in v1.
+4. QuickXorHash detects corruption, not deliberate tampering by someone who controls your OneDrive account.
+5. To cut off a lost device, remove the app at https://account.microsoft.com/privacy/app-access or change your Microsoft account password [I-TL-4], [C-MSA-1].
