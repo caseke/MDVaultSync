@@ -36,7 +36,11 @@ A **manual check** means a step only the owner can do on a real device. The sess
   - `.npmrc` (from the sample).
   - `tsconfig.json`: everything from the sample [O-SMP-3], plus `noEmit`, `allowImportingTsExtensions`, `erasableSyntaxOnly`, `verbatimModuleSyntax`, `moduleResolution: "bundler"`, `exactOptionalPropertyTypes`, `noImplicitOverride` and `noFallthroughCasesInSwitch`. Include `src/**/*.ts` and `test/**/*.ts`. Relative imports use the `.ts` extension, so Node can run tests directly [C-NODE-1].
   - `esbuild.config.mjs` (from the sample; entry `src/main.ts`; output `main.js`, CJS, ES2021).
-  - `eslint.config.mjs`: `obsidianmd.configs.recommended`, plus `no-restricted-imports` banning `obsidian` in `src/core/**` and `src/remote/**`, plus `no-eval`, `no-implied-eval` and `no-new-func` [O-ESL-1], (T-E3). If the plugin's config needs `.mts`, keep the sample's `eslint.config.mts` and `jiti`.
+  - `eslint.config.mjs`: `obsidianmd.configs.recommended` [O-ESL-1], plus project rules:
+    - `no-restricted-imports` banning `obsidian` in `src/core/**` and `src/remote/**`, and Node built-ins (`http`, `https`, `net`, `child_process`, `fs`) everywhere;
+    - `no-restricted-globals` for `fetch`, `XMLHttpRequest` and `WebSocket` (R-NET-1);
+    - `no-restricted-syntax` banning `ImportExpression` (dynamic `import()`), and calls to `.download(`, `.uploadNew(`, `.uploadReplace(`, `.createUploadSession(` and `.putFragment(` inside `src/**` but outside `src/core/remote-content.ts` and `src/remote/**` (R-ENG-4; tests and fakes are exempt);
+    - `no-eval`, `no-implied-eval` and `no-new-func` (T-E3). If the plugin's config needs `.mts`, keep the sample's `eslint.config.mts` and `jiti`.
   - `manifest.json`: id `mdvaultsync`, name `MDVaultSync`, `minAppVersion` `1.11.4`, `isDesktopOnly` false, a description of at most 250 characters that starts with a verb, and no `fundingUrl` [O-SUB-1], [O-SUB-3].
   - `versions.json`, `version-bump.mjs`, `styles.css` (empty placeholder class).
 - **Plugin code:**
@@ -44,16 +48,16 @@ A **manual check** means a step only the owner can do on a real device. The sess
   - `src/core/ports.ts`: the interfaces from design §2, verbatim.
   - `test/smoke.test.ts`: imports `ports.ts` and asserts the test runner works.
 - **Repo files:**
-  - `LICENSE` (MIT, owner name) and `SECURITY.md` (report via GitHub private vulnerability reporting, 7-day acknowledgement target, supported version = latest release, no public issues for vulnerabilities) (R-SEC-6).
+  - `LICENSE` (MIT, `Copyright (c) 2026 caseke`; the owner may replace `caseke` with their legal name) and `SECURITY.md` (report via GitHub private vulnerability reporting, 7-day acknowledgement target, supported version = latest release, no public issues for vulnerabilities) (R-SEC-6).
   - `README.md` skeleton with the required disclosures: network use (Microsoft identity platform and Microsoft Graph/OneDrive, and why), account required, no access outside the vault except the OneDrive App Folder, no telemetry [O-POL-1], [O-POL-2], [O-POL-3].
   - `.gitignore` (`node_modules`, `main.js`, `*.map`, `data.json`).
 - **CI and GitHub configuration:**
-  - `.github/workflows/ci.yml`: on push and PR; `permissions: contents: read`; Node 22.x and 24.x matrix; steps `npm ci`, lint, typecheck, test, build, `npm audit --audit-level=high`. Actions are pinned by full commit SHA with a version comment (T-E4, T-T7).
+  - `.github/workflows/ci.yml`: on push and PR; `permissions: contents: read`; Node 22.x and 24.x matrix; steps `npm ci`, lint, typecheck, test, build, `npm audit --audit-level=high`, and the network-API grep `! grep -rnE '\bfetch\(|XMLHttpRequest|new WebSocket' src/`. Actions are pinned by full commit SHA with a version comment (T-E4, T-T7).
   - `.github/workflows/codeql.yml`: the `javascript-typescript` language, on push, PR and a weekly schedule.
   - `.github/dependabot.yml`: the `npm` and `github-actions` ecosystems, weekly, with dev dependencies grouped.
 - **Claude Code configuration:**
   - `.claude/settings.json`: a PostToolUse hook on `Edit|Write|MultiEdit` running `.claude/hooks/check.sh`, and a SessionStart hook running `npm ci --no-audit --no-fund` when `node_modules` is missing.
-  - `.claude/hooks/check.sh` runs `npx eslint --max-warnings=0 <edited file>` (when it's `.ts` or `.mts`) and `npx tsc --noEmit`. It exits 2 with the errors on stderr so Claude sees them and must fix them.
+  - `.claude/hooks/check.sh` gets the hook event as JSON on **stdin**. It reads `tool_input.file_path` with `node -e` (don't assume `jq` is installed), and falls back to `$1` when run by hand. When the file is `.ts` or `.mts`, it runs `npx eslint --max-warnings=0 <file>` and `npx tsc --noEmit`. On failure it prints the errors to stderr and exits 2, so Claude sees them and must fix them. On success it exits 0 silently.
   - `.claude/agents/security-reviewer.md`: a subagent with tools Read, Grep, Glob and Bash (read-only commands). It reviews `git diff origin/main...HEAD` against `docs/threat-model.md` (the rows mapped to the current milestone), SPEC §3, and the Obsidian developer policies. It checks:
     - every network call goes through `HttpTransport`;
     - `Authorization` goes only to graph.microsoft.com;
@@ -63,12 +67,15 @@ A **manual check** means a step only the owner can do on a real device. The sess
     - no `innerHTML`, `eval` or dynamic import;
     - no new dependencies without a SPEC §8 row;
     - workflow permissions are minimal.
+    - It diffs against `origin/main` when that exists, falling back to the previous milestone's commit and then to `git diff --root HEAD`.
 
     It reports findings as `severity | file:line | issue | fix`.
 
 **Owner actions** (manual, any time during M1):
-- Enable private vulnerability reporting, secret scanning and push protection in the repo settings [C-GH-2].
+- Make `main` the default branch. Merging this branch is the owner's call.
+- In the repo settings, enable private vulnerability reporting, Dependabot alerts, secret scanning and push protection [C-GH-2].
 - Confirm 2FA is on for the GitHub account (T-T8).
+- Verify all of the above with the `gh api` commands in **Verify** (session runs them if `gh` is available, otherwise owner pastes output).
 
 **Acceptance criteria**
 - All standard commands pass locally and in CI on both Node versions.
@@ -81,7 +88,12 @@ A **manual check** means a step only the owner can do on a real device. The sess
 ```bash
 npm ci && npm run lint && npm run typecheck && npm test && npm run build && npm audit --audit-level=high
 ls -l main.js
-echo 'const unused = 1;' >> src/main.ts && .claude/hooks/check.sh src/main.ts; echo "exit=$?"; git checkout src/main.ts
+cp src/main.ts /tmp/main.ts.bak && echo 'const unused = 1;' >> src/main.ts && .claude/hooks/check.sh src/main.ts; echo "exit=$? (expect 2)"; cp /tmp/main.ts.bak src/main.ts
+echo '{"tool_input":{"file_path":"src/main.ts"}}' | .claude/hooks/check.sh; echo "exit=$? (expect 0)"
+! grep -rnE '\bfetch\(|XMLHttpRequest|new WebSocket' src/ && echo "no forbidden network APIs"
+gh api repos/caseke/MDVaultSync --jq '.security_and_analysis'            # secret_scanning + push_protection: enabled
+gh api repos/caseke/MDVaultSync/private-vulnerability-reporting          # {"enabled":true}
+gh api -i repos/caseke/MDVaultSync/vulnerability-alerts | head -1        # HTTP/2 204 = Dependabot alerts on
 ```
 
 **Verification output**
@@ -101,9 +113,9 @@ echo 'const unused = 1;' >> src/main.ts && .claude/hooks/check.sh src/main.ts; e
 - `src/remote/auth.ts`: `AuthClient` with `buildAuthorizeUrl(redirect)`, `handleCallback(params)`, `parsePastedUrl(url)` and `redeemCode()`. It implements `AccessTokenProvider` (single-flight refresh, rotation).
 - `src/remote/http.ts`: an `HttpTransport` decorator that adds `Authorization` only for `https://graph.microsoft.com/` (T-I4).
 - `src/platform/request-url-transport.ts`: `HttpTransport` over `requestUrl` with `throw: false`. Converts the body to ArrayBuffer and lower-cases header names.
-- `src/platform/token-store.ts`: `TokenStore` over SecretStorage, with the `data.json` fallback and the `secure` flag (D-5).
-- `src/main.ts`: protocol handler `mdvaultsync-auth` (also accepting a trailing slash); commands `sign-in` and `sign-out`.
-- `src/ui/settings-tab.ts`: the Account section only (status, Client ID, Sign in, Sign in another way plus paste box, Sign out, and the insecure-storage warning).
+- `src/platform/token-store.ts`: `TokenStore` over SecretStorage, with the `data.json` fallback and the `backend` field (D-5; design §4).
+- `src/main.ts`: protocol handler `mdvaultsync-auth` (also accepting a trailing slash); commands `sign-in` and `sign-out`. Sign-out calls a `StateStore` stub here; M6 swaps in the real store.
+- `src/ui/settings-tab.ts`: the Account section only (status, Client ID, Sign in, Sign in another way plus paste box, Sign out, and the token-storage line: a warning for `plugin-data`, a neutral note for `secret-storage`).
 - Tests: `test/pkce.test.ts`, `test/auth.test.ts`, `test/http.test.ts`, `test/fakes/fake-http.ts`.
 
 **Acceptance criteria**
@@ -118,7 +130,8 @@ echo 'const unused = 1;' >> src/main.ts && .claude/hooks/check.sh src/main.ts; e
   2. iPad: same flow through Safari's "Open in Obsidian?" prompt.
   3. One device: "Sign in another way" works end to end. If `nativeclient` doesn't work with `/consumers`, record the result in research.md [I-RU-4] and replace the fallback before closing the milestone.
   4. Token redemption succeeds, which proves `requestUrl` sends no breaking `Origin` header [I-AC-7]. Record it.
-  5. Quit and relaunch Obsidian on both devices: still signed in. Record whether `TokenStore.secure` was true [O-API-6].
+  5. Quit and relaunch Obsidian on both devices: still signed in. Record `TokenStore.backend` [O-API-6].
+  5a. Ubuntu: run `xdg-mime query default x-scheme-handler/obsidian` and record the output [O-DEB-1]. Then, with GNOME Keyring locked or absent (for example a fresh user session with no keyring daemon), sign in. Record whether `setSecret` threw, and whether Obsidian showed a "secret storage provider" warning. Update research.md O-API-6 with the observed behavior.
   6. Sign out: settings show signed out, and a SecretStorage read returns empty.
   7. The link https://account.microsoft.com/privacy/app-access shows MDVaultSync [C-MSA-1].
   8. Tick the verification box in entra-setup.md after correcting any portal wording.
@@ -185,7 +198,7 @@ node --test --experimental-test-coverage "test/**/*.test.ts" 2>&1 | grep -E "ret
 
 **Files and interfaces**
 - `src/core/quickxor.ts`: `quickXorHash(data: ArrayBuffer): string` (base64), ported from Microsoft's reference [G-HASH-2]. It works on `Uint8Array` in chunks, with no `BigInt` requirement unless needed for the length XOR.
-- `src/core/paths.ts`: `toVaultPath`, `validateSegment`, `validatePath(path, appRootPrefixLen)`, `caseKey`, `findCollisions` and `remoteToVaultPath` (containment), per design §7 and §8 (T-T1, T-E1).
+- `src/core/paths.ts`: `toVaultPath`, `validateSegment`, `validatePath(path, pathPrefixLen)`, `caseKey`, `findCollisions` and `remoteToVaultPath` (containment), per design §7 and §8 (T-T1, T-E1).
 - `src/core/exclude.ts`: `isExcluded(path, configDir, patterns)`, a gitignore-style glob (`*`, `**`, `?`, a trailing `/`), around 60 lines, no dependency.
 - `src/core/transform.ts`: the `ContentTransform` interface and `IdentityTransform` (D-10).
 - `src/core/conflict-name.ts`: `conflictCopyPath(path, deviceName, date, exists)`, which produces `stem (conflict Device YYYY-MM-DD HHmmss).ext` and adds ` 2`, ` 3` on collision (R-CONF-1).
@@ -219,7 +232,15 @@ npm run lint && npm run typecheck && npm test && npm run build
 - `src/core/planner.ts`: the three-way table, rename and move detection, folder ops, union mode, skips, the mass-delete count, and `Plan`.
 - `src/core/report.ts`: builds a `SyncReport` from a plan and results.
 - `test/fakes/fake-vault.ts` and `test/fakes/fake-remote.ts`. FakeRemote follows OneDrive rules: case-insensitive names, eTag changes on any change, cTag only on content changes, recycle on delete, 412 on stale If-Match, and delta pages with duplicates.
-- `test/planner.test.ts`: one named test per row of the design §5.4 table, plus renames (local, remote, both, folder rename collapse), first-sync union, the approot-ID change, the guard threshold boundary, and every skip reason.
+- `test/planner.test.ts`: one named test per row of the design §5.4 table, plus:
+  - renames: local, remote, both to different targets, both to the *same* target, case-only renames (no `local-move` loop), and the folder rename collapse;
+  - union mode **with** bases (a resync: one-sided edits sync normally, no conflicts, no deletes);
+  - union mode **without** bases (a stale device: conflicts counted in `differsNoHistory`);
+  - the approot-ID change;
+  - a remote folder delete blocked by a skipped (too-large) child;
+  - the guard threshold boundary, and `declinedDeletes` suppressing re-proposals;
+  - null remote hash handling;
+  - every skip reason.
 - `test/planner.property.test.ts`: a seeded PRNG (written in the test, no dependency) generates 5,000 random three-way states. It asserts:
   - no plan both deletes and fails to preserve bytes that only one side had;
   - union mode never emits deletes;
@@ -261,13 +282,20 @@ node --test --experimental-test-coverage "test/**/*.test.ts" 2>&1 | grep -E "pla
   - `writeAtomic` writes the hidden temp sibling `.mdvaultsync-tmp-<random>` through the adapter, then renames it into place.
   - `trash` calls `FileManager.trashFile`; `move` calls `Vault.rename` [O-API-7], [O-API-8], [O-API-10].
   - The containment check runs again right before the write (T-T1).
-- `src/platform/plugin-state-store.ts`: `StateStore` over `sync-state.json`, written atomically.
+- `src/platform/plugin-state-store.ts`: `StateStore` over `sync-state.json`, written atomically. Wire it into sign-out, replacing the M2 stub.
+- `src/core/remote-content.ts`: `RemoteContent` (design §2), the only caller of RemotePort content methods.
 - Tests: `test/executor.test.ts` and `test/engine.test.ts` (FakeVault + FakeRemote).
   - Every op runs end to end.
   - Crash injection: throw after op *n* for each *n*, re-run, and assert convergence with no duplicate conflict copies.
   - Upload resume after an interruption mid-fragment; a session 404 restarts the upload.
   - A hash mismatch is discarded and reported.
   - Overlapping `requestSync` calls run sequentially, with at most one rerun.
+  - **Edit during sync:** FakeVault changes a file between Scan and its download or trash. Assert no overwrite or trash, a conflict or deferral, and that the next run uploads the edit (R-CONF-4).
+  - **Upload-session race:** FakeRemote changes the item's eTag while a replace session is mid-upload. Assert the session is cancelled before the final fragment and the conflict procedure runs (design §6.3).
+  - **Conflict crash:** crash after the copy is written but before the download. Assert the re-run reuses the same `copyPath` (no second copy).
+  - **Union crash:** crash during a union run after the delta save. Assert the next run is still union (`unionPending`) and emits no deletes.
+  - **Transform seam:** run a full sync with an XOR-each-byte test transform. Assert FakeRemote stores only transformed bytes, both vaults end with the original plaintext, and no planner or executor code changed (R-ENG-4).
+  - **Sign-out:** sign-out now calls the real `StateStore.clear()`. Assert the state file is gone and local files are untouched (R-AUTH-7).
 
 **Manual checks**
 - In a diagnostics sub-command, `adapter.rename` onto an existing file on Ubuntu and on the iPad. Record whether it overwrites. If not, `writeAtomic` uses remove-then-rename and research.md is updated [O-API-10].
@@ -329,6 +357,13 @@ npm run lint && npm run typecheck && npm test && npm run build
 
 **Goal.** Close the remaining threat-model rows and prove v1 on real devices.
 
+**Files and interfaces**
+- `test/logging.sentinel.test.ts` (new)
+- `src/ui/notices.ts`: the error-code → message table
+- `src/ui/settings-tab.ts`: quota display
+- `src/remote/graph.ts`: 507 / `quotaLimitReached` mapped to `GraphError` code `quota`
+- `docs/threat-model.md`: a status column filled in
+
 **Work**
 - `test/logging.sentinel.test.ts`: a full fake sync with sentinel strings in file names, contents and tokens. The serialized log ring buffer and every `console.*` call contain none of them (R-SEC-3, T-I3).
 - Error handling for 507 and `quotaLimitReached`, with a clear notice. Quota shown in settings when the scope allows it (T-D7) [G-QT-1].
@@ -349,6 +384,15 @@ npm run lint && npm run typecheck && npm test && npm run build
 | 8 | Rename a file in OneDrive web | The local file is renamed; no conflict (metadata-only 412 path) |
 | 9 | Sign out, then sign in | State cleared; first-sync union; no deletes |
 | 10 | Revoke the app at account.microsoft.com | Next sync shows "Sign-in required" |
+| 11 | Stale device rejoins: sign out on Ubuntu, edit 3 notes on iPad and sync, edit 1 *other* note on Ubuntu, sign in on Ubuntu | Preview shows "Differs on both sides, no sync history (4)"; after Run there are 4 conflict copies and nothing is lost |
+| 12 | Type in a note continuously while a sync downloads a remote change to it | No keystrokes lost; conflict copy or deferred op (R-CONF-4) |
+
+**Acceptance criteria**
+- Every matrix row passes on both devices, with results recorded below.
+- The sentinel test passes.
+- The notice-mapping test passes.
+- Every threat-model row is marked implemented, or has a recorded reason.
+- `npm audit --audit-level=high` is clean.
 
 **Verify**
 ```bash
@@ -402,7 +446,8 @@ npm run lint && npm run typecheck && npm test && npm run build && npm audit --au
 **Verify**
 ```bash
 npm run lint && npm run typecheck && npm test && npm run build
-git tag 1.0.0 && git push origin 1.0.0          # owner, after merge to main
+npm version 1.0.0          # runs version-bump.mjs → manifest.json + versions.json; .npmrc tag-version-prefix="" makes tag 1.0.0
+git push --follow-tags     # owner, on main after merge; pushes commit + tag 1.0.0, triggering release.yml
 gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation verify main.js -R caseke/MDVaultSync
 ```
 
@@ -425,8 +470,8 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-CD-3, R-CD-4 | M4, M5 | ☐ |
 | R-ORDER | M6 | ☐ |
 | R-CC-1, R-CC-2 | M3, M6 | ☐ |
-| R-CONF-1…3 | M4, M5, M6, M7 | ☐ |
-| R-DEL-1, R-DEL-2 | M5, M6 | ☐ |
+| R-CONF-1…4 | M4, M5, M6, M7 | ☐ |
+| R-DEL-1…3 | M5, M6 | ☐ |
 | R-MOVE-1 | M5, M6 | ☐ |
 | R-FIRST-1, R-FIRST-2 | M5, M7 | ☐ |
 | R-GUARD-1 | M5, M7 | ☐ |

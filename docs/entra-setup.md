@@ -12,13 +12,22 @@ Status: drafted in session 1 from Microsoft documentation. Microsoft redesigns t
 - A personal Microsoft account (outlook.com, hotmail.com, live.com) doesn't come with one. The documented way to get one is an Azure free account [I-REG-2]. The Microsoft 365 Developer Program no longer accepts personal accounts [I-REG-3].
 - The app is registered as a **public client** under the "Mobile and desktop applications" platform. That means no secret, and refresh tokens last about 90 days. The "Single-page application" platform would cap them at 24 hours [I-TL-2], [I-AC-6].
 
+## Before you start
+- **Already have an Entra tenant you control** (not your employer's)? Skip step 1 and use it. In step 2, switch to that directory instead of "Default Directory".
+- **Install MDVaultSync first** so you can finish step 5. Until release 1.0.0 (plan M9) it is installed through BRAT:
+  1. Install **BRAT** from Obsidian's Community plugins.
+  2. Open the command palette and run **BRAT: Add a beta plugin for testing**.
+  3. Enter `caseke/MDVaultSync`.
+  4. Enable MDVaultSync in Community plugins.
+
 ## Step 1: Create the tenant with an Azure free account
 1. Open https://azure.microsoft.com/free and choose **Start free** (or **Try Azure for free**).
 2. Sign in with the **same personal Microsoft account** whose OneDrive will hold the vault.
 3. Complete the sign-up:
    - phone verification (a real mobile number; VoIP numbers are rejected);
    - card verification (credit or debit, not prepaid). You may see a temporary hold of about $1, which is released [C-AZ-1].
-4. Accept the agreement. Azure creates a subscription and a directory called **Default Directory**.
+4. Accept the agreement. Azure creates a subscription and a directory, usually called **Default Directory**. The name may differ, for example `<yourname>outlook.onmicrosoft.com`; any name works. Note what it is called.
+   - **If Azure says you're not eligible** for a free account (you had one before, or you already have a subscription), it will offer **pay-as-you-go**. Pay-as-you-go has *no* spending limit. It still costs $0 as long as you create no resources, because app registrations aren't billed. But a mistake later could cost money. If you accept it, create nothing in Azure except what this guide says. If you already have a subscription, its directory works and you don't need a new one.
 5. To stay at $0:
    - Don't create any Azure resources.
    - Leave the spending limit on.
@@ -27,7 +36,7 @@ Status: drafted in session 1 from Microsoft documentation. Microsoft redesigns t
 
 ## Step 2: Register the application
 1. Open the Microsoft Entra admin center at https://entra.microsoft.com and sign in with the same account.
-2. If the top-right corner shows more than one directory, switch to **Default Directory** (gear icon → *Directories + subscriptions*).
+2. If the top-right corner shows more than one directory, switch to the directory from step 1 (gear icon → *Directories + subscriptions*).
 3. Go to **Entra ID → App registrations** (older layouts: *Identity → Applications → App registrations*) and choose **New registration**.
 4. Fill in the form:
    - **Name:** `MDVaultSync`. This name becomes the OneDrive folder `Apps/MDVaultSync`. Renaming the app later does *not* rename the folder [G-AF-1].
@@ -59,7 +68,23 @@ Check the manifest (optional). Under **Manifest**, `signInAudience` should be `P
    - The consent screen says the app is **unverified**. That's expected for an app you registered yourself [I-REG-6].
    - The consent screen should show "Have full access to the application's folder". If it asks for anything more, stop and check step 4.
 3. After you approve, the browser asks to open Obsidian. Allow it. Settings should show you as signed in.
-4. If Obsidian doesn't open, choose **Sign in another way**, sign in again, copy the full address from the blank page you land on, and paste it into the box.
+4. If Obsidian doesn't open, choose **Sign in another way** and sign in again. You'll land on a mostly blank Microsoft page. Copy its **full** address and paste it into the box in MDVaultSync settings.
+   - **iPad (Safari):** tap the address bar once so the full URL is selected, tap it again and choose **Copy**. Then switch back to Obsidian and paste.
+   - **Ubuntu:** click the address bar, press Ctrl+A then Ctrl+C.
+   - The address starts with `https://login.microsoftonline.com/common/oauth2/nativeclient?code=`.
+
+## Final check
+On the app registration, confirm each of these:
+| Where | Expected |
+|---|---|
+| Overview → Supported account types | Personal Microsoft accounts only |
+| Authentication → platforms | Only **Mobile and desktop applications**; no Web, no Single-page application |
+| Mobile and desktop redirect URIs | `obsidian://mdvaultsync-auth` and `https://login.microsoftonline.com/common/oauth2/nativeclient` |
+| Authentication → Allow public client flows | No |
+| API permissions | Microsoft Graph, Delegated: `Files.ReadWrite.AppFolder`, `offline_access`, and nothing else |
+| Manifest | `"signInAudience": "PersonalMicrosoftAccount"`, `"requestedAccessTokenVersion": 2` |
+| Certificates & secrets | Empty: no client secrets, no certificates |
+| Copied | The Application (client) ID |
 
 ## Removing access
 To disconnect every device at once, remove MDVaultSync at https://account.microsoft.com/privacy/app-access [C-MSA-1]. Changing your Microsoft account password also revokes its tokens [I-TL-4]. To delete the registration itself: Entra admin center → App registrations → MDVaultSync → **Delete**. Your OneDrive files in `Apps/MDVaultSync` are not deleted.

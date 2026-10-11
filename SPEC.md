@@ -57,12 +57,17 @@ Requirement keywords: **MUST** is required for v1. **SHOULD** is expected unless
 - **R-CC-1.** Every update, move and delete of an existing remote item MUST send `If-Match` with the last-synced eTag.
   - New files MUST be created with `conflictBehavior=fail`.
   - Small updates MUST use simple PUT only if the M3 probe confirms that PUT honors If-Match; otherwise they use a single-fragment upload session (D-11) [G-UP-3], [G-UP-5].
+  - Upload sessions check If-Match only when the session is created. For replace sessions the plugin MUST therefore re-check the item's eTag before resuming and before the final fragment, and run the conflict procedure on a mismatch (design §6.3). The guarantee for files over 10 MiB is "no overwrite unless another device commits within the single request between that check and our commit." That limit is accepted.
 - **R-CC-2.** A 412 response MUST be resolved under the conflict policy:
   - First re-fetch the item. If only metadata changed (same cTag and hash), retry with the new eTag.
   - Otherwise it is a content conflict.
 - **R-CONF-1.** Conflicts MUST lose no data. The remote version keeps the original path. This device's version is written to `<stem> (conflict <device name> <YYYY-MM-DD HHmmss>)<.ext>` in the same folder and then uploaded (D-9).
 - **R-CONF-2.** After a run with conflicts, one notice MUST list every conflict copy. It stays visible until dismissed. The conflicts also appear in the sync report.
 - **R-CONF-3.** A conflict copy MUST only be created when both sides changed with different content. Identical content on both sides MUST be recorded as synced with no copy.
+  - Known consequence: a device with no sync history for a file (fresh install, after sign-out, or after a state reset) can't tell which side changed. Each file that differs on both sides therefore gets one conflict copy.
+  - The preview MUST show these as their own group ("Differs on both sides, no sync history") before anything runs (design §5.4).
+  - A resync demanded by Graph keeps history, so it doesn't cause this.
+- **R-CONF-4.** A local file edited while a sync is running MUST NOT be overwritten or trashed by that sync. A pre-write re-check turns the op into a conflict or defers it (design §5.5).
 
 ### Deletes, renames and safety
 - **R-DEL-1.** Deletes MUST propagate in both directions.
@@ -75,7 +80,10 @@ Requirement keywords: **MUST** is required for v1. **SHOULD** is expected unless
   - It MUST be shown before the first sync.
   - It MUST be available on demand through a "Preview sync" command.
   - It MUST be shown before every sync when the "Preview changes before every sync" setting is on.
-- **R-GUARD-1.** If a run would delete more than the configured share of tracked files (default 25 %), it MUST pause and list the deletes for confirmation. Declining runs the sync without the deletes.
+- **R-GUARD-1.** If a run would delete more than the configured share of tracked files (default 25 %), it MUST pause and list the deletes for confirmation.
+  - Declining runs the sync without the deletes and remembers them. They aren't re-proposed until the file changes or the user runs "Sync now".
+  - An unanswered prompt times out after 10 minutes as "skip deletes".
+- **R-DEL-3.** A remote folder MUST be deleted only when the remote index shows it has no children, including children this device skips. Graph folder deletes are recursive.
 
 ### Paths
 - **R-PATH-1.** Names MUST be normalized to Unicode NFC. Two local names that are equal after NFC MUST be skipped and reported.
@@ -86,7 +94,7 @@ Requirement keywords: **MUST** is required for v1. **SHOULD** is expected unless
 ### Local writes and network
 - **R-IO-1.** Downloads MUST be written to a hidden temporary file in the same folder, then renamed into place.
 - **R-IO-2.** Downloaded bytes MUST match the remote QuickXorHash before they replace a local file.
-- **R-NET-1.** Every HTTP call MUST go through Obsidian's `requestUrl` [O-API-1]. `fetch`, XHR and Node `http` are forbidden.
+- **R-NET-1.** Every HTTP call MUST go through Obsidian's `requestUrl` [O-API-1]. `fetch`, XHR, WebSocket and Node `http` are forbidden. ESLint (`no-restricted-globals`, `no-restricted-imports`) enforces this, and CI runs a grep check (plan M1).
 
 ### Resilience
 - **R-RES-1.** The plugin MUST honor `Retry-After` on 429 and 503 and pause all requests while it lasts. It MUST use exponential backoff with jitter on other 5xx errors and network errors [G-THR-1], [G-THR-2].
@@ -94,7 +102,7 @@ Requirement keywords: **MUST** is required for v1. **SHOULD** is expected unless
   - The session MUST be persisted.
   - Interrupted uploads MUST resume from `nextExpectedRanges`.
   - A 404 on the session MUST restart the upload [G-UP-9].
-- **R-RES-3.** Progress MUST be persisted after each completed operation, so an interrupted sync resumes where it stopped (design §6.2).
+- **R-RES-3.** Progress MUST be persisted at most one second after each completed operation, and immediately before every destructive operation. An interrupted sync then resumes where it stopped, repeating at most one second of idempotent work (design §5.5, §6.2).
 
 ### UI
 - **R-UI-1.** The settings tab MUST show:
@@ -132,7 +140,7 @@ Requirement keywords: **MUST** is required for v1. **SHOULD** is expected unless
 - **R-ENG-1.** TypeScript strict mode, starting from the structure of `obsidianmd/obsidian-sample-plugin` [O-SMP-1]–[O-SMP-3].
 - **R-ENG-2.** Lint with `eslint-plugin-obsidianmd` `configs.recommended` [O-ESL-1]. Follow the plugin guidelines and developer policies, including the README disclosures [O-POL-1], [O-POL-2].
 - **R-ENG-3.** The sync engine (`src/core`) and remote clients (`src/remote`) MUST NOT import `obsidian`. They talk to the vault and Graph only through the `VaultPort`, `RemotePort` and `HttpTransport` interfaces, and are unit tested with fakes.
-- **R-ENG-4.** All file content MUST pass through a single `ContentTransform` layer between the vault and the Graph client. v1 uses the identity transform; end-to-end encryption can be added later without changing the engine.
+- **R-ENG-4.** All file content MUST pass through a single `ContentTransform` layer between the vault and the Graph client, via `RemoteContent` (design §1, §2). v1 uses the identity transform; end-to-end encryption can be added later without changing the engine. An M6 test runs a full sync with a non-identity test transform and asserts FakeRemote only ever stores transformed bytes.
 - **R-ENG-5.** Every milestone MUST end with `npm run lint`, `npm run typecheck` and `npm test` passing, with the command output pasted into docs/plan.md.
 
 ## 5. Decisions and reasons
@@ -141,7 +149,7 @@ Requirement keywords: **MUST** is required for v1. **SHOULD** is expected unless
 | D-1 | Personal Microsoft accounts only | Owner decision. The AppFolder scope is designed for personal accounts [G-AF-4]. |
 | D-2 | The Entra tenant comes from an Azure free account (card used for verification only) | Since June 2024 apps must be registered in a directory [I-REG-1]. The M365 Developer Program excludes personal accounts [I-REG-3]. Azure free is the documented route [I-REG-2], [C-AZ-1]. Owner accepted the card step. |
 | D-3 | Scopes `Files.ReadWrite.AppFolder` + `offline_access` | Least privilege: the plugin can't see any other OneDrive file [I-REG-5]. |
-| D-4 | Auth code + PKCE, "Mobile and desktop applications" platform, `obsidian://mdvaultsync-auth` primary, `nativeclient` paste fallback, no device code | The Mobile and desktop platform gives about 90-day refresh tokens and no Origin requirement; SPA would give 24-hour tokens [I-TL-2], [I-AC-5]. The .deb install registers `obsidian://`, so one code path covers both devices with no Node code. Device code needs "Allow public client flows" and is flagged by Microsoft as phishing-prone [I-DC-1]. Owner chose the paste fallback. |
+| D-4 | Auth code + PKCE, "Mobile and desktop applications" platform, `obsidian://mdvaultsync-auth` primary, `nativeclient` paste fallback, no device code | Full comparison of both flows on iPad and Ubuntu is in design §4.0. The Mobile and desktop platform gives about 90-day refresh tokens and no Origin requirement; SPA would give 24-hour tokens [I-TL-2], [I-AC-5]. The .deb install is expected to register `obsidian://` (INFERRED [O-DEB-1], checked in M2), so one code path covers both devices with no Node code. Device code needs "Allow public client flows" and is flagged by Microsoft as phishing-prone [I-DC-1]. Owner chose the paste fallback. |
 | D-5 | Refresh token in SecretStorage; fall back to `data.json` with a warning only if the API throws | It is the most secure store Obsidian offers [O-API-4]. The owner prefers working sync with a visible warning over being locked out. `configDir` is never synced, so `data.json` stays on the device. |
 | D-6 | Exclude configDir, hidden paths and user patterns | Owner decision. Settings and plugin state are per device, and `data.json` may hold a token. |
 | D-7 | Triggers: startup, interval, command, ribbon, behind one lock | Owner decision. |

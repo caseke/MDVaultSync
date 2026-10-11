@@ -29,6 +29,7 @@ A milestone is done only when lint, typecheck, test, and build all pass. Paste t
 ## Conventions
 - **Erasable TypeScript only.** No enums, namespaces, parameter properties or decorators. Relative imports end in `.ts`. Use `import type` for types.
 - **Runtime dependencies.** Zero. A new dev dependency needs a row in SPEC §8 and owner approval.
+- **Content.** File bytes move only through `RemoteContent` (`src/core/remote-content.ts`), which applies `ContentTransform`. Never call RemotePort content methods elsewhere.
 - **HTTP.** Only through `HttpTransport` → `requestUrl`. Never `fetch`, XHR, or Node `http`. `Authorization` goes to `graph.microsoft.com` only.
 - **Remote data is untrusted.** Validate it in `src/remote/validate.ts` before use. Check path containment again right before every local write.
 - **Logging.** Use `logger.event(op, {count, durationMs, status, code})` only. Never log paths, names, contents, or tokens. Use `console.error` for errors only.

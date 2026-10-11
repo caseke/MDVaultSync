@@ -44,19 +44,21 @@ flowchart TB
 
 Rules:
 - `src/core/**` and `src/remote/**` never import `obsidian`. ESLint enforces this with `no-restricted-imports` scoped to those folders. Tests under `test/**` run them with fakes on plain Node.
-- Every byte moving between vault and Graph passes through `ContentTransform`. The engine never calls `GraphClient` content methods directly; it calls `RemoteContent`, which wraps transform plus Graph.
-- Every HTTP call goes through `HttpTransport`. The only production implementation wraps Obsidian's `requestUrl` [O-API-1]. Nothing calls `fetch` or `XMLHttpRequest`, and nothing loads Node `http`.
+- Every byte moving between vault and Graph passes through `ContentTransform`. The executor never calls `RemotePort` content methods (`download`, `uploadNew`, `uploadReplace`, upload-session methods) directly. It calls `RemoteContent` (`src/core/remote-content.ts`, §2), which wraps transform plus `RemotePort`. ESLint's `no-restricted-syntax` flags those member calls outside `remote-content.ts`, and an M6 test with a non-identity transform proves it.
+- Every HTTP call goes through `HttpTransport`. The only production implementation wraps Obsidian's `requestUrl` [O-API-1]. Nothing calls `fetch`, `XMLHttpRequest` or `WebSocket` (ESLint `no-restricted-globals`), and nothing loads Node `http`.
 - There are no runtime npm dependencies. Everything in `main.js` is our code (SPEC §8).
 
 ### Source layout
 ```
 src/
   main.ts                    Plugin subclass: wiring, triggers, commands, ribbon, status bar
-  ui/                        SettingsTab, PlanPreviewModal, ConfirmDeletesModal, ReportView, notices.ts
-  platform/                  ObsidianVault, RequestUrlTransport, TokenStore, PluginStateStore
-  remote/                    AuthClient, GraphClient, RetryPolicy, graph-types.ts, validate.ts
-  core/                      engine.ts, planner.ts, executor.ts, state.ts, paths.ts,
-                             quickxor.ts, transform.ts, exclude.ts, logger.ts, ports.ts, errors.ts
+  ui/        settings-tab.ts, plan-preview-modal.ts, confirm-deletes-modal.ts, report-view.ts, notices.ts
+  platform/  obsidian-vault.ts, request-url-transport.ts, token-store.ts, plugin-state-store.ts, diagnostics.ts
+  remote/    auth.ts, pkce.ts, http.ts (auth decorator), graph.ts, upload-session.ts, retry.ts,
+             graph-types.ts, validate.ts, errors.ts (GraphError, ResyncRequired), capabilities.ts
+  core/      ports.ts, engine.ts, planner.ts, executor.ts, remote-content.ts, upload-resume.ts,
+             state.ts, remote-tree.ts, report.ts, paths.ts, exclude.ts, conflict-name.ts,
+             quickxor.ts, transform.ts, logger.ts
 test/
   fakes/                     FakeVault, FakeRemote (in-memory OneDrive semantics), FakeHttp, FakeClock
   *.test.ts
@@ -94,11 +96,26 @@ export interface RemoteItem {
   lastModified: string; deleted: boolean;
 }
 export interface DeltaPage { items: RemoteItem[]; nextLink?: string; deltaLink?: string; }
+export interface AppRoot {
+  item: RemoteItem;
+  /** Decoded drive path of the approot WITHOUT the "/drive/root:" prefix, e.g. "/Apps/MDVaultSync". */
+  pathPrefix: string;
+}
+export interface UploadTarget { kind: "new"; parentId: string; name: string } // or replace an existing item:
+export interface UploadTargetReplace { kind: "replace"; id: string }
+export interface UploadSessionInfo { uploadUrl: string; expiresAt: string; }
+export interface UploadStatus { nextExpectedStart: number | null; expiresAt: string; } // null = complete or gone
 export interface RemotePort {
-  getAppRoot(): Promise<RemoteItem>;
+  getAppRoot(): Promise<AppRoot>;
   delta(link: string | null): Promise<DeltaPage>;                    // null = start full enumeration
   listChildren(folderId: string): Promise<RemoteItem[]>;             // fallback if delta unsupported [G-DL-1]
   getItem(id: string): Promise<RemoteItem | null>;
+  getChildByName(parentId: string, name: string): Promise<RemoteItem | null>; // after 409 nameAlreadyExists
+  // upload sessions [G-UP-5]..[G-UP-9]; ifMatch applies at creation only (see §6.3 for the commit-time check)
+  createUploadSession(target: UploadTarget | UploadTargetReplace, ifMatch: string | null, size: number): Promise<UploadSessionInfo>;
+  putFragment(uploadUrl: string, start: number, total: number, bytes: ArrayBuffer): Promise<RemoteItem | null>; // item on final fragment
+  getUploadStatus(uploadUrl: string): Promise<UploadStatus>;         // 404 → { nextExpectedStart: null }
+  cancelUpload(uploadUrl: string): Promise<void>;
   download(id: string): Promise<ArrayBuffer>;                        // via fresh downloadUrl, no auth header [G-DLD-1]
   createFolder(parentId: string, name: string): Promise<RemoteItem>; // conflictBehavior=fail
   uploadNew(parentId: string, name: string, data: ArrayBuffer): Promise<RemoteItem>;   // fail on name clash
@@ -115,6 +132,16 @@ export interface ContentTransform {
   encode(plain: ArrayBuffer, ctx: TransformContext): Promise<ArrayBuffer>;
   decode(stored: ArrayBuffer, ctx: TransformContext): Promise<ArrayBuffer>;
 }
+/** The only path content takes between executor and RemotePort (src/core/remote-content.ts). */
+export interface RemoteContent {
+  /** download → verify stored-bytes hash → decode. Returns plaintext and the stored-bytes hash. */
+  fetch(item: RemoteItem, path: VaultPath): Promise<{ plain: ArrayBuffer; remoteHash: string }>;
+  /** encode → (simple PUT | upload session) → verify returned hash. */
+  store(target: UploadTarget | UploadTargetReplace, ifMatch: string | null, plain: ArrayBuffer, path: VaultPath,
+        onSession?: (s: UploadSessionInfo) => Promise<void>): Promise<{ item: RemoteItem; remoteHash: string }>;
+  /** Stored-bytes hash this plaintext WOULD have remotely (encode + quickXorHash). Identity: equals the plaintext hash. */
+  storedHashOf(plain: ArrayBuffer, path: VaultPath): Promise<string>;
+}
 
 // ---------- persisted state ----------
 export interface FileRecord {
@@ -127,8 +154,10 @@ export interface FileRecord {
 }
 export interface UploadSessionRecord {
   path: VaultPath; uploadUrl: string; expiresAt: string; totalSize: number;
-  localHash: string; ifMatch: string | null; parentId: string; name: string;
+  localHash: string; ifMatch: string | null;   // eTag the session was created against (replace only)
+  target: UploadTarget | UploadTargetReplace;
 }
+export interface PendingConflict { path: VaultPath; copyPath: VaultPath; localHash: string; remoteId: string; }
 export interface SyncState {
   schemaVersion: 1;
   deviceId: string;                         // random UUID, generated once per device
@@ -139,7 +168,13 @@ export interface SyncState {
   folders: Record<VaultPath, string>;       // path → remote folder id
   pendingLocal: PendingLocalOp[];           // from vault events since last successful sync
   uploadSessions: Record<VaultPath, UploadSessionRecord>;
+  pendingConflicts: Record<VaultPath, PendingConflict>; // written BEFORE the conflict copy (§5.5)
   firstSyncCompleted: boolean;
+  /** Persisted union mode: set when a first sync / resync / approot change starts, cleared only when a
+   *  union run finishes ok|partial. Survives crashes so a resumed run can never delete (R-FIRST-1). */
+  unionPending: boolean;
+  /** Paths whose remote delete the user declined; not re-prompted until their local or remote state changes. */
+  declinedDeletes: Record<VaultPath, { localHash: string | null; eTag: string | null }>;
   lastReport: SyncReport | null;
 }
 export type PendingLocalOp =
@@ -149,7 +184,13 @@ export type PendingLocalOp =
 export interface StateStore { load(): Promise<SyncState | null>; save(s: SyncState): Promise<void>; clear(): Promise<void>; }
 
 // ---------- auth ----------
-export interface TokenStore { get(): string | null; set(refreshToken: string): void; clear(): void; readonly secure: boolean; }
+export interface TokenStore {
+  get(): string | null;
+  set(refreshToken: string): Promise<void>;   // async: the data.json fallback needs saveData
+  clear(): Promise<void>;
+  /** "secret-storage" = Obsidian SecretStorage (OS encryption NOT guaranteed, see §4); "plugin-data" = data.json fallback. */
+  readonly backend: "secret-storage" | "plugin-data";
+}
 export interface AccessTokenProvider { getAccessToken(): Promise<string>; } // single-flight refresh
 
 // ---------- HTTP ----------
@@ -172,14 +213,37 @@ export type PlanOp =
   | { kind: "skip"; path: VaultPath; reason: SkipReason };
 export type SkipReason = "too-large" | "invalid-name" | "path-too-long" | "case-collision"
   | "reserved-name" | "outside-vault" | "hidden" | "excluded" | "unicode-collision";
-export interface Plan { ops: PlanOp[]; deleteCount: number; trackedCount: number; firstSync: boolean; }
+export interface Plan {
+  ops: PlanOp[]; deleteCount: number; trackedCount: number;
+  unionMode: boolean;
+  /** No-base pairs whose content differs (stale device rejoining): each becomes a conflict; shown as its own preview group. */
+  differsNoHistory: number;
+}
 export interface SyncReport {
+  trigger: Trigger;
   startedAt: number; finishedAt: number; result: "ok" | "partial" | "failed" | "cancelled";
   counts: Record<PlanOp["kind"], number>;
+  touched: { kind: PlanOp["kind"]; path: VaultPath; to?: VaultPath }[]; // every path the run changed (T-R1)
   conflicts: { path: VaultPath; copyPath: VaultPath }[];
   skipped: { path: VaultPath; reason: SkipReason }[];
   errors: { path: VaultPath | null; code: string }[];
 }
+
+// ---------- engine & logging ----------
+export type Trigger = "startup" | "interval" | "command" | "ribbon" | "preview" | "rerun";
+export interface SyncHooks {
+  /** Show the plan; resolve true to run. Never called for unattended triggers except on first sync (see §5.4). */
+  confirmPlan(plan: Plan): Promise<boolean>;
+  /** Resolve true to delete, false to skip deletes this run. */
+  confirmDeletes(ops: PlanOp[]): Promise<boolean>;
+  onStatus(s: EngineStatus): void;
+}
+export type EngineStatus =
+  | { state: "idle"; lastSyncAt: number | null } | { state: "syncing"; phase: string }
+  | { state: "waiting-for-user" } | { state: "error"; code: string } | { state: "sign-in-required" };
+export interface SyncEngine { requestSync(trigger: Trigger): Promise<SyncReport>; readonly status: EngineStatus; }
+export type OpKind = "auth.refresh" | "auth.signin" | "graph.request" | "sync.run" | "sync.pull" | "sync.scan"
+  | "sync.plan" | "sync.exec" | `op.${PlanOp["kind"]}` | "upload.fragment" | "upload.resume" | "retry.backoff" | "state.save";
 ```
 
 The report holds file paths because the user needs to see them. Paths are never written to logs (§9). The report lives only in local plugin state.
@@ -187,7 +251,7 @@ The report holds file paths because the user needs to see them. Paths are never 
 ## 3. Lifecycle and triggers
 - **`onload`.** Load settings, construct modules, add commands (`sync-now`, `sync-preview`, `sign-in`, `sign-out`, `run-diagnostics`), add the ribbon icon, and add the status bar item when `Platform.isDesktopApp` [O-API-13]. Register the protocol handler `mdvaultsync-auth` [O-API-3].
 - **`workspace.onLayoutReady`.** Register vault events (create, modify, delete, rename) [O-API-12]. Schedule the startup sync 5 seconds later. Start the interval timer with `registerInterval(window.setInterval(...))`, set to `settings.intervalMinutes` (default 5, minimum 1, 0 means off).
-- **Vault events** append to `pendingLocal` and save. An *echo filter* drops events for paths the executor itself is writing. The filter is a `Set<VaultPath>` of in-flight writes, cleared after each write completes plus one tick.
+- **Vault events** append to `pendingLocal` and save. The executor registers each write it is about to make as an *expected write* `(path, hash of the bytes it writes)` in a `Map<VaultPath, string>`. Events are never dropped. Each event is recorded as `dirty`, and the scan resolves it: if the file's current hash equals the expected hash, it was our own echo and is a no-op. Otherwise it is a real user edit and syncs normally. This means a user edit made during our write can't be swallowed. Expected entries clear when the next scan consumes them.
 - **Triggers** (startup, timer, command, ribbon) all call `engine.requestSync(trigger)`.
 - **Mobile backgrounding.** iOS may suspend the app mid-sync. The journal (§6) makes this safe, and the next trigger resumes.
 
@@ -206,11 +270,11 @@ Each option is compared on the iPad (Obsidian for iOS) and on Ubuntu (Obsidian .
 | | Auth code + PKCE, `obsidian://` redirect | Device code flow |
 |---|---|---|
 | **iPad experience** | Tap Sign in. Safari opens, sign in, then "Open in Obsidian?" and tap Open. Back in the app, signed in. | Obsidian shows a code. Switch to Safari, open the verification URL, type the code, sign in, switch back, wait for polling. There's no one-tap deep link because `verification_uri_complete` isn't supported [I-DC-1]. |
-| **Ubuntu experience** | Click Sign in. The default browser opens, sign in, then the browser asks to open the `obsidian://` link, and Obsidian comes forward. Needs the scheme handler, which the .deb install registers. AppImage often doesn't, which is why the paste fallback exists. | Same code-typing flow in the browser. It works without any scheme handler. |
+| **Ubuntu experience** | Click Sign in. The default browser opens, sign in, then the browser asks to open the `obsidian://` link, and Obsidian comes forward. This needs an `x-scheme-handler/obsidian` handler. That the .deb registers one is INFERRED from its desktop entry [O-DEB-1], and M2 checks it with `xdg-mime query default x-scheme-handler/obsidian`. The paste fallback covers its absence. | Same code-typing flow in the browser. It works without any scheme handler. |
 | **Registration** | "Mobile and desktop applications" platform with `obsidian://mdvaultsync-auth` (no query string [I-RU-2]). "Allow public client flows" stays off. | Requires "Allow public client flows = Yes" [I-DC-1]. |
 | **Refresh token lifetime** | About 90 days (not SPA) [I-TL-2] | About 90 days |
 | **Interception or phishing** | A stolen code can't be redeemed without the PKCE verifier [I-AC-2]. Login CSRF is blocked by single-use `state` (threat-model S1). The system browser shows the real Microsoft URL [I-BR-1]. | No redirect to intercept, but it is a known phishing pattern: an attacker starts a flow with our public client ID and persuades the user to enter the code on the real Microsoft page. Microsoft says it "recommends blocking device code flow wherever possible" [I-DC-1]. |
-| **Failure modes** | No scheme handler; Safari prompt dismissed; trailing-slash callback variant [I-RU-3]; `Origin` header on token redemption [I-AC-7]. All are tested in M2 and covered by the paste fallback and lenient callback parsing. | 15-minute expiry; polling while iOS suspends the app (sign-in may stall if the user stays in Safari too long); possible future Microsoft restrictions. |
+| **Failure modes** | No scheme handler; Safari prompt dismissed; trailing-slash callback variant [I-RU-3]; `Origin` header on token redemption [I-AC-7]. All are tested in M2 and covered by the paste fallback and lenient callback parsing. | 15-minute expiry [I-DC-2]; polling while iOS suspends the app (sign-in may stall if the user stays in Safari too long); possible future Microsoft restrictions. |
 | **Code required** | PKCE, protocol handler, callback validation, token exchange. | Polling loop (`authorization_pending`, `slow_down`, `expired_token`), code display UI. |
 
 **Recommendation: auth code + PKCE with the `obsidian://` redirect on both devices.** Owner accepted this as D-4.
@@ -241,14 +305,17 @@ Each option is compared on the iPad (Obsidian for iOS) and on Ubuntu (Obsidian .
 - `invalid_grant` or `interaction_required` clears the token, sets the account state to "Sign-in required", and raises a notice. Sync stops; local state is kept.
 
 **TokenStore.**
-- `set` calls `app.secretStorage.setSecret("mdvaultsync-refresh-token", rt)` [O-API-4]. If that throws, it writes `data.json.fallbackRefreshToken` and sets `secure = false`. The settings tab then shows a standing warning (D-5).
+- `set` calls `app.secretStorage.setSecret("mdvaultsync-refresh-token", rt)` [O-API-4].
+  - If that throws, it writes `data.json.fallbackRefreshToken` with `await saveData` and sets `backend = "plugin-data"`. The settings tab then shows a standing warning (D-5).
+  - SecretStorage gives no signal when the OS can't encrypt. For example, Linux with no keyring may store the secret in plaintext without throwing [O-API-6]. So even with `backend = "secret-storage"`, settings shows a neutral note: "Stored in Obsidian secret storage. Encryption depends on your OS keyring."
+  - M2 records what actually happens on Ubuntu with and without an unlocked keyring.
 - `clear` calls `setSecret(id, "")` (there is no delete method [O-API-4]) and removes the fallback field.
 - `get` treats `""` as null.
 
 **Sign-out:**
 1. `TokenStore.clear()`.
 2. Drop the access token.
-3. `StateStore.clear()`, which removes the delta link, remote index, file records, pending operations and upload sessions.
+3. `StateStore.clear()`, which removes the delta link, remote index, file records, pending operations, pending conflicts and upload sessions. M2 builds sign-out against a stub `StateStore`; M6 wires in the real one and tests it.
 4. Show a notice that local files are untouched, with a link to `https://account.microsoft.com/privacy/app-access`, where the user can remove the app's access [C-MSA-1]. M2 verifies the link.
 
 There is no revocation endpoint for public clients [I-TL-4].
@@ -263,44 +330,52 @@ stateDiagram-v2
   Idle --> Preflight: requestSync(trigger)
   Preflight --> SignInRequired: no token / invalid_grant
   SignInRequired --> Idle
-  Preflight --> Pull: token OK, appRoot resolved
-  Preflight --> FirstSync: no state OR appRoot id changed OR resync
-  FirstSync --> Pull: mode = union (no deletes)
+  Preflight --> SetUnion: no state OR appRoot id changed
+  SetUnion --> ResumeUploads: unionPending = true (saved)
+  Preflight --> ResumeUploads: token OK, appRoot resolved
+  ResumeUploads --> Pull: persisted sessions finished or cancelled
+  Pull --> Resync: 410 / resync* code
+  Resync --> Pull: unionPending = true, deltaLink = null (saved)
   Pull --> Scan: remote index + deltaLink saved
-  Pull --> Backoff: 429/503/5xx
+  Pull --> Backoff: 429/503/5xx/network
   Backoff --> Pull: after Retry-After / backoff
-  Backoff --> Failed: retries exhausted
+  Backoff --> Failed: budget exhausted
   Scan --> Plan: local entries + hashes
-  Plan --> Preview: dry-run setting OR first sync
+  Plan --> Preview: previewEveryRun OR unionPending OR preview command
   Plan --> GuardCheck: otherwise
   Preview --> GuardCheck: user confirms
-  Preview --> Cancelled: user cancels
+  Preview --> Cancelled: user cancels / no answer before timeout
   GuardCheck --> ConfirmDeletes: deletes > threshold
-  ConfirmDeletes --> ExecDownloads: confirmed
-  ConfirmDeletes --> ExecDownloads: declined (delete ops dropped)
-  GuardCheck --> ExecDownloads: under threshold
-  ExecDownloads --> ExecUploads: pull side applied
-  ExecUploads --> Report
-  ExecDownloads --> Backoff
-  ExecUploads --> Backoff
+  ConfirmDeletes --> ExecPull: confirmed
+  ConfirmDeletes --> ExecPull: declined / timeout (deletes dropped, remembered)
+  GuardCheck --> ExecPull: under threshold
+  ExecPull --> ExecPush: pull side applied
+  ExecPush --> Report
+  ExecPull --> Backoff
+  ExecPush --> Backoff
+  Scan --> Failed: vault read error
+  Plan --> Failed: invalid state
+  ExecPull --> Failed: non-retryable (401 after refresh, 403, 507)
+  ExecPush --> Failed: non-retryable (401 after refresh, 403, 507)
   Report --> Idle: save report, update status
   Cancelled --> Idle
-  Failed --> Idle: notice with error code
+  Failed --> Idle: save partial report, notice with error code
   Idle --> Preflight: rerunRequested
 ```
 
 ### 5.1 Preflight
 - Get an access token.
 - Resolve the approot with `getAppRoot()` [G-AF-1].
-  - If `state.appRootId` is set and different, the folder was deleted and recreated, or replaced [G-AF-2]. Set `firstSync = true` and reset `deltaLink`, `remoteIndex`, `files` and `folders`. Local files are kept.
-  - Compute the remote path prefix length from the approot's `parentReference.path` + `name`. This feeds the 400-character budget [G-NM-4].
-- Resume any `uploadSessions` (§6.3).
+  - If there's no state, or `state.appRootId` is set and different (the folder was deleted and recreated, or replaced [G-AF-2]), set and save `unionPending = true`.
+  - On an approot change, also reset `deltaLink`, `remoteIndex`, `files`, `folders` and `uploadSessions`. Local files are kept.
+  - `AppRoot.pathPrefix` is `parentReference.path` with the leading `/drive/root:` removed, percent-decoded, plus `/` + `name`; for example `/Apps/MDVaultSync`. Its length, without the leading `/`, counts toward the 400-character budget [G-NM-4].
+- Resume any persisted `uploadSessions` (§6.3), and finish any `pendingConflicts` (§5.5) before pulling.
 
 ### 5.2 Pull (remote change detection)
 - Call `delta(state.deltaLink)`, starting with null on first sync. Collect pages until `deltaLink` [G-DL-2]. Validate every item (§8). Keep only the last occurrence per ID [G-DL-6].
 - Apply to `remoteIndex` in memory: upsert live items and delete those with `deleted`.
 - Save `remoteIndex` and the new `deltaLink` together in one `StateStore.save`. The delta token is therefore never ahead of the index. Applying changes to the vault happens later, driven by the diff between `remoteIndex` and `files`, so a crash after this save loses nothing.
-- **410 or a `resync*` code** [G-DL-4]: drop `deltaLink` and `remoteIndex`, re-enumerate from null, and set `mode = union` for this run so nothing is deleted on either side.
+- **410 or a `resync*` code** [G-DL-4]: set `unionPending = true`, `deltaLink = null`, and clear `remoteIndex`. Save, then re-enumerate from null. `files` (the bases) is kept, so files changed on only one side still sync normally. Union mode only stops deletes (§5.4).
 - **Delta unsupported on approot** (M3 probe result, [G-DL-1]): `RemotePort.delta` is implemented as a breadth-first `listChildren` walk returning a synthetic page. Deletes are inferred by absence. This costs more, so the interval floor rises to 15 minutes.
 - **Rebuild remote paths** from `parentId` chains rooted at the approot ID [G-DL-6], [G-DL-7]. Drop items whose chain doesn't reach the approot.
 
@@ -315,8 +390,10 @@ For every key in the union of {local paths, `files` records, remote items}:
 - **B** = base (the `FileRecord`).
 - **L** = the local entry and its hash.
 - **R** = the remote item (path and hash from `remoteIndex`).
-- **Changed L** means `L.hash != B.localHash`.
-- **Changed R** means `R.cTag != B.cTag`, or `R.quickXorHash != B.remoteHash` when cTag is missing [G-TAG-1].
+- **Changed L** means `L.hash != B.localHash` (plaintext versus plaintext).
+- **Changed R** means `R.quickXorHash != B.remoteHash` (stored bytes versus stored bytes). If either hash is null, use `R.cTag != B.cTag` [G-TAG-1]. If both are unavailable, use `R.size != B.size || R.eTag != B.eTag`, then confirm by downloading and comparing.
+- **Content equal across sides** (used for `adopt`) compares *stored* bytes: `RemoteContent.storedHashOf(L) == R.quickXorHash`. With the identity transform that equals the plaintext hash. With a future encrypting transform the planner instead compares `L.hash` against the plaintext hash recorded in `B` or in remote metadata. Either way the comparison lives in `RemoteContent`, not the planner, so the engine doesn't change (D-10).
+- **Null remote hash** (for example a zero-byte file, or a hash missing from delta, [G-DL-8]): treat the item as having unknown content. Use cTag/size for "changed", and `getItem` before downloading. If the hash is still null, verify the download by size only and record `remoteHash = quickXorHash(bytes)`.
 
 | B | L | R | Action |
 |---|---|---|---|
@@ -337,12 +414,15 @@ For every key in the union of {local paths, `files` records, remote items}:
 - **Remote renames.** The item's ID is in `files` (by `remoteId`) but its rebuilt path differs from `B.path`.
   - If L is unchanged at the old path: `local-move`, then re-check content as above.
   - If L also moved, by a different rename: the remote path wins, and the local file moves to the remote path.
+  - If L moved to the *same* target (both renamed alike, or a `remote-move` re-run after a crash): update `B.path` only, with no op.
+  - Paths are compared by `caseKey` (§7.5). When the remote and local names differ only by case, they are the same file. The record takes the remote spelling, and no `local-move` is emitted. A case-only rename can only travel from local to remote (`remote-move`), never back, so the two sides can't loop.
 - **Local renames.** A `renamed` hint from vault events, or at startup an unmatched local-new path whose hash and size equal those of an unmatched local-deleted record (unique match only).
   - If R is unchanged: `remote-move` (PATCH by ID, If-Match) [G-MV-1].
   - If R was renamed too: the remote path wins.
   - If R's content also changed: `local-move` to the remote path, then the content rules apply.
 - **Folders.** Remote folder renames show up as one item [G-DL-6], and descendants are re-pathed by the rebuild in §5.2. A local folder rename produces one rename event per file plus one for the folder. The planner collapses these into one `remote-move` of the folder when every child was renamed under the same prefix.
 - **Empty folders** are created on the other side when they appear. They are removed when empty after the deletes run [G-DL-5].
+- **Remote folder deletes.** Graph's `DELETE` on a folder is recursive. A remote folder delete is planned only when `remoteIndex` shows the folder has **zero** children. That includes skipped, excluded or too-large children this device doesn't sync. It is sent with If-Match on the folder's eTag, and a 412 cancels it. Local folders are removed only if empty (`removeEmptyFolder`).
 
 **Filters**, applied to every candidate path before planning (D-6, §8):
 - the exclusion rules (configDir, hidden segments, user patterns);
@@ -351,31 +431,41 @@ For every key in the union of {local paths, `files` records, remote items}:
 
 Rejected paths become `skip` ops with a reason and appear in the report. Skipped files are never deleted on the other side because of a skip.
 
-**First sync** (no `firstSyncCompleted`, or approot changed, or resync) runs in union mode. Every row that would produce `remote-delete` or `local-trash` produces a restore instead. Every L/R pair at the same path with different content becomes a `conflict`. The plan is always shown in the preview modal first, and the user can cancel.
+**Union mode** runs while `unionPending` is true: first sync, approot change, resync, or a malformed state file. It changes only the delete rows. Every row that would produce `remote-delete` or `local-trash` produces a restore instead. Rows with a base (B ✓) otherwise follow the normal table. A resync therefore produces no extra conflicts.
+- Rows with no base and differing content (`– ✓ ✓`, hashes differ) become conflicts, as in normal mode. This happens when a *stale device rejoins* after sign-out, a state reset or an approot change. Every file that differs then gets one conflict copy. That is the only way to keep both versions without history.
+- The preview shows these in their own group, "Differs on both sides, no sync history (N)", so the outcome is obvious before the user confirms (`Plan.differsNoHistory`).
+- The preview is always shown while `unionPending` is true, even for unattended triggers, and the user can cancel.
 
 **Mass-delete guard.**
 - `deleteCount` = number of `remote-delete` ops + number of `local-trash` ops.
 - If `deleteCount > max(1, ceil(trackedCount × threshold))`, where `threshold` defaults to 25 % (setting, 1–100 %), open `ConfirmDeletesModal` listing every path.
-- If the user declines, the sync continues *without* the delete ops. Their records stay as they are, so the next run asks again.
+- If the user declines, the sync continues *without* the delete ops. Those paths are recorded in `declinedDeletes` with their current local hash or remote eTag, and they aren't proposed for deletion again until either side changes. The next interval run doesn't nag; the "Sync now" command re-offers them.
+
+**Unattended triggers and modals.**
+- Startup and interval runs that need a modal (preview while `unionPending`, or the guard) open it once and wait up to **10 minutes**.
+- No answer counts as Cancel for a preview, or "skip deletes" for the guard. The lock is released, and the status shows "Waiting for you: open MDVaultSync to review".
+- While a modal is open for a run, other triggers only set `rerunRequested`.
 
 ### 5.5 Execute
 Order: every pull-side op first (`local-move`, `download`, `local-trash`, conflict handling), then every push-side op (`remote-move`, `upload-*`, `remote-delete`) [SPEC R-ORDER].
 - Within a side, folder creation runs first (sorted shallowest first), then file ops with concurrency 4, then folder deletes (deepest first).
-- After *each* op succeeds, the executor updates `files` and `folders` and saves the state. Saves are batched: at most once per second plus once at the end, so iPad writes stay low. A crash repeats at most one second of already-idempotent work.
+- After each op succeeds, the executor updates `files` and `folders` in memory. State is saved at most once per second, once at the end, and immediately before any destructive op (overwrite, trash, delete, conflict). This keeps iPad writes low. A crash repeats at most one second of idempotent work: re-running a completed download or upload finds equal hashes and adopts.
+
+**Pre-write check.** This runs before every op that overwrites, moves or trashes a *local* file: `download` onto an existing file, `local-trash`, `local-move`, and the conflict procedure.
+1. Re-stat the path. If size or mtime differ from what Scan saw, re-hash.
+2. If the content changed since Scan (the user typed during the sync), don't run the op. Turn it into a `conflict` for downloads, or a skip-and-resync for trash and move. The next run re-plans with the new content.
+- This closes the gap between Scan and Execute for local edits. The remote side is covered by If-Match.
 
 **download:**
-1. `getItem` (fresh downloadUrl [G-DLD-2]), then `download`.
-2. Check `quickXorHash(bytes) == R.quickXorHash`. On a mismatch, discard and record error `hash-mismatch`.
-3. `transform.decode`.
-4. Containment check (§8).
-5. `vault.writeAtomic`.
-6. Record B = {R.eTag, R.cTag, size, mtime from the fresh stat, localHash, remoteHash}.
+1. `getItem` (fresh downloadUrl [G-DLD-2]). Then `RemoteContent.fetch`: download, check `quickXorHash(bytes) == R.quickXorHash` (null hash: see §5.4), and decode. On a mismatch, discard and record error `hash-mismatch`.
+2. Containment check (§8), then the pre-write check.
+3. Register the expected write `(path, localHash)` (§3), then `vault.writeAtomic`.
+4. Record B = {R.eTag, R.cTag, size and mtime from a stat taken right after the write, localHash, remoteHash}. If that stat's hash would differ from `localHash` (the user edited in the meantime), keep B's mtime at 0 so the next scan re-hashes. The edit is then never masked.
 
 **upload-new:**
-1. Read, hash, `transform.encode`.
-2. If 10 MiB or less, `uploadNew` (`PUT …:/{name}:/content?@microsoft.graph.conflictBehavior=fail`) [G-UP-1], [G-UP-2]. Otherwise an upload session (§6.3).
-3. 409 `nameAlreadyExists` means a remote item appeared since the pull. Re-pull that path with `getItem` by path, then handle it as a conflict.
-4. Check that the returned hash equals the local stored-bytes hash.
+1. Read, hash, then `RemoteContent.store` with `{kind:"new"}`. It encodes the bytes. If they are 10 MiB or less it uses `PUT …:/{name}:/content?@microsoft.graph.conflictBehavior=fail` [G-UP-1], [G-UP-2]; otherwise an upload session (§6.3).
+2. 409 `nameAlreadyExists` means a remote item appeared at that name since the pull. Call `getChildByName(parentId, name)`. If its hash equals `storedHashOf(local)`, `adopt`. Otherwise run the conflict procedure (R-CONF-3).
+3. Check that the returned hash equals the local stored-bytes hash.
 
 **upload-replace:**
 1. Read, hash, encode.
@@ -391,11 +481,11 @@ Order: every pull-side op first (`local-move`, `download`, `local-trash`, confli
 3. Otherwise apply the conflict procedure.
 
 **Conflict procedure** (D-9), which must lose zero data:
-1. Compute `copyPath = <dir>/<stem> (conflict <deviceName> <YYYY-MM-DD HHmmss>)<.ext>`. The timestamp is local time, and the device name is sanitized with §7 rules. If `copyPath` exists, append ` 2`, ` 3` and so on.
-2. Write the *local* bytes to `copyPath` with `writeAtomic`. Do this before anything touches the original.
-3. Download remote bytes to the original path (`download` op).
-4. Queue `upload-new` for `copyPath`, so the conflict copy reaches every device.
-5. Add to `report.conflicts`.
+1. If `pendingConflicts[path]` already exists (a crash happened mid-procedure), reuse its `copyPath`. If the file there has `localHash`, skip to step 4.
+2. Otherwise compute `copyPath = <dir>/<stem> (conflict <deviceName> <YYYY-MM-DD HHmmss>)<.ext>`. The timestamp is local time, and the device name is sanitized with §7 rules. If `copyPath` exists, append ` 2`, ` 3` and so on.
+3. Save `pendingConflicts[path] = {path, copyPath, localHash, remoteId}` (immediate state save). Then write the *local* bytes to `copyPath` with `writeAtomic`, before anything touches the original.
+4. Download remote bytes to the original path (the `download` op, including the pre-write check; that check compares against `localHash`, which the copy now preserves).
+5. Queue `upload-new` for `copyPath`, so the conflict copy reaches every device. Add to `report.conflicts`, and delete `pendingConflicts[path]`.
 
 After the run, a notice lists every conflict path (D-9). It stays up until clicked (`new Notice(msg, 0)`).
 
@@ -409,7 +499,7 @@ After the run, a notice lists every conflict path (D-9). It stays up until click
 - Build a `SyncReport` and save it as `state.lastReport`. Update the status bar text and ribbon tooltip: "Synced 14:02", "Syncing…", "Sync error", "Sign-in required" or "Paused (confirm deletes)".
 - Raise a notice for errors and conflicts only. A successful sync with no conflicts makes no notice.
 - Clear `pendingLocal` entries that the run covered. Entries added during the run stay for the next one.
-- Set `firstSyncCompleted = true` only after a run finishes with `ok` or `partial` while in union mode.
+- After a union-mode run finishes with `ok` or `partial`, set `firstSyncCompleted = true` and `unionPending = false`, and save. A run that fails or is cancelled leaves `unionPending` set, so the next run is union mode again.
 
 ## 6. Resilience
 
@@ -433,6 +523,9 @@ After the run, a notice lists every conflict path (D-9). It stays up until click
   - Before resuming, re-hash the local file. If it changed, cancel the session (`DELETE uploadUrl`) and start over.
   - 404 or an expired session means start over.
   - 416 means that range was already received; GET the status and continue.
+- **Commit-time precondition** (replace sessions only). Graph checks `if-match` only when the session is created [G-UP-5]; fragments and the final commit carry no precondition. So before resuming, and again before sending the **final** fragment, call `getItem(id)` and compare its eTag to `UploadSessionRecord.ifMatch`.
+  - On a mismatch, another device changed the file during the upload. Cancel the session (`cancelUpload`) and run the conflict procedure.
+  - What's left is a gap of one request between that check and the commit. SPEC R-CC-1 states this limit.
 - **Finish:** 200 or 201 returns the item. Check its hash, then delete the session record.
 
 ## 7. Path rules (`core/paths.ts`)
@@ -451,8 +544,8 @@ Vault path to remote name:
    - no reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM0-9`, `LPT0-9` with or without an extension, compared case-insensitively; `.lock`; `desktop.ini`; any name containing `_vti_`);
    - segment length ≤ 255 UTF-16 units (assumed, M3 verifies [G-NM-6]).
    - Names are never rewritten to make them fit. Invalid files are skipped with a reason; renaming the user's files silently is worse.
-4. **Path length:** `appRootPrefix.length + 1 + path.length ≤ 400` [G-NM-4].
-5. **Case collisions.** Compare `path.toLocaleLowerCase("en-US")` across the union of local and remote paths. When two distinct local paths fold to the same key, which is possible on Ubuntu (ext4 is case-sensitive), the one already tracked in `files` keeps syncing. The other is skipped as `case-collision`. If neither is tracked, skip both. A remote item and a local file that differ only by case are the same file.
+4. **Path length:** `pathPrefix.length + 1 + path.length ≤ 400`, where `pathPrefix` is `AppRoot.pathPrefix` without the leading `/` (for example `Apps/MDVaultSync`, with `/drive/root:` already stripped, §5.1) [G-NM-4].
+5. **Case collisions.** Compare `caseKey(path) = path.toLocaleLowerCase("en-US")` across the union of local and remote paths. When two distinct local paths fold to the same key, which is possible on Ubuntu (ext4 is case-sensitive), the one already tracked in `files` keeps syncing. The other is skipped as `case-collision`. If neither is tracked, skip both. A remote item and a local file that differ only by case are the same file.
 
 Remote to vault (§8): the inverse rebuild, plus containment checks.
 
@@ -461,7 +554,7 @@ All Graph and token JSON passes through hand-written type guards before use. Unk
 - **Item fields:** `id` matches `/^[A-Za-z0-9!._-]{1,256}$/`; `name` is 1–255 characters with no `/`, `\` or NUL; `size` is a safe non-negative integer; `eTag` and `cTag` are strings of at most 512 characters; `quickXorHash` matches base64 of 28 characters.
 - **Response bodies:**
   - JSON responses over 32 MiB are rejected before parsing, which caps memory for a delta page.
-  - Downloads longer than `R.size` + 0 are rejected.
+  - Downloads whose byte length differs from `R.size` are rejected.
   - Items with size over the cap are skipped without downloading.
 - **Remote path to vault path:** NFC-normalize, then reject if any segment is `.`, `..` or empty, or contains `/`, `\` or NUL, or starts with `.`, or equals configDir. The path must not be absolute. The joined path must satisfy `normalizePath(joined) === joined`, and its `startsWith` check against the vault root must hold. Anything rejected is skipped as `outside-vault` or `hidden` and reported.
 - **downloadUrl / uploadUrl:** `new URL()` must succeed, the protocol must be `https:`, and the host must end with an allowlisted suffix: `.microsoft.com`, `.live.com`, `.sharepoint.com`, `.1drv.com`, `.onedrive.com` or `.livefilestore.com`. M3 refines this list from observed hosts. Otherwise refuse. This stops a tampered response from sending our bytes elsewhere.
@@ -475,7 +568,7 @@ All Graph and token JSON passes through hand-written type guards before use. Unk
 
 ## 10. UI
 - **Settings tab.** Uses `Setting` and `setHeading()` [O-GL-2]; no `innerHTML` [O-GL-3]. Sections:
-  - **Account:** signed-in status, Sign in, Sign in another way, Sign out, Client ID (required), and the token-storage warning when `secure=false`.
+  - **Account:** signed-in status, Sign in, Sign in another way, Sign out, Client ID (required), and the token-storage line (a warning when `backend = "plugin-data"`, otherwise the neutral SecretStorage note from §4).
   - **Sync:** device name (default "iPad" or "Ubuntu" from `Platform`, editable), interval in minutes, maximum file size in MiB (default 100), exclude patterns (one per line), "Preview changes before every sync" (dry run), mass-delete threshold %.
   - **Last sync report:** time, result, counts, conflicts, skipped files with reasons, error codes.
   - **Diagnostics:** "Run Graph capability probe" and "Copy log".
@@ -498,7 +591,7 @@ All Graph and token JSON passes through hand-written type guards before use. Unk
 ## 12. Persisted files
 | File | Contents | Written via |
 |---|---|---|
-| `<configDir>/plugins/mdvaultsync/data.json` | settings (+ `fallbackRefreshToken` only when SecretStorage fails) | `saveData` |
+| `<configDir>/plugins/mdvaultsync/data.json` | settings, plus `fallbackRefreshToken` only when SecretStorage throws | `saveData` |
 | `<configDir>/plugins/mdvaultsync/sync-state.json` | `SyncState` | adapter write to `sync-state.json.tmp`, then `adapter.rename` (or remove+rename if rename won't overwrite; see M6 [O-API-10]) |
 | SecretStorage `mdvaultsync-refresh-token` | refresh token | `secretStorage.setSecret` |
 
