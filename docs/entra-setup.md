@@ -56,7 +56,7 @@ Status: drafted in session 1 from Microsoft documentation. Microsoft redesigns t
 ## Step 4: Set API permissions
 1. Open **API permissions**.
 2. Remove **User.Read** if it's listed (⋯ → *Remove permission*). MDVaultSync doesn't need it, and least privilege applies.
-3. Choose **Add a permission → Microsoft Graph → Delegated permissions**. Pick **Microsoft Graph**, not the legacy *Azure Active Directory Graph*, which was retired Aug 31 2025. and select:
+3. Choose **Add a permission → Microsoft Graph → Delegated permissions**. Pick **Microsoft Graph**, not the legacy *Azure Active Directory Graph*, which was retired Aug 31 2025. Then select:
    - `Files.ReadWrite.AppFolder` ("Have full access to the application's folder (preview)") [I-REG-5]
    - `offline_access` (under *OpenId permissions*), which allows refresh tokens.
 4. Choose **Add permissions**. Don't use "Grant admin consent". It isn't needed for personal accounts: you consent yourself at first sign-in.
