@@ -50,8 +50,9 @@ Status: drafted in session 1 from Microsoft documentation. Microsoft redesigns t
 1. Open **Authentication** (it may be labelled *Authentication (Preview)*).
 2. Under **Mobile and desktop applications**, add a second redirect URI: `https://login.microsoftonline.com/common/oauth2/nativeclient`. The portal often offers it as a checkbox [I-RU-4]. This is the redirect for "Sign in another way", where you paste the final URL. Leave the other suggested URIs **unticked**. `https://login.live.com/oauth20_desktop.srf` (LiveSDK) belongs to Microsoft's older Live SDK, and `msal<client-id>://auth` is the MSAL library's default scheme. MDVaultSync uses neither, and every extra redirect URI is one more place Microsoft will deliver an authorization code.
 3. Confirm **Allow public client flows** is **No**. MDVaultSync doesn't use device code sign-in [I-DC-1].
-4. Make sure no **Web** or **Single-page application** platform is configured. Either one would break sign-in [I-AC-5], [I-AC-6].
-5. Choose **Save**.
+4. Under **Settings**, set **Enable Live SDK support** to **No**. It provides compatibility with Microsoft's legacy Live Connect SDK (`login.live.com`), which MDVaultSync doesn't use. *Unverified:* Microsoft Learn doesn't document this toggle [I-REG-7]. If the first sign-in fails with an account-type or consent error, set it back to Yes and retry before troubleshooting further.
+5. Make sure no **Web** or **Single-page application** platform is configured. Either one would break sign-in [I-AC-5], [I-AC-6].
+6. Choose **Save**.
 
 ## Step 4: Set API permissions
 1. Open **API permissions**.
@@ -82,6 +83,7 @@ On the app registration, confirm each of these:
 | Authentication → platforms | Only **Mobile and desktop applications**; no Web, no Single-page application |
 | Mobile and desktop redirect URIs | `obsidian://mdvaultsync-auth` and `https://login.microsoftonline.com/common/oauth2/nativeclient` |
 | Authentication → Allow public client flows | No |
+| Authentication → Enable Live SDK support | No |
 | API permissions | Microsoft Graph, Delegated: `Files.ReadWrite.AppFolder`, `offline_access`, and nothing else |
 | Manifest | `"signInAudience": "PersonalMicrosoftAccount"`, `"requestedAccessTokenVersion": 2` |
 | Certificates & secrets | Empty: no client secrets, no certificates |

@@ -135,6 +135,7 @@ gh api -i repos/caseke/MDVaultSync/vulnerability-alerts | head -1        # HTTP/
   6. Sign out: settings show signed out, and a SecretStorage read returns empty.
   7. The link https://account.microsoft.com/privacy/app-access shows MDVaultSync [C-MSA-1].
   8. Tick the verification box in entra-setup.md after correcting any portal wording.
+  9. Sign-in in check 1 ran with **Enable Live SDK support = No**. Record the result in research.md I-REG-7.
 
 **Verify**
 ```bash
