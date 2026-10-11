@@ -52,7 +52,8 @@ Status: drafted in session 1 from Microsoft documentation. Microsoft redesigns t
 3. Confirm **Allow public client flows** is **No**. MDVaultSync doesn't use device code sign-in [I-DC-1].
 4. Under **Settings**, set **Enable Live SDK support** to **No**. It provides compatibility with Microsoft's legacy Live Connect SDK (`login.live.com`), which MDVaultSync doesn't use. *Unverified:* Microsoft Learn doesn't document this toggle [I-REG-7]. If the first sign-in fails with an account-type or consent error, set it back to Yes and retry before troubleshooting further.
 5. Make sure no **Web** or **Single-page application** platform is configured. Either one would break sign-in [I-AC-5], [I-AC-6].
-6. Choose **Save**.
+6. Under **App instance property lock**, choose **Configure**. Turn on **Enable property lock**, tick **All properties**, and save. New apps have the lock enabled by default since June 2026, so confirm **All properties** is ticked. MDVaultSync uses no signing or verification credentials and no token encryption key, so locking them costs nothing and blocks anyone from adding credentials to the app later [I-REG-8].
+7. Choose **Save**.
 
 ## Step 4: Set API permissions
 1. Open **API permissions**.
@@ -84,6 +85,7 @@ On the app registration, confirm each of these:
 | Mobile and desktop redirect URIs | `obsidian://mdvaultsync-auth` and `https://login.microsoftonline.com/common/oauth2/nativeclient` |
 | Authentication → Allow public client flows | No |
 | Authentication → Enable Live SDK support | No |
+| Authentication → App instance property lock | Enabled, All properties |
 | API permissions | Microsoft Graph, Delegated: `Files.ReadWrite.AppFolder`, `offline_access`, and nothing else |
 | Manifest | `"signInAudience": "PersonalMicrosoftAccount"`, `"requestedAccessTokenVersion": 2` |
 | Certificates & secrets | Empty: no client secrets, no certificates |
