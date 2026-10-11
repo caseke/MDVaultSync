@@ -41,7 +41,7 @@ Status: drafted in session 1 from Microsoft documentation. Microsoft redesigns t
 3. Go to **Entra ID → App registrations** (older layouts: *Identity → Applications → App registrations*) and choose **New registration**.
 4. Fill in the form:
    - **Name:** `MDVaultSync`. This name becomes the OneDrive folder `Apps/MDVaultSync`. Renaming the app later does *not* rename the folder [G-AF-1].
-   - **Supported account types:** **Personal Microsoft accounts only** [I-REG-4].
+   - **Supported account types:** **Personal accounts only** (older portal label: "Personal Microsoft accounts only"). Not "Any Entra ID Tenant + Personal Microsoft accounts", which would also admit work and school accounts [I-REG-4].
    - **Redirect URI:** platform **Public client/native (mobile & desktop)**, value `obsidian://mdvaultsync-auth`. Type it exactly, all lowercase, with no trailing slash and no `?` [I-RU-2].
 5. Choose **Register**.
 6. On the **Overview** page, copy the **Application (client) ID** and keep it for step 5.
@@ -61,7 +61,7 @@ Status: drafted in session 1 from Microsoft documentation. Microsoft redesigns t
    - `offline_access` (under *OpenId permissions*), which allows refresh tokens.
 4. Choose **Add permissions**. Don't use "Grant admin consent". It isn't needed for personal accounts: you consent yourself at first sign-in.
 
-Check the manifest (optional). Under **Manifest**, `signInAudience` should be `PersonalMicrosoftAccount` and `api.requestedAccessTokenVersion` should be `2`. The portal sets both when you pick "Personal Microsoft accounts only" [I-REG-4].
+Check the manifest (optional). Under **Manifest**, `signInAudience` should be `PersonalMicrosoftAccount` and `api.requestedAccessTokenVersion` should be `2`. The portal sets both when you pick "Personal accounts only" [I-REG-4].
 
 ## Step 5: Connect MDVaultSync
 1. In Obsidian, open **Settings → MDVaultSync**. Paste the client ID into **Client ID**.
@@ -78,7 +78,7 @@ Check the manifest (optional). Under **Manifest**, `signInAudience` should be `P
 On the app registration, confirm each of these:
 | Where | Expected |
 |---|---|
-| Overview → Supported account types | Personal Microsoft accounts only |
+| Overview → Supported account types | Personal Microsoft accounts only (the Overview page may word it differently; the manifest `signInAudience` = `PersonalMicrosoftAccount` is the authoritative check) |
 | Authentication → platforms | Only **Mobile and desktop applications**; no Web, no Single-page application |
 | Mobile and desktop redirect URIs | `obsidian://mdvaultsync-auth` and `https://login.microsoftonline.com/common/oauth2/nativeclient` |
 | Authentication → Allow public client flows | No |
@@ -97,4 +97,4 @@ To disconnect every device at once, remove MDVaultSync at https://account.micros
 | `AADSTS7000218` client secret required | A **Web** platform was added; remove it (step 3) |
 | `AADSTS9002326` or `9002327` cross-origin errors | A **Single-page application** platform was added; remove it |
 | `AADSTS700016` application not found | Wrong client ID, or the app is in a different directory |
-| `unauthorized_client` / account type error | Supported account types isn't "Personal Microsoft accounts only" |
+| `unauthorized_client` / account type error | Supported account types isn't "Personal accounts only" |
