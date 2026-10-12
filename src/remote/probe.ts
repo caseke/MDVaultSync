@@ -119,7 +119,8 @@ function outcomeOf(e: unknown): Outcome {
 /** Hostname only: paths and queries carry the URL's credentials (T-I3). */
 function hostOf(url: string): string {
 	try {
-		return new URL(url).hostname;
+		// Capped at the DNS maximum, so a tampered response can't flood the probe output.
+		return new URL(url.slice(0, 8192)).hostname.slice(0, 253);
 	} catch {
 		return "unparseable";
 	}

@@ -1,5 +1,6 @@
 // Type guards for untrusted remote JSON (design §8, T-T2). M2 added the token endpoint; M3 adds Graph items.
 import type { DeltaPage, RemoteItem, UploadSessionInfo, UploadStatus } from "../core/ports.ts";
+import { NAME_MAX } from "./capabilities.ts";
 import { UntrustedUrl } from "./errors.ts";
 
 /** Token responses are small; anything bigger is not a token response. */
@@ -80,8 +81,8 @@ export const TRANSFER_HOST_SUFFIXES: readonly string[] = [
 	".onedrive.com",
 	".livefilestore.com",
 ];
-/** Longest name we send (NAME_MAX in capabilities.ts until the probe proves more) [G-NM-6]. */
-export const NAME_LIMIT = 255;
+/** Longest name we send: capabilities.ts NAME_MAX, one source so they can't drift [G-NM-6]. */
+export const NAME_LIMIT = NAME_MAX;
 /**
  * Longest name we accept from Graph: the 400-character full-path limit [G-NM-4]. OneDrive accepts names over 255
  * (0.3.0 probe, Ubuntu), so a longer remote name is a real state; the planner skips it as invalid-name (M4)
