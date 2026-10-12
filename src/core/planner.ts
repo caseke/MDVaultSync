@@ -405,7 +405,8 @@ export function plan(state: SyncState, local: readonly ScannedEntry[], remoteInd
 		}
 		taken.add(keyOf(copyPath));
 		if (noHistory) differsNoHistory++;
-		emit(l.path, { kind: "conflict", path: l.path, id: r.item.id, copyPath });
+		// noHistory lets the preview list these as their own group (R-CONF-3, M7).
+		emit(l.path, noHistory ? { kind: "conflict", path: l.path, id: r.item.id, copyPath, noHistory: true } : { kind: "conflict", path: l.path, id: r.item.id, copyPath });
 	};
 
 	// ---------- 4. the three-way table (design §5.4) ----------

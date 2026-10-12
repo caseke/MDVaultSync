@@ -94,6 +94,16 @@ class RunStop extends Error {
 
 const isDelete = (op: PlanOp) => op.kind === "remote-delete" || op.kind === "local-trash";
 
+/**
+ * How strongly a trigger asked for a run, for the follow-up run (M7). A preview must never turn into a silent
+ * sync (design §10), and "Sync now" re-offers declined deletes (R-GUARD-1), so the rerun keeps the strongest.
+ */
+function triggerRank(t: Trigger): number {
+	if (t === "preview") return 2;
+	if (t === "command" || t === "ribbon") return 1;
+	return 0;
+}
+
 export class Engine implements SyncEngine {
 	/** (path → hash of bytes this plugin wrote): the echo filter M7's vault events consult (design §3). */
 	readonly expectedWrites = new Map<VaultPath, string>();
@@ -103,6 +113,9 @@ export class Engine implements SyncEngine {
 	private epoch = 0;
 	private running: Promise<SyncReport> | null = null;
 	private rerunRequested = false;
+	/** The strongest trigger asked for during the current run; the rerun uses it ("rerun" if none was user-made). */
+	private rerunTrigger: Trigger = "rerun";
+	private prefixLen: number | null = null;
 	private current: EngineStatus = { state: "idle", lastSyncAt: null };
 	private readonly early: PendingLocalOp[] = [];
 
@@ -115,6 +128,11 @@ export class Engine implements SyncEngine {
 		return this.current;
 	}
 
+	/** `AppRoot.pathPrefix` length without its leading "/", from the latest preflight; null before the first one. */
+	get pathPrefixLen(): number | null {
+		return this.prefixLen;
+	}
+
 	/**
 	 * Single-flight (R-TRIG-4, design §3): with no run going, start one; during a run, ask for one follow-up and
 	 * get the running promise. Runs never overlap, and any number of overlapping requests add at most one run.
@@ -122,6 +140,7 @@ export class Engine implements SyncEngine {
 	requestSync(trigger: Trigger): Promise<SyncReport> {
 		if (this.running) {
 			this.rerunRequested = true;
+			if (triggerRank(trigger) > triggerRank(this.rerunTrigger)) this.rerunTrigger = trigger;
 			return this.running;
 		}
 		const run = this.loop(trigger).finally(() => {
@@ -159,8 +178,9 @@ export class Engine implements SyncEngine {
 		let report: SyncReport;
 		do {
 			this.rerunRequested = false;
+			this.rerunTrigger = "rerun";
 			report = await this.runOnce(t);
-			t = "rerun";
+			t = this.rerunTrigger;
 		} while (this.rerunRequested);
 		return report;
 	}
@@ -214,6 +234,7 @@ export class Engine implements SyncEngine {
 			this.state = applyAppRoot(this.state, root.item.id);
 			const state = this.state;
 			const pathPrefixLen = root.pathPrefix.replace(/^\//, "").length;
+			this.prefixLen = pathPrefixLen;
 			await saver.flush();
 
 			this.setStatus({ state: "syncing", phase: "resume" });
@@ -317,6 +338,11 @@ export class Engine implements SyncEngine {
 		await this.finish(report, plan, completed, pendingSeen, saver, live);
 		this.logger.event("sync.run", { count: results.length, durationMs: report.finishedAt - startedAt, code: report.result });
 		if (!live()) return report;
+		try {
+			deps.hooks.onReport?.(report);
+		} catch (e) {
+			console.error(`MDVaultSync: report hook failed (${e instanceof Error ? e.name : "unknown"})`);
+		}
 		if (failure?.kind === "auth") this.setStatus({ state: "sign-in-required" });
 		else if (report.result === "failed" || report.result === "partial") this.setStatus({ state: "error", code: report.errors[0]?.code ?? "other" });
 		else this.setStatus({ state: "idle", lastSyncAt: report.result === "ok" ? report.finishedAt : this.lastSyncAt() });
@@ -466,6 +492,10 @@ export class Engine implements SyncEngine {
 			if (ev.kind === "dirty") dirty.add(ev.path.normalize("NFC"));
 			else if (ev.kind === "renamed") dirty.add(ev.to.normalize("NFC"));
 		}
+		// Echo filter (design §3, T-D8): events for our own writes were recorded as dirty like any other, and are
+		// re-hashed below; their hash equals the record's, so they plan nothing. The expected writes of earlier runs
+		// are consumed here, which keeps the map bounded by one run's writes.
+		this.expectedWrites.clear();
 		const out: ScannedEntry[] = [];
 		let hashed = 0;
 		for (const e of await this.deps.vault.list()) {

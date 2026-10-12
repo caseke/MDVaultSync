@@ -48,6 +48,8 @@ export default defineConfig(
 		languageOptions: { globals: { ...globals.node } },
 		rules: {
 			"obsidianmd/no-nodejs-modules": "off",
+			// Fixtures use the default configDir name on purpose: proving it is excluded is the test (M7).
+			"obsidianmd/hardcoded-config-path": "off",
 			"@typescript-eslint/no-floating-promises": [
 				"error",
 				{

@@ -34,3 +34,34 @@
 	user-select: text;
 	font-size: var(--font-ui-smaller);
 }
+
+/* M7: preview, delete confirmation and report lists (design §10). */
+.mdvaultsync-preview {
+	max-height: 60vh;
+	overflow: auto;
+}
+
+.mdvaultsync-group > summary {
+	cursor: pointer;
+	font-weight: var(--font-semibold);
+	margin-top: var(--size-4-2);
+}
+
+.mdvaultsync-list {
+	margin: var(--size-4-1) 0;
+	padding-inline-start: var(--size-4-6);
+	user-select: text;
+	overflow-wrap: anywhere;
+	font-size: var(--font-ui-small);
+}
+
+.mdvaultsync-report-heading {
+	font-weight: var(--font-semibold);
+}
+
+.mdvaultsync-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--size-4-2);
+	margin-top: var(--size-4-4);
+}

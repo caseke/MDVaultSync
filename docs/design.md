@@ -209,7 +209,7 @@ export type PlanOp =
   | { kind: "local-move"; from: VaultPath; to: VaultPath }
   | { kind: "remote-delete"; id: string; ifMatch: string; path: VaultPath }
   | { kind: "local-trash"; path: VaultPath }
-  | { kind: "conflict"; path: VaultPath; id: string; copyPath: VaultPath }
+  | { kind: "conflict"; path: VaultPath; id: string; copyPath: VaultPath; noHistory?: true } // noHistory: no base (preview group, M7)
   | { kind: "adopt"; path: VaultPath; id: string }          // identical content both sides: record only
   | { kind: "forget"; path: VaultPath }                     // gone on both sides: drop record
   | { kind: "skip"; path: VaultPath; reason: SkipReason };
@@ -239,6 +239,8 @@ export interface SyncHooks {
   /** Resolve true to delete, false to skip deletes this run. */
   confirmDeletes(ops: PlanOp[]): Promise<boolean>;
   onStatus(s: EngineStatus): void;
+  /** After every run, reruns included (M7: notices; requestSync returns only the last run's report). */
+  onReport?(r: SyncReport): void;
 }
 export type EngineStatus =
   | { state: "idle"; lastSyncAt: number | null } | { state: "syncing"; phase: string }
@@ -254,7 +256,9 @@ The report holds file paths because the user needs to see them. Paths are never 
 - **`onload`.** Load settings, construct modules, add commands (`sync-now`, `sync-preview`, `sign-in`, `sign-out`, `run-diagnostics`), add the ribbon icon, and add the status bar item when `Platform.isDesktopApp` [O-API-13]. Register the protocol handler `mdvaultsync-auth` [O-API-3].
 - **`workspace.onLayoutReady`.** Register vault events (create, modify, delete, rename) [O-API-12]. Schedule the startup sync 5 seconds later. Start the interval timer with `registerInterval(window.setInterval(...))`, set to `settings.intervalMinutes` (default 5, minimum 1, 0 means off).
 - **Vault events** append to `pendingLocal` and save. The executor registers each write it is about to make as an *expected write* `(path, hash of the bytes it writes)` in a `Map<VaultPath, string>`. Events are never dropped. Each event is recorded as `dirty`, and the scan resolves it: if the file's current hash equals the expected hash, it was our own echo and is a no-op. Otherwise it is a real user edit and syncs normally. This means a user edit made during our write can't be swallowed. Expected entries clear when the next scan consumes them.
-- **Triggers** (startup, timer, command, ribbon) all call `engine.requestSync(trigger)`.
+- **M7 (`platform/vault-events.ts`, `core/engine.ts`).** Events for hidden, configDir and excluded paths are ignored, because those paths are never synced; a rename into such a path is a delete, and one out of it a new file. A rename to a name OneDrive refuses stays a rename hint, so the planner can keep the record (§5.4). The scan consumes `expectedWrites` (it clears the map), so the map holds one run's writes at most; the echo itself needs no special case, because its hash equals the record's and the planner emits nothing. Echoes of our own `Vault.rename` and trash arrive as `renamed` / `deleted` hints for records that already moved or went, and plan nothing either (tested).
+- **Events are kept in memory, not saved per event (M7 deviation, owner-approved 2026-10-12).** Saving `sync-state.json`, which holds the whole remote index, on every autosave-driven `modify` is heavy on the iPad. `pendingLocal` is saved with the run's own saves. If Obsidian quits before the next sync, edits are still found by the scan's size and mtime check and deletes by absence; only a rename hint is lost, and the startup unique-hash rename match covers most of those. The worst case is a delete plus an upload: the old item goes to the recycle bin, nothing is lost, but that file's OneDrive version history restarts.
+- **Triggers** (startup, timer, command, ribbon) all call `engine.requestSync(trigger)`. Startup and interval runs are skipped while the user isn't signed in (no notice, no state file); a command or ribbon tap says why (`ui/triggers.ts`).
 - **Mobile backgrounding.** iOS may suspend the app mid-sync. The journal (§6) makes this safe, and the next trigger resumes.
 
 ### Single-flight lock
@@ -263,6 +267,8 @@ The report holds file paths because the user needs to see them. Paths are never 
 - If one is running, set `rerunRequested = true` and return the running promise. When it finishes, run exactly one more sync if `rerunRequested` is set.
 
 Overlapping triggers therefore queue at most one extra run and never run in parallel. The lock is in memory only, which is enough because each device has one Obsidian process per vault.
+
+**Rerun trigger (M7).** The follow-up run uses the strongest trigger requested during the run: `preview`, then `command` / `ribbon`, otherwise `rerun`. A "Preview sync" pressed during a run would otherwise become a run without a preview (§10 says the command never syncs unless Run is clicked), and "Sync now" would lose its re-offer of declined deletes (R-GUARD-1). Because `requestSync` resolves only with the last run's report, the engine also calls the optional `SyncHooks.onReport` after every run, so the first run's conflicts still reach a notice.
 
 ## 4. Auth (D-4, D-5)
 
@@ -635,15 +641,18 @@ All Graph and token JSON passes through hand-written type guards before use. Unk
 - **Test:** a unit test runs a full fake sync with sentinel strings in paths, contents and tokens, then asserts the serialized log contains none of them (M8).
 
 ## 10. UI
-- **Settings tab.** Uses `Setting` and `setHeading()` [O-GL-2]; no `innerHTML` [O-GL-3]. Sections:
+- **Settings tab.** Uses `Setting` and group headings [O-GL-2]; no `innerHTML` [O-GL-3]. **M7:** one list of sections and `render` rows feeds both paths: `getSettingDefinitions()` for Obsidian 1.13+ (rendered and indexed for settings search by Obsidian), and `display()` through `SettingGroup` (since 1.11.0) for 1.11.4–1.12. Refresh uses `update()` behind `requireApiVersion("1.13.0")`; after a sync only the report row re-renders, so a field being typed in keeps its focus. Invalid input isn't saved and the row says why. Sections:
   - **Account:** signed-in status, Sign in, Sign out, Client ID (required), and the token-storage line (a warning when `backend = "plugin-data"`, otherwise the neutral SecretStorage note from §4).
   - **Sync:** device name (default "iPad" or "Ubuntu" from `Platform`, editable), interval in minutes, maximum file size in MiB (default 100), exclude patterns (one per line), "Preview changes before every sync" (dry run), mass-delete threshold %.
   - **Last sync report:** time, result, counts, conflicts, skipped files with reasons, error codes.
   - **Diagnostics:** "Run Graph capability probe" and "Copy log". Since M3, the probe runs from the `run-diagnostics` command ("Run OneDrive capability probe"). The probe logic is `src/remote/probe.ts`, not `src/platform/diagnostics.ts`, because the R-ENG-4 lint rule allows RemotePort content calls only in `src/remote/**` and `remote-content.ts`, and so it can be unit tested. `platform/diagnostics.ts` only wires the command and `ui/diagnostics-modal.ts` shows the JSON. The settings button arrives with the rest of R-UI-1 in M7.
-- **Status bar** (desktop only): state and last sync time. Clicking it opens the report.
-- **Ribbon icon:** click to sync now. The tooltip shows state, which is the only always-visible state on iPad.
+- **Status bar** (desktop only, `!Platform.isMobile`): state and last sync time. Clicking it opens the report.
+- **Ribbon icon:** click to sync now. The tooltip shows state, which is the only always-visible state on iPad. Both texts come from `ui/status.ts`.
+- **Notices (M7, `ui/notices.ts`):** none for an `ok` run without conflicts or a cancelled preview; one persistent notice listing every conflict copy; one 10-second error notice with readable text for the first error code. An unattended run repeating the previous run's first error stays quiet (the status line still shows it), and auth failures from unattended runs stay quiet because the auth layer already raised its persistent notice.
+- **Names shown to the user** (preview, report, notices) pass `ui/display.ts`, which shows bidi controls, C0/C1 controls, DEL and U+2028/2029 as `\u{XXXX}` (M4 carry-in).
 - **PlanPreviewModal:** grouped lists (downloads, uploads, moves, deletes, conflicts, skips) with counts, and Run and Cancel buttons. Shown on first sync, on dry-run setting, and by the `sync-preview` command. The command never runs the sync unless Run is clicked.
 - **ConfirmDeletesModal:** lists the paths. Buttons: "Delete N files" and "Skip deletes this time".
+- Both prompt modals answer "no" when closed any other way, and close themselves after the engine's 10-minute timeout (`ui/prompt-modal.ts`). Plugin unload closes them and calls `engine.reset()`, so a running sync starts no new op.
 
 ## 11. Configuration defaults
 | Setting | Default | Range |

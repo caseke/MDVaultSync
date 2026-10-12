@@ -85,6 +85,7 @@ test("row – ✓ ✓, different content: conflict, remote keeps the name (D-9)"
 	assert.deepEqual(lines(p), [`conflict n.md => n (conflict iPad ${STAMP}).md`]);
 	assert.equal(opOf(p.ops, "conflict").id, w.remote.itemAt("n.md")?.id);
 	assert.equal(p.differsNoHistory, 1);
+	assert.equal(opOf(p.ops, "conflict").noHistory, true, "flagged for the preview's own group (R-CONF-3)");
 });
 
 test("row ✓ same same: nothing to do", async () => {
@@ -124,6 +125,7 @@ test("row ✓ changed changed, different content: conflict (not counted as no-hi
 	const p = await run(w);
 	assert.deepEqual(lines(p), [`conflict a.md => a (conflict iPad ${STAMP}).md`]);
 	assert.equal(p.differsNoHistory, 0);
+	assert.equal("noHistory" in opOf(p.ops, "conflict"), false, "a conflict with history isn't flagged");
 });
 
 test("row ✓ deleted same: remote-delete with If-Match; union mode restores instead", async () => {

@@ -1,9 +1,23 @@
-// Settings tab. M2 builds the Account section only; M7 adds the rest (design §10).
-import { PluginSettingTab, Setting } from "obsidian";
-import type { App } from "obsidian";
+// Settings tab (R-UI-1, design §10): Account, Sync, Last sync report, Diagnostics.
+//
+// One list of sections and rows feeds both rendering paths. Obsidian 1.13+ renders getSettingDefinitions()
+// itself (and indexes it for settings search); older versions (minAppVersion is 1.11.4) call display(), which
+// renders the same rows through SettingGroup (since 1.11.0). Every row is a `render` definition, because the
+// sign-in link and the validated inputs need imperative control.
+import { Notice, PluginSettingTab, requireApiVersion, SettingGroup } from "obsidian";
+import type { App, Setting, SettingDefinitionItem } from "obsidian";
 import type MDVaultSyncPlugin from "../main.ts";
 import { AuthError, type AuthStatus } from "../remote/auth.ts";
-import { isValidClientId } from "../settings.ts";
+import {
+	isValidClientId,
+	parseDeviceName,
+	parseExcludePatterns,
+	parseInterval,
+	parseMaxFileSize,
+	parseThreshold,
+	type PluginData,
+} from "../settings.ts";
+import { renderReport } from "./report-view.ts";
 
 const STATUS_TEXT: Record<AuthStatus, string> = {
 	"signed-out": "Signed out.",
@@ -11,20 +25,44 @@ const STATUS_TEXT: Record<AuthStatus, string> = {
 	"sign-in-required": "Sign-in required: access expired or was revoked.",
 };
 
+interface Row {
+	name: string;
+	desc?: string;
+	render(setting: Setting): void;
+}
+
+interface Section {
+	heading: string;
+	rows: Row[];
+}
+
+function setDescError(setting: Setting, text: string): void {
+	setting.descEl.empty();
+	setting.descEl.createSpan({ cls: "mdvaultsync-warning", text });
+}
+
 export class MDVaultSyncSettingTab extends PluginSettingTab {
 	private readonly plugin: MDVaultSyncPlugin;
 	private shown = false;
 	/** Bumped on every sign-in control render, so a slow prepare can't fill in an outdated link. */
 	private renderId = 0;
+	/** The rendered report, refreshed alone after each sync so typing in another field keeps its focus. */
+	private reportEl: HTMLElement | null = null;
 
 	constructor(app: App, plugin: MDVaultSyncPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
 
-	/** Re-render if the tab is open (called on auth status changes). */
+	/** Re-render after auth or sync changes: update() on 1.13+, the fallback renderer before. */
 	refresh(): void {
-		if (this.shown) this.display();
+		if (requireApiVersion("1.13.0")) this.update();
+		else if (this.shown) this.renderFallback();
+	}
+
+	/** After a sync: re-render only the report, if it is on screen. */
+	refreshReport(): void {
+		if (this.reportEl?.isConnected) renderReport(this.reportEl, this.plugin.lastReport, Date.now());
 	}
 
 	override hide(): void {
@@ -35,72 +73,127 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 		super.hide();
 	}
 
+	override getSettingDefinitions(): SettingDefinitionItem[] {
+		return this.sections().map((s) => ({
+			type: "group",
+			heading: s.heading,
+			items: s.rows.map((r) => ({
+				name: r.name,
+				...(r.desc !== undefined ? { desc: r.desc } : {}),
+				render: (setting: Setting) => r.render(setting),
+			})),
+		}));
+	}
+
+	/** Obsidian before 1.13 only; 1.13+ renders getSettingDefinitions() instead and never calls this. */
 	override display(): void {
+		this.renderFallback();
+	}
+
+	private renderFallback(): void {
 		this.shown = true;
-		this.renderId++;
 		const { containerEl } = this;
 		containerEl.empty();
+		for (const s of this.sections()) {
+			const group = new SettingGroup(containerEl).setHeading(s.heading);
+			for (const r of s.rows) {
+				group.addSetting((setting) => {
+					setting.setName(r.name);
+					if (r.desc !== undefined) setting.setDesc(r.desc);
+					r.render(setting);
+				});
+			}
+		}
+	}
+
+	private sections(): Section[] {
+		return [
+			{ heading: "Account", rows: this.accountRows() },
+			{ heading: "Sync", rows: this.syncRows() },
+			{ heading: "Last sync report", rows: this.reportRows() },
+			{ heading: "Diagnostics", rows: this.diagnosticsRows() },
+		];
+	}
+
+	/** Saves data.json first, then applies the change in memory (R-AUTH-9: data.json must exist before use). */
+	private async save(patch: Partial<PluginData>): Promise<void> {
+		await this.plugin.saveData({ ...this.plugin.data, ...patch });
+		Object.assign(this.plugin.data, patch);
+	}
+
+	// ---------- Account ----------
+
+	private accountRows(): Row[] {
 		const auth = this.plugin.auth;
-		const status = auth.status;
-		const signedIn = status === "signed-in";
-
-		new Setting(containerEl).setName("Account").setHeading();
-
-		new Setting(containerEl).setName("Status").setDesc(STATUS_TEXT[status]);
-
+		const signedIn = auth.status === "signed-in";
 		let signInSetting: Setting | null = null;
-		const idSetting = new Setting(containerEl).setName("Application (client) ID");
 		const idDesc = (value: string) => {
 			if (signedIn) return "Sign out to change it. The sign-in belongs to this ID.";
 			if (value === "") return "From your app registration in Microsoft Entra. See the setup guide in the README.";
 			return isValidClientId(value) ? "Saved." : "Not a valid ID. It looks like 00000000-0000-0000-0000-000000000000.";
 		};
-		idSetting.setDesc(idDesc(this.plugin.data.clientId));
-		idSetting.addText((text) =>
-			text
-				.setPlaceholder("00000000-0000-0000-0000-000000000000")
-				.setValue(this.plugin.data.clientId)
-				.setDisabled(signedIn)
-				.onChange(async (raw) => {
-					const value = raw.trim();
-					idSetting.setDesc(idDesc(value));
-					if (value === "" || isValidClientId(value)) {
-						// Saved before it is used: a sign-in must never exist without data.json on disk (R-AUTH-9).
-						await this.plugin.saveData({ ...this.plugin.data, clientId: value });
-						this.plugin.data.clientId = value;
-						// Rebuild only the sign-in control, so the text field keeps focus.
-						if (signInSetting) this.renderSignInControl(signInSetting);
-					}
-				}),
-		);
-
+		const rows: Row[] = [
+			{
+				name: "Status",
+				render: (s) => {
+					s.setDesc(STATUS_TEXT[auth.status]);
+				},
+			},
+			{
+				name: "Application (client) ID",
+				render: (s) => {
+					s.setDesc(idDesc(this.plugin.data.clientId));
+					s.addText((text) =>
+						text
+							.setPlaceholder("00000000-0000-0000-0000-000000000000")
+							.setValue(this.plugin.data.clientId)
+							.setDisabled(signedIn)
+							.onChange(async (raw) => {
+								const value = raw.trim();
+								s.setDesc(idDesc(value));
+								if (value === "" || isValidClientId(value)) {
+									await this.save({ clientId: value });
+									// Rebuild only the sign-in control, so the text field keeps focus.
+									if (signInSetting) this.renderSignInControl(signInSetting);
+								}
+							}),
+					);
+				},
+			},
+		];
 		if (signedIn) {
-			new Setting(containerEl)
-				.setName("Sign out")
-				.setDesc("Removes the stored sign-in and sync state from this device. Local files are untouched.")
-				.addButton((b) =>
-					b
-						.setButtonText("Sign out")
-						.onClick(() => void this.plugin.signOut()),
-				);
-		} else {
-			signInSetting = new Setting(containerEl)
-				.setName("Sign in")
-				.setDesc("Opens Microsoft's sign-in page in your browser, then returns to Obsidian.");
-			this.renderSignInControl(signInSetting);
-		}
-
-		const storage = new Setting(containerEl).setName("Token storage");
-		if (this.plugin.tokenStore.backend === "plugin-data") {
-			storage.descEl.createSpan({
-				cls: "mdvaultsync-warning",
-				text:
-					"Obsidian secret storage failed on this device, so the sign-in token is stored unencrypted " +
-					"in this plugin's data file. Use device encryption, and sign in again once secret storage works.",
+			rows.push({
+				name: "Sign out",
+				desc: "Removes the stored sign-in and sync state from this device. Local files are untouched.",
+				render: (s) => {
+					s.addButton((b) => b.setButtonText("Sign out").onClick(() => void this.plugin.signOut()));
+				},
 			});
 		} else {
-			storage.setDesc("Stored in Obsidian secret storage. Encryption depends on your device's keyring.");
+			rows.push({
+				name: "Sign in",
+				desc: "Opens Microsoft's sign-in page in your browser, then returns to Obsidian.",
+				render: (s) => {
+					signInSetting = s;
+					this.renderSignInControl(s);
+				},
+			});
 		}
+		rows.push({
+			name: "Token storage",
+			render: (s) => {
+				if (this.plugin.tokenStore.backend === "plugin-data") {
+					setDescError(
+						s,
+						"Obsidian secret storage failed on this device, so the sign-in token is stored unencrypted " +
+							"in this plugin's data file. Use device encryption, and sign in again once secret storage works.",
+					);
+				} else {
+					s.setDesc("Stored in Obsidian secret storage. Encryption depends on your device's keyring.");
+				}
+			},
+		});
+		return rows;
 	}
 
 	/**
@@ -148,5 +241,181 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 				if (id === this.renderId && !superseded) this.plugin.reportAuthError(e);
 			},
 		);
+	}
+
+	// ---------- Sync ----------
+
+	/** A text field that saves only valid values; an invalid one shows why in the description. */
+	private validatedText(s: Setting, desc: string, value: string, parse: (raw: string) => Partial<PluginData> | null, after?: () => void, invalid = "Not a valid value."): void {
+		s.setDesc(desc);
+		s.addText((text) =>
+			text.setValue(value).onChange(async (raw) => {
+				const patch = parse(raw);
+				if (patch === null) {
+					setDescError(s, `${invalid} ${desc}`);
+					return;
+				}
+				s.setDesc(desc);
+				await this.save(patch);
+				after?.();
+			}),
+		);
+	}
+
+	private syncRows(): Row[] {
+		const d = this.plugin.data;
+		const fallbackName = this.plugin.defaultDeviceName;
+		return [
+			{
+				name: "Device name",
+				render: (s) => {
+					const desc = `Used in conflict copy names, like "Note (conflict ${fallbackName} 2026-10-12 140200).md". Leave empty for "${fallbackName}".`;
+					s.setDesc(desc);
+					s.addText((text) =>
+						text
+							.setPlaceholder(fallbackName)
+							.setValue(d.deviceName)
+							.onChange(async (raw) => {
+								if (raw.trim() === "") {
+									s.setDesc(desc);
+									await this.save({ deviceName: "" });
+									return;
+								}
+								const name = parseDeviceName(raw);
+								if (name === null) {
+									setDescError(s, `Use 1 to 40 characters that are allowed in a file name. ${desc}`);
+									return;
+								}
+								s.setDesc(desc);
+								await this.save({ deviceName: name });
+							}),
+					);
+				},
+			},
+			{
+				name: "Sync interval",
+				render: (s) =>
+					this.validatedText(
+						s,
+						"Minutes between automatic syncs, 1 to 1440. 0 turns automatic sync off; a sync still runs at startup.",
+						String(d.intervalMinutes),
+						(raw) => {
+							const n = parseInterval(raw);
+							return n === null ? null : { intervalMinutes: n };
+						},
+						() => this.plugin.restartTimer(),
+					),
+			},
+			{
+				name: "Maximum file size",
+				render: (s) =>
+					this.validatedText(s, "In megabytes, 1 to 1024. Larger files are skipped and listed in the sync report.", String(d.maxFileSizeMiB), (raw) => {
+						const n = parseMaxFileSize(raw);
+						return n === null ? null : { maxFileSizeMiB: n };
+					}),
+			},
+			{
+				name: "Exclude patterns",
+				render: (s) => {
+					const desc = createFragment((f) => {
+						f.appendText("One pattern per line, like a .gitignore file: ");
+						f.createEl("code", { text: "*" });
+						f.appendText(", ");
+						f.createEl("code", { text: "**" });
+						f.appendText(" and ");
+						f.createEl("code", { text: "?" });
+						f.appendText(" work, a trailing ");
+						f.createEl("code", { text: "/" });
+						f.appendText(" matches folders only, and ");
+						f.createEl("code", { text: "#" });
+						f.appendText(" starts a comment. Lines starting with ");
+						f.createEl("code", { text: "!" });
+						f.appendText(
+							" and backslash escapes aren't supported; such patterns never match. Matching is case-sensitive: on the iPad, " +
+								"a pattern for a folder doesn't exclude a folder from OneDrive whose name differs only in letter case. " +
+								"Hidden files and the settings folder are always excluded. At most 200 lines.",
+						);
+					});
+					s.setDesc(desc);
+					s.addTextArea((ta) => {
+						ta.inputEl.rows = 6;
+						ta.setPlaceholder("Private/")
+							.setValue(d.excludePatterns.join("\n"))
+							.onChange(async (raw) => {
+								const lines = parseExcludePatterns(raw);
+								if (lines === null) {
+									setDescError(s, "Too many lines (at most 200) or a line over 1000 characters. Not saved.");
+									return;
+								}
+								s.setDesc(desc);
+								await this.save({ excludePatterns: lines });
+							});
+					});
+				},
+			},
+			{
+				name: "Preview changes before every sync",
+				desc: "Shows every planned change and waits for Run. The first sync on a device always shows it.",
+				render: (s) => {
+					s.addToggle((t) => t.setValue(d.previewEveryRun).onChange((v) => this.save({ previewEveryRun: v })));
+				},
+			},
+			{
+				name: "Confirm large deletes",
+				render: (s) =>
+					this.validatedText(
+						s,
+						"Ask first when a sync would delete more than this percentage of the synced files, 1 to 100.",
+						String(d.massDeleteThresholdPct),
+						(raw) => {
+							const n = parseThreshold(raw);
+							return n === null ? null : { massDeleteThresholdPct: n };
+						},
+					),
+			},
+		];
+	}
+
+	// ---------- Last sync report ----------
+
+	private reportRows(): Row[] {
+		return [
+			{
+				name: "Last sync",
+				render: (s) => {
+					this.reportEl = s.descEl.createDiv({ cls: "mdvaultsync-report" });
+					renderReport(this.reportEl, this.plugin.lastReport, Date.now());
+					s.addButton((b) => b.setButtonText("Sync now").onClick(() => void this.plugin.sync("command")));
+				},
+			},
+		];
+	}
+
+	// ---------- Diagnostics ----------
+
+	private diagnosticsRows(): Row[] {
+		return [
+			{
+				name: "OneDrive capability probe",
+				desc: "Checks what OneDrive supports for this account, using a hidden test folder in the app folder.",
+				render: (s) => {
+					s.addButton((b) => b.setButtonText("Run probe").onClick(() => void this.plugin.runDiagnostics()));
+				},
+			},
+			{
+				name: "Log",
+				desc: "Copies the recent log. It holds operation names, counts, durations and status codes, never file names, contents or tokens.",
+				render: (s) => {
+					s.addButton((b) =>
+						b.setButtonText("Copy log").onClick(() => {
+							navigator.clipboard.writeText(this.plugin.logger.serialize()).then(
+								() => new Notice("Log copied."),
+								() => new Notice("Couldn't copy the log."),
+							);
+						}),
+					);
+				},
+			},
+		];
 	}
 }

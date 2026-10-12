@@ -137,7 +137,8 @@ test("overlapping requestSync calls run one after another, with at most one reru
 	const report = await p1;
 	assert.equal(lists, 2, "the first run plus exactly one rerun");
 	assert.equal(maxActive, 1);
-	assert.equal(report.trigger, "rerun");
+	// The rerun carries the strongest trigger asked for during the run (M7): "command" outranks the rest.
+	assert.equal(report.trigger, "command");
 	await a.sync("command");
 	assert.equal(lists, 3, "a later request starts a new run");
 });
@@ -462,4 +463,157 @@ test("excluded paths are never uploaded or overwritten (R-SCOPE-2, R-SCOPE-4)", 
 	remote.remove("open.md");
 	await a.sync("interval");
 	assert.equal(a.vault.contentAt("private/secret.md"), "s", "an excluded path is never written from remote");
+});
+
+// ---------- M7: rerun trigger, echo filter, approot prefix ----------
+
+/** Makes the next vault.list() wait for `gate`, so a test can request syncs while a run is in progress. */
+function holdNextList(d: Device): { gate: ReturnType<typeof deferred<void>>; entered: Promise<void> } {
+	const gate = deferred<void>();
+	const entered = deferred<void>();
+	const list = d.vault.list.bind(d.vault);
+	let held = false;
+	d.vault.list = async () => {
+		if (!held) {
+			held = true;
+			entered.resolve();
+			await gate.promise;
+		}
+		return list();
+	};
+	return { gate, entered: entered.promise };
+}
+
+test("'Preview sync' pressed during a run makes the rerun a preview, never a silent sync (design §10)", async () => {
+	const remote = new FakeRemote();
+	let answer = true;
+	const a = new Device(remote, { confirmPlan: () => Promise.resolve(answer) });
+	a.vault.write("x.md", "x");
+	await a.sync("startup");
+	const plansBefore = a.plans.length;
+	const { gate, entered } = holdNextList(a);
+	const list = a.vault.list.bind(a.vault);
+	let calls = 0;
+	a.vault.list = () => {
+		// A new file appears after the first run listed the vault: only the rerun can see it.
+		if (++calls === 2) a.vault.write("y.md", "y");
+		return list();
+	};
+	const p1 = a.sync("interval");
+	await entered;
+	answer = false;
+	const p2 = a.sync("preview");
+	assert.equal(p2, p1);
+	gate.resolve();
+	const report = await p1;
+	assert.equal(report.trigger, "preview");
+	assert.equal(report.result, "cancelled", "the user cancelled the preview, so nothing ran");
+	assert.equal(a.plans.length, plansBefore + 1, "the rerun showed the plan");
+	assert.equal(remote.contentAt("y.md"), null, "nothing uploaded without Run");
+});
+
+test("'Sync now' pressed during an interval run re-offers declined deletes in the rerun (R-GUARD-1)", async () => {
+	const remote = new FakeRemote();
+	let answer = false;
+	const a = new Device(remote, { confirmDeletes: () => Promise.resolve(answer) });
+	for (const n of ["a", "b", "c", "d", "e"]) a.vault.write(`${n}.md`, n);
+	await a.sync("startup");
+	for (const n of ["a", "b", "c"]) a.vault.remove(`${n}.md`);
+	await a.sync("interval");
+	assert.equal(a.deletePrompts.length, 1);
+	answer = true;
+	const { gate, entered } = holdNextList(a);
+	const p = a.sync("interval");
+	await entered;
+	void a.sync("command");
+	gate.resolve();
+	const report = await p;
+	assert.equal(report.trigger, "command");
+	assert.equal(a.deletePrompts.length, 2, "the rerun re-offered the declined deletes");
+	assert.equal(report.counts["remote-delete"], 3);
+});
+
+test("echo filter: our own write's vault event plans nothing, and the scan consumes expectedWrites (T-D8)", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote);
+	await a.sync("startup");
+	remote.putFile("n.md", "from remote");
+	await a.sync("interval");
+	assert.equal(a.vault.contentAt("n.md"), "from remote");
+	assert.equal(a.engine.expectedWrites.size, 1, "the download registered an expected write");
+	// The vault event for our own write arrives (events are never dropped, design §3).
+	a.engine.noteLocalChange({ kind: "dirty", path: "n.md" as VaultPath });
+	const r = await a.sync("interval");
+	assert.ok(nothingToDo(r), "an echo is a no-op");
+	assert.equal(a.engine.expectedWrites.size, 0, "the scan consumed the entry");
+	// A real edit at the same path is never swallowed.
+	await a.sync("interval");
+	a.vault.write("n.md", "edited here");
+	a.engine.noteLocalChange({ kind: "dirty", path: "n.md" as VaultPath });
+	const r2 = await a.sync("interval");
+	assert.equal(r2.counts["upload-replace"], 1);
+	assert.equal(remote.contentAt("n.md"), "edited here");
+});
+
+test("an edit made right after our download (before the event arrives) still uploads", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote);
+	await a.sync("startup");
+	remote.putFile("n.md", "from remote");
+	await a.sync("interval");
+	a.vault.write("n.md", "typed");
+	a.engine.noteLocalChange({ kind: "dirty", path: "n.md" as VaultPath });
+	const r = await a.sync("interval");
+	assert.equal(r.counts["upload-replace"], 1);
+	assert.equal(remote.contentAt("n.md"), "typed");
+});
+
+test("pathPrefixLen is the approot path prefix length without its leading slash, once preflight ran", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote);
+	assert.equal(a.engine.pathPrefixLen, null);
+	await a.sync("startup");
+	assert.equal(a.engine.pathPrefixLen, "Apps/MDVaultSync".length);
+});
+
+test("onReport sees every run's report, the first run's conflicts included when a rerun follows", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote);
+	a.vault.write("n.md", "base");
+	await a.sync("startup");
+	a.vault.write("n.md", "local edit");
+	a.engine.noteLocalChange({ kind: "dirty", path: "n.md" as VaultPath });
+	remote.putFile("n.md", "remote edit");
+	const before = a.reports.length;
+	const { gate, entered } = holdNextList(a);
+	const p = a.sync("interval");
+	await entered;
+	void a.sync("interval");
+	gate.resolve();
+	const last = await p;
+	const runs = a.reports.slice(before);
+	assert.equal(runs.length, 2, "the run and its rerun");
+	assert.equal(runs[0]?.conflicts.length, 1, "the first run's conflict reaches the hook");
+	assert.equal(last, runs[1], "requestSync resolves with the last run's report");
+	assert.equal(last.conflicts.length, 0);
+});
+
+test("echoes of our own local move and trash (renamed / deleted events) plan nothing (T-D8)", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote);
+	a.vault.write("old.md", "o");
+	a.vault.write("gone.md", "g");
+	await a.sync("startup");
+	remote.rename("old.md", "new.md");
+	remote.remove("gone.md");
+	const r1 = await a.sync("interval");
+	assert.equal(r1.counts["local-move"], 1);
+	assert.equal(r1.counts["local-trash"], 1);
+	// The vault events for those two writes arrive after the run.
+	a.engine.noteLocalChange({ kind: "renamed", from: "old.md" as VaultPath, to: "new.md" as VaultPath });
+	a.engine.noteLocalChange({ kind: "deleted", path: "gone.md" as VaultPath });
+	const r2 = await a.sync("interval");
+	assert.ok(nothingToDo(r2), JSON.stringify(r2.counts));
+	assert.equal(remote.contentAt("new.md"), "o");
+	assert.equal(remote.contentAt("gone.md"), null);
 });

@@ -70,6 +70,7 @@ export class Device {
 	readonly statuses: EngineStatus[] = [];
 	readonly plans: Plan[] = [];
 	readonly deletePrompts: PlanOp[][] = [];
+	readonly reports: SyncReport[] = [];
 	engine!: Engine;
 	private readonly shared: FakeRemote;
 	private readonly opts: DeviceOptions;
@@ -113,6 +114,7 @@ export class Device {
 					return o.confirmDeletes ? o.confirmDeletes(ops) : Promise.resolve(true);
 				},
 				onStatus: (s) => this.statuses.push(s),
+				onReport: (r) => this.reports.push(r),
 			},
 			clock: this.clock,
 			classify: classifyError,
