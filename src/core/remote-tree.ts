@@ -117,7 +117,8 @@ export function buildRemoteTree(index: Readonly<Record<string, RemoteItem>>, app
 		let parentId = it.parentId;
 		while (parentId !== null && !visited.has(parentId)) {
 			visited.add(parentId);
-			const parent = index[parentId];
+			// Own keys only: an id like "constructor" passes ID_RE and must not find Object.prototype's.
+			const parent = Object.prototype.hasOwnProperty.call(index, parentId) ? index[parentId] : undefined;
 			if (!parent || parentId === appRootId) return false;
 			if (parent.deleted) return true;
 			parentId = parent.parentId;

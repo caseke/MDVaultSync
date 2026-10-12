@@ -54,7 +54,8 @@ function genCase(rnd: () => number): Case {
 		const hasBase = rnd() < 0.6;
 		const b = pick(CONTENTS);
 		if (hasBase) c.base.set(p, b);
-		if (rnd() < 0.75) c.local.set(p, hasBase && rnd() < 0.5 ? b : pick(CONTENTS));
+		// Some local edits get bytes no other side has, so "unique local bytes" checks have something to find.
+		if (rnd() < 0.75) c.local.set(p, hasBase && rnd() < 0.5 ? b : rnd() < 0.3 ? `L${Math.floor(rnd() * 1e9)}` : pick(CONTENTS));
 		if (rnd() < 0.75) {
 			const content = hasBase && rnd() < 0.5 ? b : pick(CONTENTS);
 			const sameItem = hasBase && rnd() < 0.9;
