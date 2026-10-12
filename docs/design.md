@@ -548,18 +548,21 @@ Vault path to remote name:
    - If two local paths become the same after NFC, skip both as `unicode-collision`. Example: Linux files `é` (precomposed) and `é` (decomposed).
 2. **Exclude.**
    - Any segment beginning with `.`. This covers `.obsidian`, `.trash`, `.git` and our own temp files.
-   - The first segment equal to `app.vault.configDir`, which may be renamed and not start with a dot.
+   - The first segment equal to `app.vault.configDir`, which may be renamed and not start with a dot. It is compared case-insensitively (M4, `isConfigDirName`): the iPad's file system is case-insensitive, so `Config/` would land inside a configDir named `config`. Both `caseKey` and an upper-then-lower fold are checked, as well as lower-upper-lower (for U+1E9E "ẞ" → "ss"), so a name like `ſettings` (U+017F) can't slip past a configDir named `settings` (M4 security review).
    - User exclude patterns: gitignore-style globs (`*`, `**`, `?`), matched case-sensitively against the vault path. This is our own matcher of about 60 lines with tests, not a dependency.
+   - **M4 syntax (`core/exclude.ts`).** A pattern with no `/` except a trailing one matches a name at any depth; otherwise it is anchored to the vault root (a leading `/` is dropped). A trailing `/` matches folders only. A pattern that matches a folder excludes everything under it. `**` matches zero or more folders, but a trailing `/**` needs at least one segment, so it never matches the folder itself. Blank lines and `#` comments are ignored. `!` negation is not supported (those lines are ignored), and `[` is literal. Patterns are NFC-normalized. The matcher builds no RegExp from user input (a greedy wildcard matcher plus dynamic programming over segments), so a pattern can't cause catastrophic backtracking.
 3. **Validate each segment** [G-NM-1] … [G-NM-3]:
    - no `" * : < > ? \ |`, and no control characters U+0000–U+001F;
    - no leading or trailing space;
+   - no U+00A0 or U+202F (M4 security review). Obsidian's `normalizePath` is believed to map them to a space; that isn't documented in `obsidian.d.ts`, so names containing them are skipped on both sides instead of being mapped. Otherwise two remote names could share one local file;
    - folders must not end in `.`;
    - no leading `~` (OneDrive personal also rejects `~$`);
    - no reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM0-9`, `LPT0-9` with or without an extension, compared case-insensitively; `.lock`; `desktop.ini`; any name containing `_vti_`);
-   - segment length ≤ 255 UTF-16 units (assumed, M3 verifies [G-NM-6]).
+   - segment length ≤ 255 UTF-16 units [G-NM-6]. `core/paths.ts` keeps its own `NAME_MAX`, because core can't import `src/remote`; a test asserts it equals `capabilities.ts` `NAME_MAX`.
    - Names are never rewritten to make them fit. Invalid files are skipped with a reason; renaming the user's files silently is worse.
 4. **Path length:** `pathPrefix.length + 1 + path.length ≤ 400`, where `pathPrefix` is `AppRoot.pathPrefix` without the leading `/` (for example `Apps/MDVaultSync`, with `/drive/root:` already stripped, §5.1) [G-NM-4].
 5. **Case collisions.** Compare `caseKey(path) = path.toLocaleLowerCase("en-US")` across the union of local and remote paths. When two distinct local paths fold to the same key, which is possible on Ubuntu (ext4 is case-sensitive), the one already tracked in `files` keeps syncing. The other is skipped as `case-collision`. If neither is tracked, skip both. A remote item and a local file that differ only by case are the same file.
+   - **Folders (M4).** `findCollisions` also compares folders, including folders implied by file paths. When a folder loses, every path under it is skipped with the same reason, because OneDrive would merge `Notes/` and `notes/` into one folder. The same applies to folders equal after NFC.
 
 Remote to vault (§8): the inverse rebuild, plus containment checks.
 
@@ -579,6 +582,7 @@ All Graph and token JSON passes through hand-written type guards before use. Unk
   - Downloads whose byte length differs from `R.size` are rejected.
   - Items with size over the cap are skipped without downloading.
 - **Remote path to vault path:** NFC-normalize, then reject if any segment is `.`, `..` or empty, or contains `/`, `\` or NUL, or starts with `.`, or equals configDir. The path must not be absolute. The joined path must satisfy `normalizePath(joined) === joined`, and its `startsWith` check against the vault root must hold. Anything rejected is skipped as `outside-vault` or `hidden` and reported.
+  - **M4 implementation (`core/paths.ts`).** `remoteToVaultPath(segments, configDir, pathPrefixLen, isFolder)` NFC-normalizes each name. It rejects as `outside-vault` an empty, `.` or `..` segment, a segment containing `/`, `\` or a control character U+0000–U+001F (NUL included), and a first segment with a drive prefix (`C:`). It rejects as `hidden` any segment starting with `.`, and a first segment equal to configDir under `caseKey`. Then it runs `validatePath` (every name through `validateSegment`, then the 400-character limit), so a remote name of 256–400 characters is skipped as `invalid-name`. Finally the joined path must be unchanged by `toVaultPath` (the pure stand-in for `normalizePath`, which core can't import). Vault paths are relative by construction, so there is no root to `startsWith`-check; the segment rules carry that guarantee. `containmentProblem(path, configDir)` applies the same containment rules to a joined path; M6 calls it again right before every local write (T-T1).
 - **downloadUrl / uploadUrl:** `new URL()` must succeed, the protocol must be `https:`, and there must be no userinfo or port. The host must end with an allowlisted suffix: `.microsoftpersonalcontent.com`, `.1drv.com`, `.onedrive.com` or `.livefilestore.com`. `graph.microsoft.com` itself is refused. Otherwise refuse with `UntrustedUrl`, which carries no URL. This stops a tampered response from sending our bytes elsewhere.
   - **M3 history.** The list started as `.microsoft.com`, `.live.com`, `.sharepoint.com`, `.1drv.com`, `.onedrive.com`, `.livefilestore.com`.
     - The probe found OneDrive personal's upload and download host, `my.microsoftpersonalcontent.com` (Microsoft-registered, [G-UP-11]). It was added in 0.3.3.

@@ -3,7 +3,7 @@
 Nine milestones, each sized for one Claude Code session. Do them in order. Each one builds on the interfaces defined in [design.md](design.md) and satisfies requirements in [SPEC.md](../SPEC.md).
 
 ## Session protocol (every implementation session)
-1. **Read.** Read `CLAUDE.md`, `SPEC.md`, `docs/design.md`, and this file. Find the first milestone whose status isn't `done`. Read the research facts it cites.
+1. **Read.** Read `CLAUDE.md`, `SPEC.md`, `docs/design.md`, and this file. Find the first milestone whose status isn't `done`. Read the research facts it cites. Read that milestone's **Carry-ins** list too: each item is a requirement for the milestone, handed over by an earlier milestone's build or security review, and it overrides nothing in SPEC.md.
 2. **Set up.** Run `npm ci`. Skip this for M1, before `package.json` exists.
 3. **Work inside the milestone.** Build only what it lists. If the design has to change, update `docs/design.md` in the same session and say why in the commit message. Probe results go into `docs/research.md` (change the row's status and add the observed result and date).
 4. **Verify.** Run the milestone's verification commands. Paste the trimmed output into the milestone's **Verification output** block: the final summary lines of each command, not the full logs.
@@ -711,7 +711,7 @@ Responsive during the run: not reported
 ---
 
 ## M4: Pure helpers (hash, paths, exclude, transform)
-**Status:** not started
+**Status:** done (2026-10-12). Implementation 00d9dc0, plus the security-review fixes and close-out in the next commit. No manual checks.
 
 **Goal.** Deterministic building blocks with exhaustive tests.
 
@@ -733,10 +733,59 @@ Responsive during the run: not reported
 npm run lint && npm run typecheck && npm test && npm run build
 ```
 
-**Verification output**
+**Verification output** (2026-10-12, after the security-review fixes; Node 24, container)
 ```
-(paste here)
+$ npm run lint
+✖ 4 problems (0 errors, 4 warnings)
+  (2 pre-existing in src/ui/settings-tab.ts; 2 are the `.obsidian` test fixture constants in test/paths.test.ts and test/exclude.test.ts,
+   obsidianmd/hardcoded-config-path, deliberate: the acceptance criteria require testing the default configDir)
+$ npm run typecheck
+> tsc --noEmit                        (exit 0)
+$ npm test
+# quickXorHash 100 MiB: 145 ms        (logged, not asserted; criterion is < 3 s)
+# tests 501
+# suites 8
+# pass 501
+# fail 0
+$ npm run build
+> tsc --noEmit && node esbuild.config.mjs production   (exit 0)
+$ npm audit --audit-level=high
+3 moderate severity vulnerabilities   (exit 0; none high; lockfile unchanged since M3)
 ```
+
+**What was built** (`src/core/`, no `obsidian` import, no runtime dependency):
+- `quickxor.ts`: `QuickXorHasher` (incremental, chunk-independent) and `quickXorHash(data)`. It folds byte n into slot n mod 160 and applies the 160 shifts once in `digest()`; the length XOR uses 32-bit halves (no `BigInt`).
+- `paths.ts`: `NAME_MAX`, `PATH_MAX`, `caseKey`, `isConfigDirName`, `toVaultPath`, `validateSegment`, `validatePath`, `containmentProblem` (the M6 pre-write re-check), `remoteToVaultPath` and `findCollisions`.
+- `exclude.ts`: `exclusionReason` and `isExcluded`, implementing the gitignore subset written down in design §7.
+- `transform.ts`: `IdentityTransform`; re-exports the `ContentTransform` types from `ports.ts`, which stays the single definition.
+- `conflict-name.ts`: `conflictCopyPath(path, deviceName, date, exists, pathPrefixLen)` and `sanitizeDeviceName`.
+
+**Tests added:** `test/quickxor.test.ts` (the four OneDrive probe vectors, all 70 rclone vectors [G-HASH-3], chunk sizes 1–512 and across the 160-byte period, views, 100 MiB timing), `test/paths.test.ts`, `test/exclude.test.ts`, `test/transform.test.ts`, `test/conflict-name.test.ts`. Each acceptance criterion maps to named tests: every design §7 rule (each invalid character, U+0000–U+001F, each reserved name with and without an extension, trailing space or period, leading `~`, `_vti_`, 255/256–400-character names, 400 vs 401 with the `Apps/MDVaultSync` prefix, NFC/NFD, case collisions), every listed containment case, and configDir, hidden and user-glob exclusion.
+
+**Deviations from this milestone's text** (recorded in design.md §7 and §8):
+- `conflictCopyPath` takes a required `pathPrefixLen` (the 400-character budget needs it) and shortens the *copy's* stem when the name or path would be too long. The user's file is never renamed (D-17).
+- `findCollisions(rawPaths, tracked)` also compares folders, including implied ones. A losing folder takes its descendants with it, since OneDrive would merge the two folders.
+- `remoteToVaultPath(segments, configDir, pathPrefixLen, isFolder)` runs containment and then `validatePath`, so one call covers the M3 carry-in. `containmentProblem` was added for M6's pre-write check.
+- `exclusionReason` returns `"hidden" | "excluded" | null` (the skip reason); `isExcluded` is the boolean wrapper. Both take an optional `isFolder`.
+- configDir is compared case-insensitively under two folds (`isConfigDirName`).
+- Names containing U+00A0 or U+202F are `invalid-name` (security review, below).
+
+**Security review** (`security-reviewer` agent; base 0fa7f31):
+- No high findings. It found no input that makes `remoteToVaultPath` return a path outside the vault, inside configDir, or with a hidden segment.
+- Fixed, medium: Obsidian's `normalizePath` is believed to map U+00A0 and U+202F to a space; this is undocumented in `obsidian.d.ts`. Two remote names differing only there would then share one local file. `validateSegment` now rejects such names on both sides, so they are skipped and reported instead.
+- Fixed, low:
+  - The configDir check also uses an upper-then-lower fold, so `ſettings` (U+017F) can't land in a configDir named `settings`.
+  - `exclusionReason` NFC-normalizes the path.
+  - `sanitizeDeviceName` replaces `_vti_`, so the conflict copy stays uploadable.
+  - `pathPrefixLen` is required.
+- Re-review of the fix diff (`security-reviewer`): every finding above is confirmed resolved, with no new high, medium or low issues. Info, fixed: U+1E9E "ẞ" (fully case-folds to "ss") passed both folds; `isConfigDirName` now also compares lower-upper-lower, and a test covers it. Info, carried forward: see the M6 note on `validatePath` below, and local files with NBSP in their name are now skipped, which falls under the existing M5 "a skip never deletes" requirement (T-D1).
+
+**Notes for M5 and later** (carry-ins from the review and the build):
+- **M5 must** call `remoteToVaultPath` for every remote item's rebuilt name chain and skip on `ok: false`. It must call `exclusionReason` with the real configDir, and `findCollisions` on the raw local paths with `tracked` = the NFC paths in `files`.
+- **M5 must** group remote-derived VaultPaths by path and by `caseKey`, and skip every member of a group as `unicode-collision` or `case-collision`. Remote names that differ only in normalization map to one VaultPath, and `findCollisions` sees only local paths (review, low). Test it.
+- **M5:** match remote and local by `caseKey` (design §5.4). `caseKey` deliberately stays `toLocaleLowerCase("en-US")`; the wider fold is used only for configDir.
+- **M6:** the `exists` callback for `conflictCopyPath` must be case-insensitive. A `RangeError` from it means "conflict not resolved, keep both sides untouched", never an overwrite (review, info). Call `containmentProblem` right before every local write, and `validatePath` on the same final path: `containmentProblem` checks containment only, so the name rules (the NBSP rule included) need `validatePath` (re-review, info).
+- **M7:** the exclude-setting help must say that `!` lines and backslash escapes are unsupported and that matching is case-sensitive, so on the iPad a remote `PRIVATE/` isn't excluded by `Private/` (review, info). Consider escaping or rejecting C1 controls, DEL and bidi overrides when names are shown in reports (review, info: they can't escape the vault, but they can spoof names).
 
 ---
 
@@ -764,6 +813,12 @@ npm run lint && npm run typecheck && npm test && npm run build
   - no plan both deletes and fails to preserve bytes that only one side had;
   - union mode never emits deletes;
   - conflicts emit only when both sides changed with different hashes.
+
+**Carry-ins** (requirements handed over by earlier milestones; each names its source)
+- **Skips never delete** (M3 review of 0.3.1, see M3 **Security review**): a skipped remote item (a name over 255, or any other skip reason) must never produce a local or remote delete, and it counts as a child for the folder-delete rule R-DEL-3 (T-D1). Test both. Since M4 this also covers local files whose names contain U+00A0 or U+202F, which `validateSegment` now skips (M4 re-review).
+- **Use the M4 path helpers** (M4 **Notes for M5 and later**): call `remoteToVaultPath(segments, configDir, pathPrefixLen, isFolder)` for every remote item's rebuilt name chain (approot excluded) and skip on `ok: false` with its reason. Call `exclusionReason(path, configDir, patterns, isFolder)` with the real configDir. Call `findCollisions(rawLocalPaths, tracked)` with `tracked` = the NFC paths in `files`.
+- **Remote-side collisions** (M4 review, low): remote names that differ only in Unicode form or case map to one VaultPath, and `findCollisions` sees only local paths. Group remote-derived VaultPaths by exact path and by `caseKey`, and skip every member of a group as `unicode-collision` or `case-collision`. Test it.
+- **Matching key** (M4): match remote and local by `caseKey` (design §5.4). Don't use `isConfigDirName`'s wider fold for matching; it exists only for the configDir check.
 
 **Acceptance criteria**
 - The tests above pass.
@@ -819,6 +874,14 @@ node --test --experimental-test-coverage "test/**/*.test.ts" 2>&1 | grep -E "pla
 **Manual checks**
 - In a diagnostics sub-command, `adapter.rename` onto an existing file on Ubuntu and on the iPad. Record whether it overwrites. If not, `writeAtomic` uses remove-then-rename and research.md is updated [O-API-10].
 
+**Carry-ins** (requirements handed over by earlier milestones; each names its source)
+- **Size cap before download** (M3 review, T-D6): skip items over the size cap before calling `download()`. The length check in `download()` runs only after `requestUrl` has buffered the whole body.
+- **If-Match on replace** (M3 review of 0.3.2): when the executor starts using `PUT_HONORS_IF_MATCH`, keep the upload-session path as the fallback, and make sure a stale replace still surfaces as 412.
+- **Pre-write check** (M4, T-T1; M4 re-review): right before every local write, call `containmentProblem(path, configDir)` **and** `validatePath(path, pathPrefixLen, isFolder)` on the final path. `containmentProblem` checks containment only; the name rules, including the U+00A0/U+202F rule, need `validatePath`.
+- **Conflict copy names** (M4 review): the `exists` callback passed to `conflictCopyPath` must compare case-insensitively (`caseKey`). Pass the real `pathPrefixLen` (`AppRoot.pathPrefix` without its leading `/`). A `RangeError` from it means "conflict not resolved": keep both sides untouched and report an error, never overwrite.
+- **Session body** (M3 review of 0.3.1, info): one probe body sent no `conflictBehavior` and relied on Graph's documented default, `fail`. Before M6 depends on new-file upload sessions, confirm from the M3 probe records (M3 **Ubuntu probe** results) that the body M6 sends, with `"@microsoft.graph.conflictBehavior":"fail"`, is accepted. If only the empty body works, verify that the default really is `fail` (a name clash must give 409, never a silent overwrite) and record it in research.md.
+- Optional (M3 review, owner's call): make `GraphClientOptions.transferTransport` required instead of falling back to `transport`; give `getItemWithUrl`'s `downloadUrl` a branded `UncheckedUrl` type.
+
 **Acceptance criteria**
 - The tests above pass.
 - A fake end-to-end run of 1,000 files through two FakeVaults (device A and device B) sharing one FakeRemote converges in at most 2 runs per device, with zero data loss assertions passing.
@@ -846,6 +909,10 @@ npm run lint && npm run typecheck && npm test && npm run build
 - `src/ui/plan-preview-modal.ts`, `src/ui/confirm-deletes-modal.ts` and `src/ui/report-view.ts` (built with `createEl` only [O-GL-3]).
 - `src/ui/notices.ts`: notices for conflicts (persistent until dismissed), errors and sign-in required.
 - `styles.css`: classes for the modals and report.
+
+**Carry-ins** (requirements handed over by earlier milestones; each names its source)
+- **Exclude-setting help** (M4 review, info): the help text must say that `!` lines and backslash escapes are unsupported (such patterns never match), and that matching is case-sensitive, so on the iPad a remote `PRIVATE/` isn't excluded by a local `Private/` rule. The supported syntax is in design §7.
+- **Showing names** (M4 review, info): C1 controls, DEL, bidi overrides (for example U+202E) and U+2028/U+2029 pass `validateSegment`. They can't escape the vault, but they can disguise names in the report, preview and conflict notice. Consider escaping them when names are displayed.
 
 **Acceptance criteria**
 - Lint passes with no warnings from `obsidianmd` rules.
@@ -905,6 +972,9 @@ npm run lint && npm run typecheck && npm test && npm run build
 | 10 | Revoke the app at account.microsoft.com | Next sync shows "Sign-in required" |
 | 11 | Stale device rejoins: sign out on Ubuntu, edit 3 notes on iPad and sync, edit 1 *other* note on Ubuntu, sign in on Ubuntu | Preview shows "Differs on both sides, no sync history (4)"; after Run there are 4 conflict copies and nothing is lost |
 | 12 | Type in a note continuously while a sync downloads a remote change to it | No keystrokes lost; conflict copy or deferred op (R-CONF-4) |
+
+**Carry-ins** (requirements handed over by earlier milestones; each names its source)
+- **Redirects** (M3 final review, O-API-2): `requestUrl` follows redirects from an allowlisted transfer host without re-checking the target. No token can go along, because the transfer transport is bare, and download bytes are length- and hash-checked. Cover this in the hardening review.
 
 **Acceptance criteria**
 - Every matrix row passes on both devices, with results recorded below.
@@ -982,19 +1052,19 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 |---|---|---|
 | R-ENV-1…4 | M1, M2 | ☐ (M2 part done 2026-10-12: personal accounts only via /consumers, iPad and Ubuntu sign-in verified, minAppVersion 1.11.4) |
 | R-AUTH-1…8 | M2 | ☑ (M2, 2026-10-12; R-AUTH-3 withdrawn. R-AUTH-7 token clear verified on Ubuntu; clearing real sync state is verified with the M6 StateStore) |
-| R-SCOPE-1…4 | M4, M5, M7 | ☐ |
+| R-SCOPE-1…4 | M4, M5, M7 | ☐ (M4 part done 2026-10-12: configDir, hidden and user-glob exclusion (R-SCOPE-2); `remoteToVaultPath` returns the skip reason for hidden or excluded remote paths (R-SCOPE-4 rules)) |
 | R-TRIG-1…4 | M6 (lock), M7 | ☐ |
 | R-CD-1 | M3, M5 | ☐ (M3 part done 2026-10-12: delta with paging to deltaLink; probe chose `items-id` on both devices) |
 | R-CD-2 | M5, M7 | ☐ |
-| R-CD-3, R-CD-4 | M4, M5 | ☐ |
+| R-CD-3, R-CD-4 | M4, M5 | ☐ (M4 part done 2026-10-12: QuickXorHash, matching OneDrive's probe hashes and rclone's vectors) |
 | R-ORDER | M6 | ☐ |
 | R-CC-1, R-CC-2 | M3, M6 | ☐ (M3 part done 2026-10-12: If-Match on replace, move, delete and replace sessions; conflictBehavior=fail on new files and folders; 412 → GraphError) |
-| R-CONF-1…4 | M4, M5, M6, M7 | ☐ |
+| R-CONF-1…4 | M4, M5, M6, M7 | ☐ (M4 part done 2026-10-12: conflict-copy naming for R-CONF-1) |
 | R-DEL-1…3 | M5, M6 | ☐ |
 | R-MOVE-1 | M5, M6 | ☐ |
 | R-FIRST-1, R-FIRST-2 | M5, M7 | ☐ |
 | R-GUARD-1 | M5, M7 | ☐ |
-| R-PATH-1…4 | M4, M6 | ☐ |
+| R-PATH-1…4 | M4, M6 | ☐ (M4 part done 2026-10-12: NFC and collision detection, naming rules, 400-character limit and containment rules, unit tested; the pre-write re-check is M6) |
 | R-IO-1, R-IO-2 | M6 | ☐ |
 | R-NET-1 | M2, M3 | ☑ (M2 and M3, 2026-10-12: auth and Graph go only through the requestUrl transport; lint and the CI script enforce it) |
 | R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested) |
@@ -1002,7 +1072,7 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-UI-1…3 | M2, M7 | ☐ (M2 part done 2026-10-12: Account section) |
 | R-SEC-1, R-SEC-2 | M2 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 M2 part (SecretStorage observed on both devices, including a locked GNOME keyring) — README residual-risk text is owed in M9 |
 | R-SEC-3 | M3, M8 | ☐ (M3 part done 2026-10-12: typed redacting logger, unit tested; the sentinel test is M8) |
-| R-SEC-4 | M3, M4 | ☐ (M3 part done 2026-10-12: Graph JSON, ids, names, sizes, tags, hashes, links and transfer URLs validated; paths are M4) |
+| R-SEC-4 | M3, M4 | ☐ (M3 part done 2026-10-12: Graph JSON, ids, names, sizes, tags, hashes, links and transfer URLs validated; paths are M4) — M4 part done 2026-10-12: remote-derived paths validated by `remoteToVaultPath` |
 | R-SEC-5 | M1, M9 | ☐ (M1 part done: lockfile, Dependabot, CodeQL, audit, SHA pins, and secret scanning and push protection verified 2026-10-12; release attestation is M9) |
 | R-SEC-6 | M1 | ☑ (M1, 2026-10-12) |
 | R-ENG-1…5 | M1 onward | ☐ |
