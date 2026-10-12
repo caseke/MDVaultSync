@@ -300,13 +300,15 @@ export class GraphClient implements RemotePort {
 	 * Fetches a fresh downloadUrl, then GETs it with no Authorization [G-DLD-1]. The byte length must equal the
 	 * item's size (design §8). Hash verification is RemoteContent's job (M6).
 	 */
-	async download(id: string): Promise<ArrayBuffer> {
+	async download(id: string, expectedSize?: number): Promise<ArrayBuffer> {
 		// No $select: that is the only read that returns the download URL on OneDrive personal [G-DLD-1].
 		const r = await this.getItemWithUrl(`${GRAPH_BASE}/me/drive/items/${idSegment(id)}`);
 		if (!r) throw new GraphError(404, "itemNotFound");
 		if (r.item.isFolder || r.item.deleted) throw new InvalidResponse("not-a-file");
 		const downloadUrl = parseItemExtras(r.raw).downloadUrl;
 		if (downloadUrl === null) throw new InvalidResponse("download-url-missing");
+		// The caller checked this size against the cap; an item that changed since must not be buffered (T-D6).
+		if (expectedSize !== undefined && r.item.size !== expectedSize) throw new InvalidResponse("download-length-mismatch");
 		const res = await this.send({ url: checkTransferUrl(downloadUrl), method: "GET" }, this.transferTransport);
 		if (res.status !== 200) throw toGraphError(res);
 		if (res.body.byteLength !== r.item.size) throw new InvalidResponse("download-length-mismatch");

@@ -46,7 +46,7 @@ export interface RemotePort {
   putFragment(uploadUrl: string, start: number, total: number, bytes: ArrayBuffer): Promise<RemoteItem | null>; // item on final fragment
   getUploadStatus(uploadUrl: string): Promise<UploadStatus>;         // 404 → { nextExpectedStart: null }
   cancelUpload(uploadUrl: string): Promise<void>;
-  download(id: string): Promise<ArrayBuffer>;                        // via fresh downloadUrl, no auth header [G-DLD-1]
+  download(id: string, expectedSize?: number): Promise<ArrayBuffer>; // via fresh downloadUrl, no auth header [G-DLD-1]; refused before the GET if the item's size isn't expectedSize (M6, T-D6)
   createFolder(parentId: string, name: string): Promise<RemoteItem>; // conflictBehavior=fail
   uploadNew(parentId: string, name: string, data: ArrayBuffer): Promise<RemoteItem>;   // fail on name clash
   uploadReplace(id: string, ifMatch: string, data: ArrayBuffer): Promise<RemoteItem>;  // 412 → PreconditionFailed
@@ -71,6 +71,8 @@ export interface RemoteContent {
         onSession?: (s: UploadSessionInfo) => Promise<void>): Promise<{ item: RemoteItem; remoteHash: string }>;
   /** Stored-bytes hash this plaintext WOULD have remotely (encode + quickXorHash). Identity: equals the plaintext hash. */
   storedHashOf(plain: ArrayBuffer, path: VaultPath): Promise<string>;
+  /** Continues a persisted upload session from its nextExpectedRanges (M6, §6.3). null: the session is gone; start over. */
+  resume(rec: UploadSessionRecord, plain: ArrayBuffer): Promise<{ item: RemoteItem; remoteHash: string } | null>;
 }
 
 // ---------- persisted state ----------

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Milestone 6 (0.4.0, 0.4.1): the part that carries out a sync plan, safely and so it can pick up where it stopped. Sync still isn't switched on in the app (that is milestone 7), so the only visible changes are a new diagnostics command and sign-out clearing the saved sync state.
+
+### Added
+
+- Carrying out the sync plan: OneDrive changes are applied here first, then this device's changes are sent up; renames and moves come before everything else, and up to four files transfer at a time.
+- Every download is checked against OneDrive's fingerprint before it replaces a file, and is written to a hidden temporary file first, then moved into place. Every upload's result is checked the same way.
+- Nothing is ever written into Obsidian's settings folder, a hidden folder, or outside the vault: the path is checked again right before each write.
+- A note you edit while a sync is running is never overwritten or deleted by that sync. The change becomes a conflict copy, or waits for the next sync.
+- Conflicts keep both versions: your version is saved as a conflict copy before the OneDrive version replaces the note, and the copy is uploaded so every device has it. If the app is closed in the middle, the next sync reuses the same copy instead of making another.
+- Large files (over 10 MB) upload in pieces. An interrupted upload continues where it stopped after a restart, or starts over if OneDrive dropped it.
+- Progress is saved at most a second after each step and right before anything is overwritten or deleted, so a sync stopped by iPadOS or a lost connection resumes without redoing or losing work.
+- Sync triggers that overlap never run two syncs at once; at most one more sync is queued.
+- A "Test file replace on this device" command, for checking how this device replaces files (results go in the build plan). On both Ubuntu and the iPad, Obsidian can't rename one file over another, so the plugin removes the old file and then moves the new one into place.
+
+### Changed
+
+- A OneDrive sign-in left behind by an uninstalled copy of the plugin is now removed when the plugin is installed again, with a notice linking to the page where you can also remove the app's access from your Microsoft account. Obsidian gives plugins no way to clean up at uninstall, and the sign-in is kept in Obsidian's secret storage, which uninstalling doesn't clear.
+- Signing out now also deletes the saved sync state file. Your notes are untouched, and the next sign-in starts with a safe merge that deletes nothing.
+
 Milestone 5: the sync planner, which decides what each sync will do. Sync isn't wired up yet, so nothing changes in the app.
 
 ### Added

@@ -108,6 +108,17 @@ const BAD: [string, (o: Record<string, unknown>) => void][] = [
 	["session target name with a slash", (o) => (at(o, "uploadSessions", "n.md", "target")["name"] = "../n.md")],
 	["pending conflict copy into a hidden folder", (o) => (at(o, "pendingConflicts", "a.md")["copyPath"] = ".x/copy.md")],
 	["pending conflict copy onto the original", (o) => (at(o, "pendingConflicts", "a.md")["copyPath"] = "A.md")],
+	[
+		"two pending conflicts sharing one copy path (M6 re-review)",
+		(o) => {
+			const first = at(o, "pendingConflicts", "a.md");
+			at(o, "pendingConflicts")["b.md"] = { ...first, path: "b.md", copyPath: String(first["copyPath"]).toUpperCase() };
+		},
+	],
+	[
+		"a pending conflict whose copy path is another's original",
+		(o) => (at(o, "pendingConflicts")["b.md"] = { ...at(o, "pendingConflicts", "a.md"), path: "b.md", copyPath: "a.md" }),
+	],
 	["declined delete with a bad hash", (o) => (at(o, "declinedDeletes", "D/b.md")["localHash"] = 7)],
 ];
 for (const [name, edit] of BAD) {

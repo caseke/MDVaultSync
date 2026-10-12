@@ -1,8 +1,12 @@
-import { Notice, Plugin, requestUrl } from "obsidian";
+import { normalizePath, Notice, Plugin, requestUrl } from "obsidian";
 import type { ObsidianProtocolData } from "obsidian";
 import { RingLogger } from "./core/logger.ts";
 import type { Clock, StateStore } from "./core/ports.ts";
-import { Diagnostics } from "./platform/diagnostics.ts";
+import { Diagnostics, platformName } from "./platform/diagnostics.ts";
+import { PluginStateStore } from "./platform/plugin-state-store.ts";
+import { probeRename } from "./platform/rename-probe.ts";
+import { clearSession } from "./platform/sign-out.ts";
+import { isLeftoverInstall } from "./platform/leftover-install.ts";
 import { createRequestUrlTransport } from "./platform/request-url-transport.ts";
 import { PluginTokenStore, TokenClearError } from "./platform/token-store.ts";
 import { AuthClient, AuthError } from "./remote/auth.ts";
@@ -12,6 +16,7 @@ import { AuthorizingTransport } from "./remote/http.ts";
 import { RetryPolicy } from "./remote/retry.ts";
 import { isValidClientId, parseData, type PluginData } from "./settings.ts";
 import { AUTH_ERROR_MESSAGES, authErrorText } from "./ui/auth-messages.ts";
+import { DiagnosticsModal, FILE_REPLACE_TEXT } from "./ui/diagnostics-modal.ts";
 import { MDVaultSyncSettingTab } from "./ui/settings-tab.ts";
 import { SignInModal } from "./ui/sign-in-modal.ts";
 
@@ -26,19 +31,26 @@ export default class MDVaultSyncPlugin extends Plugin {
 	graph!: GraphClient;
 	private settingTab!: MDVaultSyncSettingTab;
 	private signInModal: SignInModal | null = null;
-	// M2 stub: sign-out clears sync state through this. M6 replaces it with the sync-state.json store.
-	private readonly stateStore: StateStore = {
-		load: () => Promise.resolve(null),
-		save: () => Promise.resolve(),
-		clear: () => Promise.resolve(),
-	};
+	/** `sync-state.json` in the plugin folder (design §12). */
+	stateStore!: StateStore;
+	private pluginDir = "";
 
 	override async onload(): Promise<void> {
 		this.data = parseData(await this.loadData());
+		const { configDir } = this.app.vault;
+		this.pluginDir = normalizePath(this.manifest.dir ?? `${configDir}/plugins/${this.manifest.id}`);
+		this.stateStore = new PluginStateStore({
+			adapter: this.app.vault.adapter,
+			dir: this.pluginDir,
+			configDir,
+			newDeviceId: () => crypto.randomUUID(),
+		});
 		this.tokenStore = new PluginTokenStore(this.app.secretStorage, {
 			get: () => this.data,
 			save: () => this.saveData(this.data),
 		});
+		// Before AuthClient reads the token: a sign-in left by an uninstalled copy is removed (R-AUTH-9).
+		await this.clearLeftoverSignIn(!(await isLeftoverInstall(this.app.vault.adapter, this.pluginDir)));
 		const transport = createRequestUrlTransport((p) => requestUrl(p));
 		const clock: Clock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => window.setTimeout(r, ms)) };
 		this.auth = new AuthClient({
@@ -100,6 +112,12 @@ export default class MDVaultSyncPlugin extends Plugin {
 			name: "Run OneDrive capability probe",
 			callback: () => void diagnostics.run(),
 		});
+		// M6 manual check [O-API-10]: does adapter.rename replace an existing file on this device?
+		this.addCommand({
+			id: "test-file-replace",
+			name: "Test file replace on this device",
+			callback: () => void this.testFileReplace(),
+		});
 	}
 
 	override onunload(): void {
@@ -128,23 +146,44 @@ export default class MDVaultSyncPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Obsidian has no uninstall hook [O-API-19], and uninstalling leaves SecretStorage alone. A refresh token in an
+	 * empty plugin folder is therefore left over from a removed copy: clear it, and say where to revoke the grant
+	 * itself, which a public client can't do [I-TL-4] (R-AUTH-9).
+	 */
+	private async clearLeftoverSignIn(hasPluginData: boolean): Promise<void> {
+		try {
+			if (!(await this.tokenStore.clearOrphan(hasPluginData))) return;
+		} catch (e) {
+			console.error(`MDVaultSync: could not clear a leftover sign-in (${e instanceof Error ? e.name : "unknown"})`);
+			const failed = createFragment((f) => {
+				f.appendText("A OneDrive sign-in from an earlier install of this plugin couldn't be removed. Sign out in the plugin settings, or remove this app's access at ");
+				f.createEl("a", { text: APP_ACCESS_URL, href: APP_ACCESS_URL });
+				f.appendText(".");
+			});
+			new Notice(failed, 0);
+			return;
+		}
+		const msg = createFragment((f) => {
+			f.appendText("Removed a OneDrive sign-in left over from an earlier install of this plugin. To also remove this app's access to your account, visit ");
+			f.createEl("a", { text: APP_ACCESS_URL, href: APP_ACCESS_URL });
+			f.appendText(".");
+		});
+		new Notice(msg, 0);
+	}
+
+	/** Writes, renames and removes two files in the plugin folder and shows what adapter.rename did. */
+	private async testFileReplace(): Promise<void> {
+		const modal = new DiagnosticsModal(this.app, FILE_REPLACE_TEXT);
+		modal.open();
+		const result = await probeRename(this.app.vault.adapter, this.pluginDir);
+		modal.showResult(JSON.stringify({ ...result, platform: platformName(), pluginVersion: this.manifest.version }, null, 2));
+	}
+
 	/** Clears tokens and sync state; local files stay (R-AUTH-7). */
 	async signOut(): Promise<void> {
-		let tokenCleared = true;
-		let stateCleared = true;
-		try {
-			await this.auth.signOut();
-		} catch (e) {
-			tokenCleared = false;
-			console.error(`MDVaultSync: sign-out could not clear the token (${e instanceof Error ? e.name : "unknown"})`);
-		}
-		try {
-			// Sync state is cleared even if the token wasn't: a later sync then runs in union mode, which never deletes.
-			await this.stateStore.clear();
-		} catch (e) {
-			stateCleared = false;
-			console.error(`MDVaultSync: sign-out could not clear sync state (${e instanceof Error ? e.name : "unknown"})`);
-		}
+		// M7 passes the sync engine here, so a running sync can't save state after the clear.
+		const { tokenCleared, stateCleared } = await clearSession({ engine: null, signOut: () => this.auth.signOut(), store: this.stateStore });
 		this.settingTab.refresh();
 		if (!tokenCleared) {
 			new Notice(

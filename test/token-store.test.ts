@@ -111,3 +111,33 @@ test("clear throws when SecretStorage can't overwrite the token, after removing 
 	assert.ok(!("fallbackRefreshToken" in data));
 	assert.equal(store.get(), "RT");
 });
+
+// R-AUTH-9: Obsidian has no uninstall hook [O-API-19]. Uninstall deletes data.json but not SecretStorage, so a
+// reinstall would find the old refresh token. A token with no plugin data is a leftover and is cleared at load.
+test("a token left by an uninstalled copy (no plugin data) is cleared at load", async () => {
+	const { secrets, store } = setup();
+	secrets.map.set(SECRET_ID, "rt-from-old-install");
+	assert.equal(await store.clearOrphan(false), true);
+	assert.equal(store.get(), null);
+	assert.equal(secrets.map.get(SECRET_ID), "");
+});
+
+test("a token is kept when plugin data exists (a normal restart or update)", async () => {
+	const { secrets, store } = setup({ clientId: "00000000-0000-0000-0000-000000000000" });
+	secrets.map.set(SECRET_ID, "rt");
+	assert.equal(await store.clearOrphan(true), false);
+	assert.equal(store.get(), "rt");
+});
+
+test("no plugin data and no token: nothing to clear, nothing written", async () => {
+	const { store, saves } = setup();
+	assert.equal(await store.clearOrphan(false), false);
+	assert.equal(saves(), 0);
+});
+
+test("a leftover token that can't be cleared surfaces TokenClearError", async () => {
+	const { secrets, store } = setup();
+	secrets.map.set(SECRET_ID, "rt");
+	secrets.dropWrites = true;
+	await assert.rejects(store.clearOrphan(false), TokenClearError);
+});

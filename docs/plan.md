@@ -895,7 +895,7 @@ $ npm audit --audit-level=high
 ---
 
 ## M6: Executor, engine, persistence, resume
-**Status:** not started
+**Status:** done (2026-10-12). The `adapter.rename` manual check passed on Ubuntu and the iPad. The R-AUTH-9 reinstall check (an M6 follow-up, 0.4.1) is tracked in the traceability table and doesn't block M7. M7 may start: it doesn't depend on the result unless the fallback has to change.
 
 **Goal.** Running a plan safely and resumably (design §5.5, §6).
 
@@ -929,6 +929,17 @@ $ npm audit --audit-level=high
 
 **Manual checks**
 - In a diagnostics sub-command, `adapter.rename` onto an existing file on Ubuntu and on the iPad. Record whether it overwrites. If not, `writeAtomic` uses remove-then-rename and research.md is updated [O-API-10].
+  - **Owner steps (0.4.0):**
+    1. Push tag `0.4.0` from this branch (or after merging), so `release.yml` builds the draft release; publish it. Install 0.4.0 with BRAT on Ubuntu and on the iPad. A test vault is fine; the check touches only the plugin's own folder.
+    2. On each device, open the command palette and run **MDVaultSync: Test file replace on this device**.
+    3. Copy the JSON (Copy result) and paste it below, one block per device.
+  - **What the fields mean:** `renameOverExisting` is `replaced` (rename overwrites: writeAtomic is atomic on that device), `threw` or `kept-target` (rename refuses: writeAtomic uses the remove-then-rename fallback, which has a short crash window; see design §12). `fallbackWorks` must be `true` and `cleanedUp` must be `true` on both devices.
+  - **Result, Ubuntu (2026-10-12, owner, Flatpak):** `{"renameOverExisting": "threw", "fallbackWorks": true, "cleanedUp": true, "platform": "linux", "pluginVersion": "0.4.0"}`. `adapter.rename` refuses to overwrite on Ubuntu, so writeAtomic uses the remove-then-rename fallback there; the fallback works. Matches the design (design §12, atomic.ts); no code change.
+  - **Result, iPad (2026-10-12, owner):** `{"renameOverExisting": "threw", "fallbackWorks": true, "cleanedUp": true, "platform": "ios", "pluginVersion": "0.4.0"}`. Same as Ubuntu: `adapter.rename` refuses to overwrite, and writeAtomic's remove-then-rename fallback works with no temp file left. Both devices therefore always use the fallback, with its short crash window (design §12); the security review judged that window recoverable for notes (the next run downloads the file again, R-DEL-2), and sync-state.json recovers from its temp file. No code change.
+- **Leftover sign-in after uninstall (R-AUTH-9, added 2026-10-12 from the owner's report).** On 0.4.1, on each device: sign in, uninstall the plugin, reinstall it (BRAT), and open settings. Expected: a notice says a leftover sign-in was removed, with the account-page link, and the account section shows signed out. A normal restart or a BRAT update must keep the sign-in. Also: while signed in, replace data.json's content with `{not json` and restart: the sign-in must be kept (the file isn't overwritten by the check).
+  - **Result, Ubuntu (2026-10-12, owner, 0.4.1):** reinstall passed: the leftover-sign-in notice appeared and the account section showed signed out. Corrupt-data.json sub-check passed (2026-10-12, Obsidian quit before the edit): Obsidian logged `failed to read JSON …data.json SyntaxError…` and loaded the plugin anyway; the file stayed on disk unchanged (`{not json}`); the secret was still present (`!!getSecret(...)` → `true`); the plugin stayed signed in with a blank Client ID. An earlier run that looked like a sign-out was most likely the blank Client ID read as "signed out" (owner's assessment).
+  - **Result, iPad (2026-10-12, owner, 0.4.1):** reinstall passed, the same as Ubuntu. The corrupt-data.json sub-check: pending.
+  - **UX decision (2026-10-12):** keep clearing the token. Uninstall removes the Client ID with data.json, and a refresh needs it, so a kept token would be unusable until the user re-enters the ID anyway; signing in again is one more tap. Keeping it would mean mirroring the Client ID into SecretStorage, which contradicts "uninstall clears creds" and leaves a usable grant behind after every uninstall (T-I1). The remaining gap (an uninstall with no reinstall keeps the token until revoked) has no plugin API fix; the M9 README advice covers it.
 
 **Carry-ins** (requirements handed over by earlier milestones; each names its source)
 - **Size cap before download** (M3 review, T-D6): skip items over the size cap before calling `download()`. The length check in `download()` runs only after `requestUrl` has buffered the whole body.
@@ -947,10 +958,84 @@ $ npm audit --audit-level=high
 npm run lint && npm run typecheck && npm test && npm run build
 ```
 
-**Verification output**
+**Verification output** (2026-10-12, after the security-review fixes; Node 22.22, container)
 ```
-(paste here, plus manual rename results)
+$ npm run lint
+✖ 4 problems (0 errors, 4 warnings)
+  (unchanged since M4/M5: 2 in src/ui/settings-tab.ts, 2 `.obsidian` fixture constants in test/paths.test.ts and
+   test/exclude.test.ts. The M6 tests use the configDir "obs-config", so they add none.)
+$ npm run typecheck
+> tsc --noEmit                        (exit 0)
+$ npm test
+# tests 733
+# suites 8
+# pass 733
+# fail 0
+$ npm run build
+> tsc --noEmit && node esbuild.config.mjs production   (exit 0)
+$ npm audit --audit-level=high
+3 moderate severity vulnerabilities   (exit 0; none high; only the version changed in the lockfile)
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+$ node --test --experimental-test-coverage "test/**/*.test.ts"   (new modules, line % | branch % | funcs %)
+#   engine.ts 96.6 | 87.9 | 96.4   executor.ts 95.8 | 86.3 | 94.0   remote-content.ts 96.8 | 91.3 | 90.0
+#   upload-resume.ts 97.7 | 93.8 | 100   saver.ts 95.7 | 88.9 | 77.8   records.ts 94.9 | 95.7 | 95.0
+#   obsidian-vault.ts 94.7 | 84.1 | 94.4   plugin-state-store.ts 95.9 | 92.9 | 85.7   atomic.ts 100 | 100 | 100
+#   (coverage measured before the review fixes; the fixes added tests for every changed branch)
 ```
+Manual rename results: Ubuntu and iPad both `threw` / fallback works / cleaned up (see **Manual checks**).
+
+**What was built**
+- `src/core/remote-content.ts`: `TransformedRemoteContent`, the only caller of RemotePort content methods. `fetch` checks length and QuickXorHash before decoding (null hash: size only); `store` uses PUT for new files and for replaces (`PUT_HONORS_IF_MATCH`) up to 10 MiB and sessions above, persists the session through `onSession`, re-checks a replace session's eTag before the final fragment (`ReplaceRaced`), handles 416, and checks the returned hash; `resume` continues a persisted session. `RemoteContent.resume` was added to `ports.ts` and design §2.
+- `src/core/executor.ts`: `executePlan`: pull side then push side, moves first and one at a time, folders shallowest first, file ops 4 at a time, deletes (folders deepest first); pre-write containment, name and scan re-checks; 412 metadata-only retry vs conflict; 409 adopt vs conflict; remote-delete 404/412; the conflict procedure with pending-conflict reuse and a single copy upload; eTag chaining; one record per remote id; on-demand parent folders.
+- `src/core/engine.ts`: `Engine` with the single-flight lock and one rerun, preflight with `applyAppRoot`, upload resume, the delta pull and merge (deleted folders drop their descendants; resync re-enumerates in union mode), the incremental scan, the plan, preview and guard prompts with a 10-minute timeout, declined deletes, the report, union completion, `reset()` for sign-out, `expectedWrites` and `noteLocalChange` for M7.
+- `src/core/upload-resume.ts`, `src/core/saver.ts` (≤ 1 s batched saves, flush before destructive ops), `src/core/records.ts`, `src/core/failure.ts`; `src/remote/classify.ts` maps Graph and auth errors to core failure kinds.
+- `src/platform/obsidian-vault.ts` (`ObsidianVault` over structural Vault, adapter and FileManager types), `src/platform/atomic.ts` (rename, else remove-then-rename; the temp file is kept if the target was removed), `src/platform/plugin-state-store.ts` (`sync-state.json`, temp then rename, temp fallback on load, serialized save and clear), `src/platform/sign-out.ts` (`clearSession`, wired into `main.ts` sign-out), `src/platform/rename-probe.ts` and the `test-file-replace` command.
+- `RemotePort.download(id, expectedSize?)`: GraphClient refuses before the GET when the item's size changed since the cap check (T-D6).
+- Version 0.4.0 (manifest, versions.json, package.json) for the manual check.
+
+**Tests added:** `test/remote-content.test.ts` (18), `test/executor.test.ts` (33: every op, order, 412/409, deletes, edits during sync, the session race, containment, hash mismatch, size cap, saves, `__proto__`, review regressions), `test/engine.test.ts` (15: union and preview, single-flight, guard and declined deletes, resync, delta merge, sign-in required, crash injection after every mutating call, conflict crash, union crash, XOR transform seam, 1,000 files over two devices, exclusions), `test/upload-resume.test.ts` (4), `test/obsidian-vault.test.ts` (13), `test/plugin-state-store.test.ts` (6), `test/sign-out.test.ts` (4), a graph test for the expected download size, and network-check tests for the new exemption. Fakes: `test/fakes/sync-fakes.ts` (ManualClock, MemoryStateStore that rejects any state the real parser wouldn't load, XorTransform, withOverrides), `device.ts` (Device harness and CrashSwitch), `fake-obsidian.ts`.
+
+**Acceptance**
+- Every listed test exists and passes. Crash injection kills the run after each of the scenario's mutating calls in turn (every op kind, a conflict and a 3-fragment replace session), restarts a fresh Engine on the saved state, and asserts the same final vault and remote as an uninterrupted run, with exactly one conflict copy.
+- 1,000 files through two FakeVaults and one FakeRemote, with edits on both sides, five same-file conflicts, deletes, renames and new files: each device needs at most 2 runs, the vaults and the remote end identical, and every written version survives (deleted files are in the recycle bin).
+
+**Carry-ins closed**
+- Size cap before download: `getItem` then the cap, before any bytes; and the expected size is enforced by GraphClient before the GET.
+- If-Match on replace: PUT with If-Match per `PUT_HONORS_IF_MATCH`, sessions above 10 MiB, a stale replace still surfaces as 412 (tested both ways).
+- Pre-write check: `containmentProblem` and `validatePath` before every local write, move, trash and mkdir (executor and ObsidianVault).
+- Conflict copy names: `exists` compares by `caseKey`, the real `pathPrefixLen` is passed, a `RangeError` fails the op with `path-too-long` and both sides stay untouched.
+- Session body: closed by the M3 records. The body M6 sends, `{"item":{"@microsoft.graph.conflictBehavior":"fail"}}` without `fileSize`, returned 200 on Ubuntu (probe v2–v4) and on the iPad (0.3.5); no code change.
+- M5 notes: move order, the delta merge of deleted folders, eTag chaining, folder moves re-pathing records, folder ops, scan hashing of name-skipped files, `storedHash` from `RemoteContent.storedHashOf`, NFC mapping in ObsidianVault, `__proto__`-safe maps, no double upload of a resumed conflict copy.
+- Optional (M3, owner's call), not done: making `transferTransport` required; a branded `UncheckedUrl`.
+
+**Deviations and clarifications** (recorded in design.md §5.5, §5.6, §6.3, §12, §13)
+- `RemoteContent.resume` added to the port; `RemotePort.download` takes an optional expected size.
+- Union mode ends only after an `ok` or `partial` run in which every planned op got its turn; a run cut short by the network or the retry budget stays union.
+- `pendingLocal` is cleared (the part the run saw) only after an `ok` run.
+- A folder locally where the remote has a file (or the reverse) fails as `type-clash` every run, until the user renames one; the planner doesn't skip it yet (optional below).
+- Upload-session resume needs a deterministic `encode` (design §13).
+
+**Security review** (`security-reviewer` agent; base 9926865 plus the uncommitted M6 files):
+- No high findings.
+- Fixed, medium: a folder at a path where the remote has a file looped between download and the conflict procedure (endless Graph calls). The conflict procedure now fails it as `type-clash`; a test hangs if the fix is reverted.
+- Fixed, medium: two conflicts in one run could pick the same copy name (long stems shorten alike), and the second copy write would replace the first, losing an edit. Names are reserved before any await, and the copy write is create-only; a test fails if the reservation is reverted.
+- Fixed, medium: the rename fallback ran on any rename error and then deleted the temp file even after the target was removed. It now runs only when both files still exist, keeps the temp file once the target is gone (`TargetRemoved`), and the state store loads from the temp file if the main file is missing. Crash-window assessment (reviewer): for notes the window is recoverable (the next run sees "deleted here, changed there" and downloads again, R-DEL-2).
+- Medium (process): this section and the verification output, now filled in; the manual check is pending.
+- Fixed, low: the size check before download was time-of-check/time-of-use (`download(id, expectedSize)`); the network-check exemptions now match whole lines; a stale pending copy path is reused only under the planner's checks; a 404 on replace is confirmed with `getItem` before it counts as a delete; a folder move's 412 retries only if the folder hasn't moved elsewhere; after sign-out the executor starts no new op and the state store serializes save and clear.
+- Fixed, info: `trash` and `removeEmptyFolder` re-check containment in ObsidianVault; a local move updates the eTag chain.
+- **R-AUTH-9 follow-up review** (`security-reviewer`, base 238937f): fixed, medium: the first version decided "uninstalled" from `loadData()` returning null, so a corrupt or unreadable data.json could have cleared a live sign-in and overwritten the file. It now checks on disk that the plugin folder holds neither data.json nor sync-state.json (`platform/leftover-install.ts`, tested with corrupt, empty, `null` and `{}` files; an `exists` error keeps the sign-in). Fixed, low: duplicate research ID (now O-API-19) and its overclaimed status; the failure notice now carries the account-page link; the Client ID is saved before it is assigned, so a sign-in can't exist without data.json; the M6 status line. The sync-state finding is moot: a folder with sync-state.json isn't a leftover. Carried to M9: the README uninstall advice.
+- Re-review of the fix diff (`security-reviewer`, base 4059c3f): all three code mediums and every fixed low and info confirmed resolved, no new high or medium, no regressions (network, auth header, logging, data-safety rules, interface sync). It found one new low, **fixed**: a reused pending copy path wasn't reserved before the next await, so a tampered state with two pending conflicts sharing a copy path could make one copy replace the other. The reuse branch now reserves the name at once (and checks the path first), and `parseSyncState` rejects pending conflicts that share a copy path or use another's original; both parser tests fail without the rule. Open, info (owner's call or later milestones): leftover hidden temp files after a `TargetRemoved` are never cleaned up (harmless, hidden files are never synced; M8 could sweep them); the planner still plans file and folder ops onto a folder/file clash key (reported as `type-clash` each run; optional skip above).
+
+**Notes for M7 and later** (carry-ins)
+- **Wire the engine** in `main.ts`: `Engine` with `ObsidianVault`, `TransformedRemoteContent(graph, new IdentityTransform(), { putHonorsIfMatch: PUT_HONORS_IF_MATCH, classify: classifyError })`, `PluginStateStore`, `ensureSignedIn: () => auth.getAccessToken()`, `resetBudget: () => retry.resetBudget()`, and pass the engine to `clearSession` (it is `null` in M6).
+- **Vault events:** call `engine.noteLocalChange` and consult `engine.expectedWrites` (path → hash) for the echo filter; clear entries as the scan consumes them. `expectedWrites` grows until M7 clears it.
+- **Hooks:** `confirmPlan` and `confirmDeletes` resolve false on Cancel; the engine applies the 10-minute timeout itself. Folder deletes are in the `confirmDeletes` list (M5 note).
+- **Statuses:** `syncing` phases are `preflight`, `resume`, `pull`, `scan`, `exec`; a `partial` run (including `changed-during-sync` deferrals) sets `error` with the first code. Map `type-clash`, `changed-during-sync`, `hash-mismatch`, `too-large`, `conflict-name` and `path-too-long` to notice text (M8 table).
+- **Manual check (M7/M8):** a replace over 10 MiB from a real device must not end in a false conflict. Creating a replace session must not change the item's eTag on OneDrive personal; that was never observed (design §6.3). On the iPad, check that a downloaded file shows up in the vault without a restart (writes go through the adapter).
+- **M9 README (R-AUTH-9 review, info):** say to sign out before uninstalling, or to remove the app's access at the account page: until a reinstall, the refresh token stays in SecretStorage, where other plugins can read it (T-I1).
+- **M9 README:** persisted upload-session URLs in `sync-state.json` grant upload access until they expire; the config folder must not be synced by another tool (review, info).
+- Optional (owner): have the planner skip a key that is a folder on one side and a file on the other, so it is reported as a skip instead of a recurring `type-clash` error.
 
 ---
 
@@ -1107,24 +1192,25 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | Requirement | Milestone | Done |
 |---|---|---|
 | R-ENV-1…4 | M1, M2 | ☐ (M2 part done 2026-10-12: personal accounts only via /consumers, iPad and Ubuntu sign-in verified, minAppVersion 1.11.4) |
-| R-AUTH-1…8 | M2 | ☑ (M2, 2026-10-12; R-AUTH-3 withdrawn. R-AUTH-7 token clear verified on Ubuntu; clearing real sync state is verified with the M6 StateStore) |
+| R-AUTH-9 | M6 (follow-up) | ☑ (2026-10-12: a token in SecretStorage is cleared at load, with a notice, only when the plugin folder holds neither data.json nor sync-state.json (checked on disk); unit tested. Owner checks 2026-10-12: reinstall passed on Ubuntu and the iPad (0.4.1); a corrupt data.json keeps the sign-in and the file (Ubuntu)) |
+| R-AUTH-1…8 | M2 | ☑ (M2, 2026-10-12; R-AUTH-3 withdrawn. R-AUTH-7 token clear verified on Ubuntu; clearing real sync state is verified with the M6 StateStore; M6 2026-10-12: sign-out clears sync-state.json through PluginStateStore and a running sync can't write it back; tested) |
 | R-SCOPE-1…4 | M4, M5, M7 | ☐ (M4 part done 2026-10-12: configDir, hidden and user-glob exclusion (R-SCOPE-2); `remoteToVaultPath` returns the skip reason for hidden or excluded remote paths (R-SCOPE-4 rules). M5 part done 2026-10-12: size cap skips `too-large` (R-SCOPE-3), excluded or hidden remote items are skipped and reported, never downloaded (R-SCOPE-4)) |
-| R-TRIG-1…4 | M6 (lock), M7 | ☐ |
-| R-CD-1 | M3, M5 | ☐ (M3 part done 2026-10-12: delta with paging to deltaLink, `items-id`; M5 part done 2026-10-12: remote paths rebuilt from parentId chains; children of a deleted folder are deletes, orphans and cycles never are. Merging delta pages into `remoteIndex` is M6) |
+| R-TRIG-1…4 | M6 (lock), M7 | ☐ (M6 part done 2026-10-12: single-flight lock with at most one rerun, R-TRIG-4, tested) |
+| R-CD-1 | M3, M5 | ☑ (M3 part done 2026-10-12: delta with paging to deltaLink, `items-id`; M5 part done 2026-10-12: remote paths rebuilt from parentId chains; children of a deleted folder are deletes, orphans and cycles never are. Merging delta pages into `remoteIndex` is M6; M6 part done 2026-10-12: delta pages merged into `remoteIndex`, last occurrence wins, a deleted folder drops its descendants, saved with the deltaLink; resync re-enumerates in union mode) |
 | R-CD-2 | M5, M7 | ☐ |
 | R-CD-3, R-CD-4 | M4, M5 | ☑ (M4 2026-10-12: QuickXorHash; M5 2026-10-12: FileRecord validated, change detection by hash → cTag → size/eTag, unchanged content never planned for transfer) |
-| R-ORDER | M6 | ☐ |
-| R-CC-1, R-CC-2 | M3, M6 | ☐ (M3 part done 2026-10-12: If-Match on replace, move, delete and replace sessions; conflictBehavior=fail on new files and folders; 412 → GraphError) |
-| R-CONF-1…4 | M4, M5, M6, M7 | ☐ (M4 part done 2026-10-12: conflict-copy naming for R-CONF-1; M5 part done 2026-10-12: conflicts only when both sides differ (R-CONF-3, property-tested), no-history pairs counted in `differsNoHistory`, report conflicts list) |
-| R-DEL-1…3 | M5, M6 | ☐ (M5 part done 2026-10-12: deletes planned both ways with If-Match, edits beat deletes (R-DEL-2), folder deletes only with zero children incl. skipped (R-DEL-3)) |
-| R-MOVE-1 | M5, M6 | ☐ (M5 part done 2026-10-12: renames detected by id, event or unique hash; folder renames collapse to one move) |
+| R-ORDER | M6 | ☑ (M6, 2026-10-12: pull side before push side, moves first; tested) |
+| R-CC-1, R-CC-2 | M3, M6 | ☑ (M3 part done 2026-10-12: If-Match on replace, move, delete and replace sessions; conflictBehavior=fail on new files and folders; 412 → GraphError; M6 part done 2026-10-12: PUT with If-Match per the probe, sessions above 10 MiB with the commit-time eTag re-check, 412 re-read: metadata-only retry, else conflict; tested) |
+| R-CONF-1…4 | M4, M5, M6, M7 | ☐ (M4 part done 2026-10-12: conflict-copy naming for R-CONF-1; M5 part done 2026-10-12: conflicts only when both sides differ (R-CONF-3, property-tested), no-history pairs counted in `differsNoHistory`, report conflicts list; M6 part done 2026-10-12: conflict procedure with pendingConflicts and crash reuse, copy uploaded, pre-write re-check (R-CONF-4); the notice is M7) |
+| R-DEL-1…3 | M5, M6 | ☑ (M5 part done 2026-10-12: deletes planned both ways with If-Match, edits beat deletes (R-DEL-2), folder deletes only with zero children incl. skipped (R-DEL-3); M6 part done 2026-10-12: remote delete with If-Match (404 forget, 412 download back), local delete via FileManager.trashFile, folders only when empty; tested with fakes) |
+| R-MOVE-1 | M5, M6 | ☑ (M5 part done 2026-10-12: renames detected by id, event or unique hash; folder renames collapse to one move; M6 part done 2026-10-12: PATCH by id with If-Match and eTag chaining, Vault.rename locally, folder moves re-path records; tested with fakes) |
 | R-FIRST-1, R-FIRST-2 | M5, M7 | ☐ (M5 part done 2026-10-12: union mode never deletes (property-tested); malformed state, approot change and a missing approot id all force it) |
 | R-GUARD-1 | M5, M7 | ☐ (M5 part done 2026-10-12: `deleteCount`, `exceedsDeleteGuard` boundary, declined deletes suppressed until either side changes or "Sync now") |
-| R-PATH-1…4 | M4, M6 | ☐ (M4 part done 2026-10-12: NFC and collision detection, naming rules, 400-character limit and containment rules, unit tested; the pre-write re-check is M6) |
-| R-IO-1, R-IO-2 | M6 | ☐ |
+| R-PATH-1…4 | M4, M6 | ☑ (M4 part done 2026-10-12: NFC and collision detection, naming rules, 400-character limit and containment rules, unit tested; the pre-write re-check is M6; M6 part done 2026-10-12: containment and name rules re-checked before every local write, move, trash and mkdir, in the executor and in ObsidianVault) |
+| R-IO-1, R-IO-2 | M6 | ☑ (M6 2026-10-12: temp-then-rename and hash-before-write implemented and tested; adapter.rename refuses to overwrite on Ubuntu and the iPad, and the remove-then-rename fallback passed on both) |
 | R-NET-1 | M2, M3 | ☑ (M2 and M3, 2026-10-12: auth and Graph go only through the requestUrl transport; lint and the CI script enforce it) |
 | R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested) |
-| R-RES-2, R-RES-3 | M3, M6 | ☐ (M3 part done 2026-10-12: 10 MiB upload-session primitives, status and 404 handling; a 12 MiB two-fragment round trip passed on both devices; persistence and resume are M6) |
+| R-RES-2, R-RES-3 | M3, M6 | ☑ (M3 part done 2026-10-12: 10 MiB upload-session primitives, status and 404 handling; a 12 MiB two-fragment round trip passed on both devices; persistence and resume are M6; M6 part done 2026-10-12: sessions persisted before the first fragment and resumed from nextExpectedRanges, 404 restarts; saves at most 1 s after an op and before every destructive op; crash injection after every mutating call converges) |
 | R-UI-1…3 | M2, M7 | ☐ (M2 part done 2026-10-12: Account section) |
 | R-SEC-1, R-SEC-2 | M2 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 M2 part (SecretStorage observed on both devices, including a locked GNOME keyring) — README residual-risk text is owed in M9 |
 | R-SEC-3 | M3, M8 | ☐ (M3 part done 2026-10-12: typed redacting logger, unit tested; the sentinel test is M8) |

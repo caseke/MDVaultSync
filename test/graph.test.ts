@@ -285,6 +285,14 @@ test("download rejects a length that differs from the item size", async () => {
 	await assert.rejects(g.download(n.id), InvalidResponse);
 });
 
+test("download with an expected size refuses an item whose size changed, before any transfer (T-D6)", async () => {
+	const { g, fake } = setupGraph();
+	const n = fake.addFile("APPROOT", "a.bin", enc("12345"));
+	await assert.rejects(g.download(n.id, 3), InvalidResponse);
+	assert.ok(!fake.requests.some((r) => originOf(r.url) === DOWNLOAD_HOST), "the download host was never contacted");
+	assert.equal(new Uint8Array(await g.download(n.id, 5)).length, 5);
+});
+
 test("download refuses an untrusted download host without contacting it", async () => {
 	const { g, fake } = setupGraph({ downloadHost: "https://cdn.evil.example" });
 	const n = fake.addFile("APPROOT", "a.bin", enc("x"));

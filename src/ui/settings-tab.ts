@@ -65,8 +65,9 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 					const value = raw.trim();
 					idSetting.setDesc(idDesc(value));
 					if (value === "" || isValidClientId(value)) {
+						// Saved before it is used: a sign-in must never exist without data.json on disk (R-AUTH-9).
+						await this.plugin.saveData({ ...this.plugin.data, clientId: value });
 						this.plugin.data.clientId = value;
-						await this.plugin.saveData(this.plugin.data);
 						// Rebuild only the sign-in control, so the text field keeps focus.
 						if (signInSetting) this.renderSignInControl(signInSetting);
 					}

@@ -116,7 +116,7 @@ export interface RemotePort {
   putFragment(uploadUrl: string, start: number, total: number, bytes: ArrayBuffer): Promise<RemoteItem | null>; // item on final fragment
   getUploadStatus(uploadUrl: string): Promise<UploadStatus>;         // 404 → { nextExpectedStart: null }
   cancelUpload(uploadUrl: string): Promise<void>;
-  download(id: string): Promise<ArrayBuffer>;                        // via fresh downloadUrl, no auth header [G-DLD-1]
+  download(id: string, expectedSize?: number): Promise<ArrayBuffer>; // via fresh downloadUrl, no auth header [G-DLD-1]; refused before the GET if the item's size isn't expectedSize (M6, T-D6)
   createFolder(parentId: string, name: string): Promise<RemoteItem>; // conflictBehavior=fail
   uploadNew(parentId: string, name: string, data: ArrayBuffer): Promise<RemoteItem>;   // fail on name clash
   uploadReplace(id: string, ifMatch: string, data: ArrayBuffer): Promise<RemoteItem>;  // 412 → PreconditionFailed
@@ -141,6 +141,8 @@ export interface RemoteContent {
         onSession?: (s: UploadSessionInfo) => Promise<void>): Promise<{ item: RemoteItem; remoteHash: string }>;
   /** Stored-bytes hash this plaintext WOULD have remotely (encode + quickXorHash). Identity: equals the plaintext hash. */
   storedHashOf(plain: ArrayBuffer, path: VaultPath): Promise<string>;
+  /** Continues a persisted upload session from its nextExpectedRanges (M6, §6.3). null: the session is gone; start over. */
+  resume(rec: UploadSessionRecord, plain: ArrayBuffer): Promise<{ item: RemoteItem; remoteHash: string } | null>;
 }
 
 // ---------- persisted state ----------
@@ -522,11 +524,24 @@ After the run, a notice lists every conflict path (D-9). It stays up until click
 
 **local-move:** `vault.move` → `Vault.rename` [O-API-8]. Links were already rewritten by the device that made the rename, and those rewrites arrive as content changes.
 
+**M6 implementation (`core/executor.ts`, `core/remote-content.ts`, `core/saver.ts`, `core/records.ts`, `core/failure.ts`).** Clarifications of the rules above:
+- **Errors.** Core can't import `src/remote`, so the executor and engine get an `ErrorClassifier` (`src/remote/classify.ts` in production) that maps errors to a `FailureKind`: `precondition` (412), `name-exists` (409), `not-found`, `range` (416), `resync`, `auth`, `forbidden`, `quota`, `budget`, `network`, `hash-mismatch`, `raced`, `other`. `auth`, `forbidden` and `quota` end the run `failed`; `budget` and `network` end it `partial` with progress kept; anything else fails only its own op.
+- **Order and concurrency.** Pull side: local moves (one at a time, plan order), folder downloads (shallowest first), file downloads / conflicts / adopts / forgets (4 at a time), file trashes, folder trashes (deepest first). Push side: remote moves, folder creates, file uploads plus the queued conflict-copy uploads (4 at a time), file deletes, folder deletes (deepest first). A missing parent folder is created on demand (`createFolder`, adopting an existing one on 409).
+- **Records.** One `FileRecord` per remote id: writing a record drops any other record of that item (moves) or at that path under `caseKey`. Folder moves re-path every record under the folder. Every map write uses `Object.defineProperty`, so a note named `__proto__` stays data. Every item an op returns updates `remoteIndex` and an eTag chain, so an op after a `remote-move` on the same id sends the eTag the move returned.
+- **Downloads.** `getItem` first: the record gets the current eTag and hash, and an item that grew past the size cap since the pull is refused before any byte is buffered (T-D6). Bytes go through `RemoteContent.fetch` (length and QuickXorHash, then decode). The pre-write check runs before the transfer and again right before the write.
+- **Pre-write check.** `containmentProblem` and `validatePath` on the final path (T-T1). Then the file is compared with the scan: same size and mtime, or same hash. A file that changed, or appeared, since the scan turns a download into the conflict procedure. A trash or move of a changed file fails with `changed-during-sync`, and the next run re-plans it. A local move carries the scan entry to its new path, so a planned op at the destination doesn't mistake the moved file for a new one.
+- **Uploads.** The stat taken before the read is recorded as the mtime only if a stat after the upload still matches; otherwise mtime 0 makes the next scan re-hash, so an edit made during the upload is never masked. A session record is persisted (immediate save) right after `createUploadSession`; it is kept on a run-ending failure (for resume) and cancelled on any other failure.
+- **412 / 404 on replace.** The item is re-read. If it's gone, the local edit is uploaded as new (edits beat deletes). If only metadata changed (same cTag and hash), it retries once with the fresh eTag. Otherwise, and on `ReplaceRaced`, it runs the conflict procedure. A `remote-move` 412 retries once on a metadata-only change and otherwise fails, so the next run re-plans.
+- **Conflict procedure.** Uses the planner's copy path (which already re-validated a pending one) or, for conflicts the executor discovers itself, a pending one for the same pair or a fresh name. A copy path already holding other bytes is never overwritten: a fresh name is chosen. If the original changed again after the copy was written, the op fails `changed-during-sync` and the pending entry stays. The copy's upload is queued once, unless the plan already uploads it (a resumed conflict).
+- **Saves (`Saver`).** `dirty()` after every op schedules a save within one second; `flush()` runs before every overwrite, trash, delete, move and conflict copy, after a session is created, after the pull, and at the end. Saves are serialized, and `StateStore.save` serializes the state before its first await.
+
 ### 5.6 Report
 - Build a `SyncReport` and save it as `state.lastReport`. Update the status bar text and ribbon tooltip: "Synced 14:02", "Syncing…", "Sync error", "Sign-in required" or "Paused (confirm deletes)".
 - Raise a notice for errors and conflicts only. A successful sync with no conflicts makes no notice.
 - Clear `pendingLocal` entries that the run covered. Entries added during the run stay for the next one.
 - After a union-mode run finishes with `ok` or `partial`, set `firstSyncCompleted = true` and `unionPending = false`, and save. A run that fails or is cancelled leaves `unionPending` set, so the next run is union mode again.
+  - **M6:** `partial` counts only when every planned op got its turn. A union run that a dead network or the retry budget stopped early stays union, because the ops it never ran could include restores whose normal-mode equivalent is a delete. (Stricter than the line above; R-FIRST-1.)
+- **M6 engine (`core/engine.ts`).** `requestSync` loops while `rerunRequested` is set; callers during a run get the running promise. The state is loaded once and kept in memory; `reset()` (sign-out) drops it and bumps an epoch, and a run from an older epoch can no longer save (R-AUTH-7). The pull pages `delta` to its `deltaLink`, keeps the last occurrence per id, replaces the index on a full enumeration (`deltaLink` null or the children-walk sentinel), and otherwise merges, dropping every descendant of a deleted folder. A `resync` sets `unionPending`, clears the index and link, saves, and re-enumerates once. The scan re-hashes a file when it has a pending event, its size or mtime differs from its record, its record's mtime is 0, or its `transformId` differs; files over the size cap aren't read. Preview and delete prompts race a 10-minute `Clock.sleep`. A declined guard drops every delete op and records the file ones in `declinedDeletes`. `expectedWrites` and `noteLocalChange` are the hooks M7's vault events use.
 
 ## 6. Resilience
 
@@ -549,6 +564,7 @@ After the run, a notice lists every conflict path (D-9). It stays up until click
 - An interrupted run therefore resumes by running the full algorithm again. Pull is idempotent (same `deltaLink`), and the plan contains only what is left.
 
 ### 6.3 Upload sessions (files over 10 MiB, and replace-uploads if PUT ignores If-Match)
+**M6.** `RemoteContent.store` creates the session and sends the fragments; `RemoteContent.resume` (added to `ports.ts`, because the R-ENG-4 lint rule allows `putFragment` only in `remote-content.ts`) continues a persisted one. `core/upload-resume.ts` runs before the pull. It cancels and drops a session whose local file is gone or changed, or (replace) whose item's eTag is no longer `ifMatch`, then lets the next plan decide; a raced replace becomes a conflict there. A session that is gone (404) is dropped, and the planned upload starts over. Resume re-encodes the plaintext, so it relies on `encode` being deterministic (see §13). Whether creating a replace session changes the item's eTag on OneDrive personal hasn't been observed; if it did, every replace over 10 MiB would end as a (safe) conflict. M7's manual checks cover it.
 - **Create** with `POST /items/{parentId}:/{name}:/createUploadSession` (new file) or `POST /items/{id}/createUploadSession` with `if-match` (replace). Body: `{"item":{"@microsoft.graph.conflictBehavior":"fail"|"replace"}}` [G-UP-5]. A replace session without If-Match is refused locally (R-CC-1). `fileSize` is documented for OneDrive personal, but the 0.3.0 probe on Ubuntu got 400 `invalidRequest` from a body that included it, so it isn't sent. Probe v2 records which bodies OneDrive accepts.
 - **Persist** an `UploadSessionRecord` right after creation.
 - **Fragment size:** 10 MiB = 32 × 320 KiB (`FRAGMENT = 10 * 1024 * 1024`; assert `FRAGMENT % 327_680 === 0`) [G-UP-6]. The last fragment is the remainder.
@@ -644,7 +660,7 @@ All Graph and token JSON passes through hand-written type guards before use. Unk
 | File | Contents | Written via |
 |---|---|---|
 | `<configDir>/plugins/mdvaultsync/data.json` | settings, plus `fallbackRefreshToken` only when SecretStorage throws | `saveData` |
-| `<configDir>/plugins/mdvaultsync/sync-state.json` | `SyncState` | adapter write to `sync-state.json.tmp`, then `adapter.rename` (or remove+rename if rename won't overwrite; see M6 [O-API-10]) |
+| `<configDir>/plugins/mdvaultsync/sync-state.json` | `SyncState` | `platform/plugin-state-store.ts`: adapter write to `sync-state.json.tmp`, then `adapter.rename`; if rename refuses to replace the file (throws, or returns with the temp file still there), remove then rename (`platform/atomic.ts`, [O-API-10], M6 manual check: rename throws on both Ubuntu and the iPad, so the fallback is the normal path; a crash between remove and rename leaves the bytes in `sync-state.json.tmp`, which `load` reads) |
 | SecretStorage `mdvaultsync-refresh-token` | refresh token | `secretStorage.setSecret` |
 
 `configDir` is never synced (D-6), so none of these leave the device.
@@ -655,5 +671,6 @@ To add E2EE, implement `ContentTransform` (for example AES-GCM with a key derive
 - No-op detection compares plaintext hashes.
 - Download integrity compares stored-byte hashes.
 - Records with a different `transformId` are re-uploaded.
+- Upload-session resume (§6.3) re-encodes the plaintext and sends only the missing bytes, so the transform's `encode` must be deterministic for the same plaintext and path, or a resumed session must be restarted instead.
 
 File *names* stay plaintext in v1 and in that extension. Encrypting names is out of scope (SPEC §7).

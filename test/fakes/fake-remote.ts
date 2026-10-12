@@ -19,6 +19,7 @@ import type {
 	UploadTargetReplace,
 } from "../../src/core/ports.ts";
 import { GraphError } from "../../src/remote/errors.ts";
+import { HashMismatch } from "../../src/core/failure.ts";
 
 export const APPROOT_ID = "approot";
 export const PATH_PREFIX = "/Apps/MDVaultSync";
@@ -146,9 +147,10 @@ export class FakeRemote implements RemotePort {
 		return;
 	}
 
-	async download(id: string): Promise<ArrayBuffer> {
+	async download(id: string, expectedSize?: number): Promise<ArrayBuffer> {
 		const n = this.node(id);
 		if (n.isFolder) throw new GraphError(400, "invalidRequest");
+		if (expectedSize !== undefined && n.data.length !== expectedSize) throw new HashMismatch();
 		return toBuffer(n.data);
 	}
 

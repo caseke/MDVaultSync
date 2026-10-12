@@ -79,6 +79,18 @@ export class PluginTokenStore implements TokenStore {
 		if (this.readSecret()) throw new TokenClearError();
 	}
 
+	/**
+	 * R-AUTH-9. Obsidian has no uninstall hook [O-API-19]: uninstalling deletes the plugin folder but not
+	 * SecretStorage, so a reinstall would find the old refresh token. `hasPluginData` is false only when the plugin
+	 * folder holds neither data.json nor sync-state.json (leftover-install.ts); then the token is cleared. Returns
+	 * true if one was.
+	 */
+	async clearOrphan(hasPluginData: boolean): Promise<boolean> {
+		if (hasPluginData || !this.readSecret()) return false;
+		await this.clear();
+		return true;
+	}
+
 	private trySecret(value: string): boolean {
 		try {
 			this.secrets.setSecret(SECRET_ID, value);
