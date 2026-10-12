@@ -24,7 +24,7 @@ A **manual check** means a step only the owner can do on a real device. The sess
 ---
 
 ## M1: Scaffold, CI, hooks, security reviewer
-**Status:** done (2026-10-12). Session work verified, owner actions done and verified with `gh api`. The optional desktop load check is still open; steps are under **Manual check (optional)**.
+**Status:** done (2026-10-12). Session work verified, owner actions done and verified with `gh api`. The optional desktop load check passed on 2026-10-12 (Obsidian 1.14.4); see **Manual check (optional)**.
 
 **Goal.** An empty plugin that loads in Obsidian, with the full quality gate (lint, typecheck, test, build, audit) in local hooks and CI, before any real code exists.
 
@@ -99,11 +99,11 @@ cp main.js manifest.json styles.css ~/mdvs-test-vault/.obsidian/plugins/mdvaults
 
 Name the plugin folder `mdvaultsync` to match the manifest `id`; that is how Obsidian and BRAT install plugins. `.obsidian` is the default config folder. If you renamed it, use your folder name instead.
 
-Result: not yet run (optional in M1).
+Result: pass (owner, Ubuntu desktop, Obsidian 1.14.4, 2026-10-12). The plugin was listed and turned on, the console showed no MDVaultSync errors, and `app.plugins.enabledPlugins.has("mdvaultsync") && !!app.plugins.plugins.mdvaultsync` returned `true`.
 
 **Acceptance criteria**
 - All standard commands pass locally and in CI on both Node versions.
-- `main.js` builds. The plugin loads in a desktop Obsidian test vault and shows nothing (manual check, optional in M1).
+- `main.js` builds. The plugin loads in a desktop Obsidian test vault and shows nothing (manual check, optional in M1). Passed 2026-10-12.
 - Editing a `.ts` file with a lint error makes the hook print the error. Shown by deliberately adding an unused variable, then reverting.
 - The security-reviewer agent runs against the M1 diff and reports.
 - No sample-plugin code or names remain [O-SUB-3].
