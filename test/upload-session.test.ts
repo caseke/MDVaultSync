@@ -27,7 +27,7 @@ test("fragmentRanges: 12 MiB is 10 + 2; exact multiples; small and empty totals"
 	assert.throws(() => fragmentRanges(1.5), RangeError);
 });
 
-test("new-file session: conflictBehavior=fail and fileSize in the body, 10 + 2 MiB fragments, no auth to the upload host", async () => {
+test("new-file session: conflictBehavior=fail in the body (no fileSize), 10 + 2 MiB fragments, no auth to the upload host", async () => {
 	const { g, fake } = setupGraph();
 	const data = pattern(12 * MiB);
 	const s = await g.createUploadSession({ kind: "new", parentId: "APPROOT", name: "big.bin" }, null, data.byteLength);

@@ -530,6 +530,11 @@ iPad:   (paste here)
 - Re-review of fix commit 97b9dec: every finding above is confirmed resolved, with no high or medium findings.
   - Fixed, low: eTag and cTag from Graph are now required to be printable ASCII at parse time, so no path (the probe, or state M6 reads back) can forward a CR/LF eTag into a header.
 
+- Review of the 0.3.1 fix (87d5e67, `security-reviewer`): no high or medium findings. Its two low findings are requirements for later milestones, because nothing builds a local path from a remote name yet:
+  - **M4 must** run every remote-derived name (now up to 400 characters) through `validateSegment`. That means control characters, trailing dot or space, reserved names, and the 255 limit (design §7 step 3). The hostile-name tests must include 256–400-character names (R-PATH-3, R-PATH-4, T-T1).
+  - **M5 must** test that a skipped remote item (a name over 255, or any other skip) never produces a local or remote delete, and that it counts as a child for the folder-delete rule R-DEL-3 (T-D1).
+  - Info, fixed: the test title that still mentioned `fileSize`. Info, accepted: the probe's "none" session body relies on Graph's documented default `fail`. If probe v2 shows only "none" works, check that default before M6 depends on it.
+
 **Optional for the owner** (not fixed, no security or requirement impact):
 - **For M6:** the `.microsoft.com` transfer suffix is still broad. No token can leak (Graph is refused, and transfers carry no auth), but bytes could go to another `*.microsoft.com` host. Narrow the list from the probe's `uploadHost` and `downloadHost` (step 4 above).
 - **For M6:** downloads are length-checked only after `requestUrl` has buffered the whole body. The executor must skip items over the size cap before calling `download` (D-12, T-D6).
