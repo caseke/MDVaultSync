@@ -228,7 +228,19 @@ npm run lint && npm run typecheck && npm test && npm run build
 
 **How to run the manual checks** (owner; use a throwaway test vault, never the real one)
 
-Build and install on Ubuntu, as in M1: `git checkout claude/focused-shannon-aybk5p && npm ci && npm run build`, then copy `main.js`, `manifest.json` and `styles.css` into `<test vault>/.obsidian/plugins/mdvaultsync/`. On the iPad, install through BRAT (`caseke/MDVaultSync`, branch build) or copy the same three files into the test vault's plugin folder with the Files app. In **Settings → MDVaultSync**, paste the client ID from entra-setup.md.
+Build and install on Ubuntu, as in M1: `git checkout claude/focused-shannon-aybk5p && npm ci && npm run build`, then copy `main.js`, `manifest.json` and `styles.css` into `<test vault>/.obsidian/plugins/mdvaultsync/`. On the iPad, install through BRAT. BRAT installs only from published GitHub release assets [O-BRAT-1]; it can't install a branch. Make a pre-release first (one time per build you want on the iPad):
+```bash
+git fetch origin && git checkout claude/focused-shannon-aybk5p && git pull
+git tag 0.2.0 && git push origin 0.2.0        # triggers .github/workflows/release.yml
+```
+- Wait for the **Release** workflow run (Actions tab) to pass.
+- Open **Releases**, then the draft `0.2.0`. Check that it has `main.js`, `manifest.json` and `styles.css` and is marked **Pre-release**, then select **Publish release**.
+- Optional: `gh release download 0.2.0 -R caseke/MDVaultSync -p main.js && gh attestation verify main.js -R caseke/MDVaultSync`.
+- **On the iPad,** in the test vault: BRAT → **Add a beta plugin for testing** → `caseke/MDVaultSync` → version `0.2.0` (or latest) → **Add plugin**, then enable MDVaultSync under Community plugins.
+
+For a later build, bump the version in a session (`npm version 0.2.1 --no-git-tag-version`), then tag and publish it the same way. A tag that doesn't equal `manifest.json`'s version fails the workflow.
+
+In **Settings → MDVaultSync**, paste the client ID from entra-setup.md.
 
 1. **Ubuntu sign-in.** Select **Sign in**. The browser opens Microsoft's page. Sign in and consent, then allow the browser to open the `obsidian://` link. Pass: Obsidian comes forward, the notice says "Signed in to OneDrive.", and **Status** reads "Signed in to OneDrive.". For the trailing slash: before allowing the link, copy it from the browser prompt or history, and record whether it starts with `obsidian://mdvaultsync-auth/?` or `obsidian://mdvaultsync-auth?`.
 2. **iPad sign-in.** Same flow. Safari asks "Open in Obsidian?"; tap **Open**.
@@ -286,6 +298,15 @@ Tests were written first and run red (6 files failing to load) before the implem
 - `requestUrl` and SecretStorage are injected, so `request-url-transport.ts` and `token-store.ts` are unit tested. Extra supporting files: `src/settings.ts` (data.json shape and GUID check) and `src/ui/auth-messages.ts` (the error-code → message table, tested for completeness).
 - The token store also falls back when SecretStorage accepts a write but reads back a different value (SPEC D-5 updated).
 - Lint has 3 warnings in `settings-tab.ts`: `display()` is deprecated since 1.13 in favor of declarative settings. Declarative settings need 1.13.0 [O-API-18], and `minAppVersion` is 1.11.4 (R-ENV-3), so they can't be used yet. M7 must decide whether to raise `minAppVersion` or accept these warnings. The M7 criterion "no warnings from obsidianmd rules" conflicts with R-ENV-3 until then.
+- **Release workflow pulled forward from M9** (owner decision, 2026-10-12). BRAT can't install without a release, so manual check 2 needed one. `.github/workflows/release.yml` builds, attests and drafts a release on an `x.y.z` tag. 0.x versions are marked pre-release, and publishing stays manual. Version bumped to 0.2.0. `test/workflows.test.ts` checks SHA pins, permissions, the tag-only trigger and that no `${{ }}` appears inside `run:`.
+  - Review (`security-reviewer`, staged diff): no high findings.
+    - Fixed, medium: the workflow test passed even with the tag check deleted. It now asserts the step itself.
+    - Fixed, low: the permissions, trigger and job-set checks are now exact; `persist-credentials: false` is required; the injection check covers every workflow.
+    - Fixed, low: split into a read-only `build` job and a `release` job that runs no npm or repo code, so dev dependencies never see `id-token: write`.
+    - Fixed, low: the release job fails if the tag moved off the built commit during the run.
+    - Fixed, info: the M9 tag pattern now matches the workflow; `manifest.json` and `versions.json` keep their trailing newline (`version-bump.mjs` fixed); added a CHANGELOG `[0.2.0]` section.
+    - Open for the owner (optional now, an M9 action anyway): add a tag ruleset for `[0-9]*.[0-9]*.[0-9]*` so only you can create or move release tags (T-T8).
+    - To confirm on the first run: the attest step succeeds and `gh attestation verify` passes (O-REL-1, C-GH-3).
 - The neutral storage note says "your device's keyring", not "your OS keyring", because the obsidianmd sentence-case rule rejects "OS".
 
 **Security review** (`security-reviewer` agent; base: the M1 merge commit 6fcb471, since `origin/main` isn't fetched in the container):
@@ -576,11 +597,11 @@ npm run lint && npm run typecheck && npm test && npm run build && npm audit --au
 **Goal.** A first release, attested and built in CI, installable through BRAT on both devices.
 
 **Files**
-- `.github/workflows/release.yml`:
-  - Triggers on a tag push matching `[0-9]+.[0-9]+.[0-9]+*`.
-  - Runs `npm ci`, the standard checks, `npm run build`, then `actions/attest` over `main.js`, `manifest.json` and `styles.css` [O-REL-1], [C-GH-3].
+- `.github/workflows/release.yml` (**exists since M2**, pulled forward for BRAT pre-releases; M9 reviews it, adds the 1.0.0 release and the tag ruleset):
+  - Triggers on a tag push matching exactly `[0-9]+.[0-9]+.[0-9]+` (no suffix; `manifest.json` versions are `x.y.z` [O-SUB-1]).
+  - A `build` job (read-only token, no OIDC) runs `npm ci`, the standard checks and `npm run build`, and uploads the 3 files. A `release` job (no checkout, no npm) downloads them, re-checks that the tag still points at the built commit, then runs `actions/attest` over `main.js`, `manifest.json` and `styles.css` [O-REL-1], [C-GH-3]. This split came from the M2 review: dev-dependency code never runs next to `id-token: write`.
   - Creates a **draft** release with those assets.
-  - Job permissions: `contents: write`, `id-token: write`, `attestations: write`. Actions pinned by SHA.
+  - Job permissions: `build` has `contents: read`; `release` has `contents: write`, `id-token: write`, `attestations: write`. Actions pinned by SHA. `test/workflows.test.ts` enforces all of this.
   - Verifies that the tag equals `manifest.json` version, and fails otherwise [O-SUB-2], [O-BRAT-1].
 - `README.md`, complete:
   - what it does;

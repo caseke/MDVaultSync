@@ -14,7 +14,7 @@ Status: drafted in session 1 from Microsoft documentation. Microsoft redesigns t
 
 ## Before you start
 - **Already have an Entra tenant you control** (not your employer's)? Skip step 1 and use it. In step 2, switch to that directory instead of "Default Directory".
-- **Install MDVaultSync first** so you can finish step 5. Until release 1.0.0 (plan M9) it is installed through BRAT:
+- **Install MDVaultSync first** so you can finish step 5. Until release 1.0.0 (plan M9) it is installed through BRAT. BRAT needs a published GitHub release; before 1.0.0 these are 0.x pre-releases (see plan M2, "How to run the manual checks"). If BRAT says "No releases found in this repository", no release has been published yet.
   1. Install **BRAT** from Obsidian's Community plugins.
   2. Open the command palette and run **BRAT: Add a beta plugin for testing**.
   3. Enter `caseke/MDVaultSync`.

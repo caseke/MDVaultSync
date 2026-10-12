@@ -107,7 +107,7 @@ Data loss is the top risk for a sync tool.
 | E1 | Remote content turns into executable plugin code by being written under configDir. | **T-E1.** Same as T-T1: configDir and hidden paths are never written from remote. | M4, M6 |
 | E2 | Plugin asks for more Graph scope than it needs. | **T-E2.** Only `Files.ReadWrite.AppFolder offline_access` (R-AUTH-4). A unit test asserts the exact scope string. | M2 |
 | E3 | The plugin loads remote code, which the developer policies forbid [O-POL-3]. | **T-E3.** No `eval`, no `new Function`, no dynamic `import()` of URLs. Enforced by ESLint (`no-eval`, `no-implied-eval`, `no-new-func`) and the security-reviewer agent. | M1 |
-| E4 | CI workflows abused (e.g. `pull_request_target`, overly broad token permissions). | **T-E4.** Workflows set `permissions: contents: read` by default. The release job alone gets `contents: write`, `id-token: write` and `attestations: write` [O-REL-1]. No `pull_request_target`. Actions pinned by SHA. | M1, M9 |
+| E4 | CI workflows abused (e.g. `pull_request_target`, overly broad token permissions). | **T-E4.** Workflows set `permissions: contents: read` by default. The release job alone gets `contents: write`, `id-token: write` and `attestations: write` [O-REL-1]; the build job that runs npm code has `contents: read` only. No `pull_request_target`. Actions pinned by SHA. `test/workflows.test.ts` checks these. | M1, M2 (release.yml pulled forward), M9 |
 
 ## 4. Residual risks, stated plainly (copied into the README in M9)
 1. Any other Obsidian plugin you install can read MDVaultSync's refresh token and your vault. This is true of every Obsidian plugin. The token reaches only the MDVaultSync folder in your OneDrive.
