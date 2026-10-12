@@ -299,6 +299,15 @@ Tests were written first and run red (6 files failing to load) before the implem
 - A wrong `state` does not clear the pending sign-in, so a forged link can't cancel a real one. Expiry and a matching state do clear it.
 - **Paste fallback withdrawn** (owner, 2026-10-12, after check 3 showed a phishing warning): SPEC R-AUTH-3 withdrawn, D-4 and R-UI-1 updated, threat-model T-S4 n/a, design §4 and entra-setup.md updated; `REDIRECT_NATIVE`, `parsePastedUrl`, the paste UI and their tests removed.
   - **0.2.2, owner request:** the settings **Sign in** is now itself the link, built before the tap (`AuthClient.prepareSignIn`). The tap starts the sign-in synchronously (`activateSignIn`) and opens the default browser with no intermediate window, using the link mechanism proven on both devices in 0.2.1. The command keeps the modal.
+  - Review of the 0.2.2 change (`security-reviewer`): no high or medium findings; T-S1 holds (an untapped link accepts no callback). Fixed, low:
+    - overlapping prepares could leave the link and the client disagreeing (now only the latest prepare wins, `superseded`);
+    - a failed tap now rebuilds the link instead of leaving it dead;
+    - stale prepares can't raise a false "signed out" notice (`renderId` is bumped on every render and on hide);
+    - `already-signed-in` is re-checked after the await and on activation;
+    - a double tap on an expired sign-in reports `expired`;
+    - closing settings discards an untapped link (`discardPrepared`);
+    - the double-tap test now asserts the result, and 6 edge-case tests were added;
+    - T-S1/T-S3, design §4 and SPEC R-AUTH-3 updated.
   - Review of the 0.2.1 change (`security-reviewer`): no high findings.
     - Fixed, medium: T-S3 rested on an unverified "system browser" claim. Checks 1 and 2 now pass only if the page opens in the system browser (or a Safari tab sheet), not an Obsidian pane.
     - Fixed, medium: SPEC R-AUTH-3 and design §4 overstated that the primary flow worked on both devices. They now say iPad is pending, and R-AUTH-3 reopens if the iPad can't work.

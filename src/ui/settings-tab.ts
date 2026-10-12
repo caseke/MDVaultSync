@@ -2,7 +2,7 @@
 import { PluginSettingTab, Setting } from "obsidian";
 import type { App } from "obsidian";
 import type MDVaultSyncPlugin from "../main.ts";
-import type { AuthStatus } from "../remote/auth.ts";
+import { AuthError, type AuthStatus } from "../remote/auth.ts";
 import { isValidClientId } from "../settings.ts";
 
 const STATUS_TEXT: Record<AuthStatus, string> = {
@@ -29,11 +29,15 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 
 	override hide(): void {
 		this.shown = false;
+		// Invalidate in-flight prepares and drop the untapped link's verifier and state.
+		this.renderId++;
+		this.plugin.auth.discardPrepared();
 		super.hide();
 	}
 
 	override display(): void {
 		this.shown = true;
+		this.renderId++;
 		const { containerEl } = this;
 		containerEl.empty();
 		const auth = this.plugin.auth;
@@ -125,7 +129,10 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 				this.plugin.auth.activateSignIn(href);
 			} catch (e) {
 				evt.preventDefault();
+				evt.stopImmediatePropagation();
 				this.plugin.reportAuthError(e);
+				// Replace the dead link with a fresh one.
+				this.renderSignInControl(setting);
 			}
 		});
 		this.plugin.auth.prepareSignIn().then(
@@ -135,7 +142,9 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 				link.removeAttribute("aria-disabled");
 			},
 			(e: unknown) => {
-				if (id === this.renderId) this.plugin.reportAuthError(e);
+				// A superseded prepare is expected (a newer render or the command won); stay quiet.
+				const superseded = e instanceof AuthError && e.code === "superseded";
+				if (id === this.renderId && !superseded) this.plugin.reportAuthError(e);
 			},
 		);
 	}

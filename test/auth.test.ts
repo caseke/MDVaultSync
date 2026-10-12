@@ -534,6 +534,8 @@ describe("one-tap sign-in (prepare, then activate on tap)", () => {
 		auth.activateSignIn(href);
 		http.enqueueJson(200, tokenBody());
 		await auth.handleCallback({ code: "C", state: new URL(href).searchParams.get("state") ?? "" });
+		assert.equal(auth.status, "signed-in");
+		assert.equal(http.requests.length, 1);
 	});
 
 	test("expiry counts from the tap, not from prepare", async () => {
@@ -556,6 +558,59 @@ describe("one-tap sign-in (prepare, then activate on tap)", () => {
 		const { auth } = setup();
 		const href = await auth.prepareSignIn();
 		await auth.signOut();
+		assert.equal(await codeOf(Promise.resolve().then(() => auth.activateSignIn(href))), "no-pending");
+	});
+});
+
+describe("one-tap sign-in: review edge cases", () => {
+	const stateOf = (href: string) => new URL(href).searchParams.get("state") ?? "";
+
+	test("a successful sign-in discards a newer prepared link", async () => {
+		const { auth, http } = setup();
+		const a = await auth.prepareSignIn();
+		auth.activateSignIn(a);
+		const b = await auth.prepareSignIn();
+		http.enqueueJson(200, tokenBody());
+		await auth.handleCallback({ code: "C", state: stateOf(a) });
+		assert.equal(await codeOf(Promise.resolve().then(() => auth.activateSignIn(b))), "already-signed-in");
+	});
+
+	test("the command's buildAuthorizeUrl makes an earlier settings link dead", async () => {
+		const { auth } = setup();
+		const settingsLink = await auth.prepareSignIn();
+		await auth.buildAuthorizeUrl();
+		assert.equal(await codeOf(Promise.resolve().then(() => auth.activateSignIn(settingsLink))), "no-pending");
+	});
+
+	test("prepares finishing out of order: only the latest call wins", async () => {
+		const { auth } = setup();
+		const first = auth.prepareSignIn();
+		const second = auth.prepareSignIn();
+		const [r1, r2] = await Promise.allSettled([first, second]);
+		assert.equal(r2.status, "fulfilled");
+		assert.equal(r1.status, "rejected");
+		auth.activateSignIn(r2.status === "fulfilled" ? r2.value : "");
+	});
+
+	test("a second tap after the pending sign-in expired is refused", async () => {
+		const { auth, clock } = setup();
+		const href = await auth.prepareSignIn();
+		auth.activateSignIn(href);
+		clock.advance(10 * 60_000 + 1);
+		assert.equal(await codeOf(Promise.resolve().then(() => auth.activateSignIn(href))), "expired");
+	});
+
+	test("activation is refused while signed in", async () => {
+		const { auth, tokens } = setup();
+		const href = await auth.prepareSignIn();
+		tokens.value = "RT-other";
+		assert.equal(await codeOf(Promise.resolve().then(() => auth.activateSignIn(href))), "already-signed-in");
+	});
+
+	test("discardPrepared drops an untapped link", async () => {
+		const { auth } = setup();
+		const href = await auth.prepareSignIn();
+		auth.discardPrepared();
 		assert.equal(await codeOf(Promise.resolve().then(() => auth.activateSignIn(href))), "no-pending");
 	});
 });

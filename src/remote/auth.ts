@@ -21,6 +21,7 @@ export const AUTH_ERROR_CODES = [
 	"no-client-id",
 	"already-signed-in",
 	"no-pending",
+	"superseded",
 	"expired",
 	"state-mismatch",
 	"provider-error",
@@ -79,6 +80,8 @@ export class AuthClient implements AccessTokenProvider {
 	private pending: PendingSignIn | null = null;
 	/** In memory only; becomes `pending` when the user taps the link. */
 	private prepared: PreparedSignIn | null = null;
+	/** Bumped by every prepareSignIn and discardPrepared; only the latest prepare may store `prepared`. */
+	private prepareSeq = 0;
 	/** In memory only (R-AUTH-5). */
 	private access: { token: string; expiresAt: number; marginMs: number } | null = null;
 	private refreshing: Promise<string> | null = null;
@@ -117,10 +120,15 @@ export class AuthClient implements AccessTokenProvider {
 		// Signing in again over a live grant could relink the vault to another account; sign out first.
 		if (this.status === "signed-in") throw new AuthError("already-signed-in");
 		const epoch = this.epoch;
+		const seq = ++this.prepareSeq;
 		const verifier = createVerifier();
 		const state = createState();
 		const challenge = await challengeFromVerifier(verifier);
 		if (epoch !== this.epoch) throw new AuthError("signed-out");
+		// A newer prepare (or a discard) started meanwhile: let it win, so the UI and the client agree.
+		if (seq !== this.prepareSeq) throw new AuthError("superseded");
+		// Re-check after the await: a sign-in may have completed meanwhile.
+		if (this.isSignedIn()) throw new AuthError("already-signed-in");
 		const params: [string, string][] = [
 			["client_id", clientId],
 			["response_type", "code"],
@@ -143,14 +151,28 @@ export class AuthClient implements AccessTokenProvider {
 	 * runs from here. A second tap on the same link is a no-op; any other URL is refused.
 	 */
 	activateSignIn(url: string): void {
+		if (this.status === "signed-in") throw new AuthError("already-signed-in");
 		const p = this.prepared;
 		if (p && p.url === url) {
 			this.pending = { verifier: p.verifier, state: p.state, createdAt: this.clock.now(), url };
 			this.prepared = null;
 			return;
 		}
-		if (this.pending?.url === url) return;
+		const pending = this.pending;
+		if (pending?.url === url) {
+			if (this.clock.now() - pending.createdAt > PENDING_TTL_MS) {
+				this.pending = null;
+				throw new AuthError("expired");
+			}
+			return;
+		}
 		throw new AuthError("no-pending");
+	}
+
+	/** Drops an untapped link (the settings tab closed), including any prepare still in flight. */
+	discardPrepared(): void {
+		this.prepared = null;
+		this.prepareSeq++;
 	}
 
 	/** Prepare and activate in one step (the sign-in command and tests). */
@@ -313,6 +335,11 @@ export class AuthClient implements AccessTokenProvider {
 		const id = this.getClientId();
 		if (!isValidClientId(id)) throw new AuthError("no-client-id");
 		return id;
+	}
+
+	/** A method, not the getter, so TypeScript doesn't carry a narrowing across an await. */
+	private isSignedIn(): boolean {
+		return this.status === "signed-in";
 	}
 
 	private notify(): void {

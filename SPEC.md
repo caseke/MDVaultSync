@@ -27,7 +27,7 @@ Requirement keywords: **MUST** is required for v1. **SHOULD** is expected unless
 ### Account and auth
 - **R-AUTH-1.** Sign-in MUST use OAuth 2.0 authorization code with PKCE (S256) as a public client with no client secret, against the `/consumers` endpoints [I-AC-1], [I-AC-2], [I-AC-3].
 - **R-AUTH-2.** Sign-in MUST open in the system browser and return through the `obsidian://mdvaultsync-auth` protocol handler [I-BR-1], [O-API-3].
-- **R-AUTH-3.** *Withdrawn 2026-10-12 (owner decision).* It required a paste fallback through Microsoft's `nativeclient` page. The owner observed a phishing warning on that page in M2 testing, and the primary flow works on Ubuntu (the iPad re-run on 0.2.1 is pending), so the fallback was removed. If the primary flow can't be made to work on the iPad, this is reopened. A device with no `obsidian://` handler can't sign in.
+- **R-AUTH-3.** *Withdrawn 2026-10-12 (owner decision).* It required a paste fallback through Microsoft's `nativeclient` page. The owner observed a phishing warning on that page in M2 testing, and the primary flow works on both devices (Ubuntu on 0.2.0, iPad on 0.2.1), so the fallback was removed. A device with no `obsidian://` handler can't sign in.
 - **R-AUTH-4.** The requested scopes MUST be exactly `Files.ReadWrite.AppFolder offline_access` [I-REG-5].
 - **R-AUTH-5.** The refresh token MUST be stored in `app.secretStorage`. If that API throws, the plugin MUST store it in plugin data and show a standing warning in settings (D-5). Access tokens MUST be kept in memory only.
 - **R-AUTH-6.** Each refresh MUST replace the stored refresh token with the new one [I-TL-3]. Refreshes MUST be single-flight: concurrent callers share one refresh request.
