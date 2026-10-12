@@ -54,10 +54,10 @@ Out of the attacker model: a fully compromised OS or Obsidian binary (the attack
 ### Spoofing
 | ID | Threat | Mitigation | Milestone |
 |---|---|---|---|
-| S1 | A malicious web page or app opens `obsidian://mdvaultsync-auth?code=X&state=Y` to inject an attacker's authorization code. This is login CSRF, and it would connect the vault to the attacker's OneDrive. | **T-S1.** Accept a callback only while a sign-in is pending (10-minute expiry). Compare `state` (32 random bytes) in constant time, use it once, and use PKCE: the attacker's code can't be redeemed without our `code_verifier` [I-AC-2]. | M2 |
+| S1 | A malicious web page or app opens `obsidian://mdvaultsync-auth?code=X&state=Y` to inject an attacker's authorization code. This is login CSRF, and it would connect the vault to the attacker's OneDrive. | **T-S1.** Accept a callback only while a sign-in is pending (10-minute expiry). Compare `state` (32 random bytes) in constant time, use it once, and use PKCE: the attacker's code can't be redeemed without our `code_verifier` [I-AC-2]. A prepared but untapped sign-in accepts no callback; the 10 minutes start at the tap. | M2 |
 | S2 | Another iOS app registers the `obsidian://` scheme and intercepts the code. | **T-S2.** PKCE S256 makes an intercepted code useless [I-AC-2]. The code lifetime is about 1 minute [I-AC-3]. | M2 |
-| S3 | A phishing page imitates the Microsoft sign-in. | **T-S3.** Sign-in happens only in the system browser, never an embedded webview, so the user sees the real URL and their password manager works [I-BR-1]. Device code flow, a known phishing vector, is not enabled [I-DC-1]. | M2 |
-| S4 | The paste fallback is fed a URL from an attacker's site. | **T-S4.** Parse with `new URL()` and require origin `https://login.microsoftonline.com` and path `/common/oauth2/nativeclient`. Then apply the same `state` and PKCE checks as T-S1. | M2 |
+| S3 | A phishing page imitates the Microsoft sign-in. | **T-S3.** Sign-in happens only in the system browser, never an embedded webview (the settings **Sign in** link, or the link in the command's modal; both open the default browser, verified on Ubuntu and the iPad in M2), so the user sees the real URL and their password manager works [I-BR-1]. Device code flow, a known phishing vector, is not enabled [I-DC-1]. | M2 |
+| S4 | ~~The paste fallback is fed a URL from an attacker's site.~~ | **T-S4.** n/a since 2026-10-12: the paste fallback was removed (R-AUTH-3 withdrawn), so the only callback channel is `obsidian://`, covered by T-S1. | M2 |
 | S5 | DNS or TLS interception impersonates Graph or login. | **T-S5.** HTTPS only, through `requestUrl` (platform TLS validation). Transfer URLs must use `https:` and an allowlisted host suffix (design §8). | M3 |
 
 ### Tampering
@@ -107,7 +107,7 @@ Data loss is the top risk for a sync tool.
 | E1 | Remote content turns into executable plugin code by being written under configDir. | **T-E1.** Same as T-T1: configDir and hidden paths are never written from remote. | M4, M6 |
 | E2 | Plugin asks for more Graph scope than it needs. | **T-E2.** Only `Files.ReadWrite.AppFolder offline_access` (R-AUTH-4). A unit test asserts the exact scope string. | M2 |
 | E3 | The plugin loads remote code, which the developer policies forbid [O-POL-3]. | **T-E3.** No `eval`, no `new Function`, no dynamic `import()` of URLs. Enforced by ESLint (`no-eval`, `no-implied-eval`, `no-new-func`) and the security-reviewer agent. | M1 |
-| E4 | CI workflows abused (e.g. `pull_request_target`, overly broad token permissions). | **T-E4.** Workflows set `permissions: contents: read` by default. The release job alone gets `contents: write`, `id-token: write` and `attestations: write` [O-REL-1]. No `pull_request_target`. Actions pinned by SHA. | M1, M9 |
+| E4 | CI workflows abused (e.g. `pull_request_target`, overly broad token permissions). | **T-E4.** Workflows set `permissions: contents: read` by default. The release job alone gets `contents: write`, `id-token: write` and `attestations: write` [O-REL-1]; the build job that runs npm code has `contents: read` only. No `pull_request_target`. Actions pinned by SHA. `test/workflows.test.ts` checks these. | M1, M2 (release.yml pulled forward), M9 |
 
 ## 4. Residual risks, stated plainly (copied into the README in M9)
 1. Any other Obsidian plugin you install can read MDVaultSync's refresh token and your vault. This is true of every Obsidian plugin. The token reaches only the MDVaultSync folder in your OneDrive.

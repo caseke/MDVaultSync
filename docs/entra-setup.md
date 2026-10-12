@@ -5,7 +5,7 @@ MDVaultSync signs in to your **personal** Microsoft account through an app regis
 At the end you'll have an **Application (client) ID**, a GUID you paste into the MDVaultSync settings.
 
 Status: drafted in session 1 from Microsoft documentation. Microsoft redesigns the portal often. M2 checks every step against the live portal and corrects the wording; check the box when that's done.
-- [ ] Verified against the live portal (M2)
+- [x] Verified against the live portal (M2, 2026-10-12; wording corrected by the owner in commits c3e9655, 1cc3f8b, fe1379c and e486789)
 
 ## Why each step exists
 - Since June 2024, every app registration must live in a Microsoft Entra directory (tenant) [I-REG-1].
@@ -14,7 +14,7 @@ Status: drafted in session 1 from Microsoft documentation. Microsoft redesigns t
 
 ## Before you start
 - **Already have an Entra tenant you control** (not your employer's)? Skip step 1 and use it. In step 2, switch to that directory instead of "Default Directory".
-- **Install MDVaultSync first** so you can finish step 5. Until release 1.0.0 (plan M9) it is installed through BRAT:
+- **Install MDVaultSync first** so you can finish step 5. Until release 1.0.0 (plan M9) it is installed through BRAT. BRAT needs a published GitHub release; before 1.0.0 these are 0.x pre-releases (see plan M2, "How to run the manual checks"). If BRAT says "No releases found in this repository", no release has been published yet.
   1. Install **BRAT** from Obsidian's Community plugins.
   2. Open the command palette and run **BRAT: Add a beta plugin for testing**.
   3. Enter `caseke/MDVaultSync`.
@@ -46,9 +46,9 @@ Status: drafted in session 1 from Microsoft documentation. Microsoft redesigns t
 5. Choose **Register**.
 6. On the **Overview** page, copy the **Application (client) ID** and keep it for step 5.
 
-## Step 3: Add the fallback redirect URI
+## Step 3: Check the authentication settings
 1. Open **Authentication** (it may be labelled *Authentication (Preview)*).
-2. Under **Mobile and desktop applications**, add a second redirect URI: `https://login.microsoftonline.com/common/oauth2/nativeclient`. The portal often offers it as a checkbox [I-RU-4]. This is the redirect for "Sign in another way", where you paste the final URL. Leave the other suggested URIs **unticked**. `https://login.live.com/oauth20_desktop.srf` (LiveSDK) belongs to Microsoft's older Live SDK, and `msal<client-id>://auth` is the MSAL library's default scheme. MDVaultSync uses neither, and every extra redirect URI is one more place Microsoft will deliver an authorization code.
+2. Under **Mobile and desktop applications**, `obsidian://mdvaultsync-auth` must be the **only** redirect URI. The portal offers suggested URIs as checkboxes; leave them all **unticked**, including `https://login.microsoftonline.com/common/oauth2/nativeclient`. MDVaultSync had a paste fallback that used it; it was removed on 2026-10-12, so if you ticked it earlier, untick it and save [I-RU-4]. `https://login.live.com/oauth20_desktop.srf` (LiveSDK) belongs to Microsoft's older Live SDK, and `msal<client-id>://auth` is the MSAL library's default scheme. MDVaultSync uses neither, and every extra redirect URI is one more place Microsoft will deliver an authorization code.
 3. Confirm **Allow public client flows** is **No**. MDVaultSync doesn't use device code sign-in [I-DC-1].
 4. Under **Settings**, set **Enable Live SDK support** to **No**. It provides compatibility with Microsoft's legacy Live Connect SDK (`login.live.com`), which MDVaultSync doesn't use. *Unverified:* Microsoft Learn doesn't document this toggle [I-REG-7]. If the first sign-in fails with an account-type or consent error, set it back to Yes and retry before troubleshooting further.
 5. Make sure no **Web** or **Single-page application** platform is configured. Either one would break sign-in [I-AC-5], [I-AC-6].
@@ -67,14 +67,12 @@ Check the manifest (optional). Under **Manifest**, `signInAudience` should be `P
 
 ## Step 5: Connect MDVaultSync
 1. In Obsidian, open **Settings → MDVaultSync**. Paste the client ID into **Client ID**.
-2. Choose **Sign in**. Your browser opens Microsoft's sign-in page.
+2. Choose **Sign in**.
    - The consent screen says the app is **unverified**. That's expected for an app you registered yourself [I-REG-6].
    - The consent screen should show "Have full access to the application's folder". If it asks for anything more, stop and check step 4.
+   - Your default browser opens Microsoft's sign-in page.
 3. After you approve, the browser asks to open Obsidian. Allow it. Settings should show you as signed in.
-4. If Obsidian doesn't open, choose **Sign in another way** and sign in again. You'll land on a mostly blank Microsoft page. Copy its **full** address and paste it into the box in MDVaultSync settings.
-   - **iPad (Safari):** tap the address bar once so the full URL is selected, tap it again and choose **Copy**. Then switch back to Obsidian and paste.
-   - **Ubuntu:** click the address bar, press Ctrl+A then Ctrl+C.
-   - The address starts with `https://login.microsoftonline.com/common/oauth2/nativeclient?code=`.
+4. If the browser never offers to open Obsidian, the device has no handler for `obsidian://` links. MDVaultSync has no other sign-in method. On Ubuntu, check `xdg-mime query default x-scheme-handler/obsidian`; the Flatpak and .deb installs register one.
 
 ## Final check
 On the app registration, confirm each of these:
@@ -82,7 +80,7 @@ On the app registration, confirm each of these:
 |---|---|
 | Overview → Supported account types | Personal Microsoft accounts only (the Overview page may word it differently; the manifest `signInAudience` = `PersonalMicrosoftAccount` is the authoritative check) |
 | Authentication → platforms | Only **Mobile and desktop applications**; no Web, no Single-page application |
-| Mobile and desktop redirect URIs | `obsidian://mdvaultsync-auth` and `https://login.microsoftonline.com/common/oauth2/nativeclient` |
+| Mobile and desktop redirect URIs | Only `obsidian://mdvaultsync-auth` |
 | Authentication → Allow public client flows | No |
 | Authentication → Enable Live SDK support | No |
 | Authentication → App instance property lock | Enabled, All properties |

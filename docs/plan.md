@@ -180,24 +180,27 @@ CI on GitHub: the `CI` workflow passed on Node 22.x and 24.x (run 38186164011 at
 - Open, info: the README token-storage residual risk is M9 scope. The action SHAs were resolved from the upstream tags in this session.
 
 **Optional for the owner** (not fixed, no security or requirement impact):
+- **For M6:** after "Sign-in required", the user can sign in with a *different* account (`prompt=select_account`) over the kept sync state. The `already-signed-in` guard doesn't cover that case. Harmless while `StateStore` is a stub. M6 should store the drive or account identity in `SyncState` and clear state (or refuse) when a redemption brings a different one.
+- If the token clear on `invalid_grant` fails (SecretStorage writes broken), "sign-in required" is in memory only. After a restart the dead token reads as signed in until the next refresh fails again. Within one session the dead grant is never re-sent. Persisting a flag in `data.json` would close this. It needs SecretStorage writes to fail, so it is left open.
 - `npm audit` reports 3 **moderate** advisories: `moment` (GHSA-4p3w-j4w9-5jqw), pulled in by the `obsidian` type package (ours is 1.13.1; eslint-plugin-obsidianmd pins its own 1.12.3). `obsidian` is external to the bundle and `moment` never ships. It clears when both move to `obsidian` ≥ 1.14. Dependabot will propose it.
 - `test/hook.test.ts` covers only the hook's fast paths. The lint-failure path is covered by the Verify block, because it runs a full `tsc`.
 
 ---
 
 ## M2: Authentication
-**Status:** not started. **Owner prerequisite:** complete [entra-setup.md](entra-setup.md) and have the client ID ready.
+**Status:** done (2026-10-12). Session work verified; owner manual checks passed on 0.2.2 on Ubuntu (Flatpak) and the iPad. Check 3 withdrawn with R-AUTH-3. **Owner prerequisite:** complete [entra-setup.md](entra-setup.md) and have the client ID ready.
 
 **Goal.** Sign in, stay signed in across restarts, refresh, and sign out on both devices (design §4).
 
 **Files and interfaces**
 - `src/remote/pkce.ts`: verifier, challenge and state generation (WebCrypto only).
-- `src/remote/auth.ts`: `AuthClient` with `buildAuthorizeUrl(redirect)`, `handleCallback(params)`, `parsePastedUrl(url)` and `redeemCode()`. It implements `AccessTokenProvider` (single-flight refresh, rotation).
+- `src/remote/auth.ts`: `AuthClient` with `buildAuthorizeUrl()`, `handleCallback(params)` and `redeemCode()`. It implements `AccessTokenProvider` (single-flight refresh, rotation).
 - `src/remote/http.ts`: an `HttpTransport` decorator that adds `Authorization` only for `https://graph.microsoft.com/` (T-I4).
 - `src/platform/request-url-transport.ts`: `HttpTransport` over `requestUrl` with `throw: false`. Converts the body to ArrayBuffer and lower-cases header names.
 - `src/platform/token-store.ts`: `TokenStore` over SecretStorage, with the `data.json` fallback and the `backend` field (D-5; design §4).
 - `src/main.ts`: protocol handler `mdvaultsync-auth` (also accepting a trailing slash); commands `sign-in` and `sign-out`. Sign-out calls a `StateStore` stub here; M6 swaps in the real store.
-- `src/ui/settings-tab.ts`: the Account section only (status, Client ID, Sign in, Sign in another way plus paste box, Sign out, and the token-storage line: a warning for `plugin-data`, a neutral note for `secret-storage`).
+- `src/ui/sign-in-modal.ts` (added in 0.2.1): shows the authorize URL as a link the user taps, because iOS blocks `window.open` after an await.
+- `src/ui/settings-tab.ts`: the Account section only (status, Client ID, Sign in, Sign out, and the token-storage line: a warning for `plugin-data`, a neutral note for `secret-storage`).
 - Tests: `test/pkce.test.ts`, `test/auth.test.ts`, `test/http.test.ts`, `test/fakes/fake-http.ts`.
 
 **Acceptance criteria**
@@ -206,11 +209,11 @@ CI on GitHub: the `CI` workflow passed on Node 22.x and 24.x (run 38186164011 at
 - **Scope** is exactly `Files.ReadWrite.AppFolder offline_access` (unit test) (T-E2).
 - **Refresh:** concurrent `getAccessToken()` calls make one refresh request. The rotated refresh token replaces the stored one before the access token is returned. `invalid_grant` clears the token and sets "sign-in required".
 - **Authorization header** never goes to a non-Graph host (unit test).
-- **Paste fallback** rejects any origin or path other than `https://login.microsoftonline.com/common/oauth2/nativeclient`.
+- ~~**Paste fallback**~~ withdrawn 2026-10-12 (owner decision, SPEC R-AUTH-3).
 - **Manual checks** (owner, recorded below):
   1. Ubuntu: Sign in → browser → consent → Obsidian comes forward → "Signed in". Record whether the callback had a trailing slash [I-RU-3].
   2. iPad: same flow through Safari's "Open in Obsidian?" prompt.
-  3. One device: "Sign in another way" works end to end. If `nativeclient` doesn't work with `/consumers`, record the result in research.md [I-RU-4] and replace the fallback before closing the milestone.
+  3. ~~"Sign in another way"~~ withdrawn with R-AUTH-3.
   4. Token redemption succeeds, which proves `requestUrl` sends no breaking `Origin` header [I-AC-7]. Record it.
   5. Quit and relaunch Obsidian on both devices: still signed in. Record `TokenStore.backend` [O-API-6].
   5a. Ubuntu: run `xdg-mime query default x-scheme-handler/obsidian` and record the output [O-DEB-1]. Then, with GNOME Keyring locked or absent (for example a fresh user session with no keyring daemon), sign in. Record whether `setSecret` threw, and whether Obsidian showed a "secret storage provider" warning. Update research.md O-API-6 with the observed behavior.
@@ -224,10 +227,128 @@ CI on GitHub: the `CI` workflow passed on Node 22.x and 24.x (run 38186164011 at
 npm run lint && npm run typecheck && npm test && npm run build
 ```
 
-**Verification output**
+**How to run the manual checks** (owner; use a throwaway test vault, never the real one)
+
+Build and install on Ubuntu, as in M1: `git checkout claude/focused-shannon-aybk5p && npm ci && npm run build`, then copy `main.js`, `manifest.json` and `styles.css` into `<test vault>/.obsidian/plugins/mdvaultsync/`. On the iPad, install through BRAT. BRAT installs only from published GitHub release assets [O-BRAT-1]; it can't install a branch. Make a pre-release first (one time per build you want on the iPad):
+```bash
+git fetch origin && git checkout claude/focused-shannon-aybk5p && git pull
+git tag 0.2.0 && git push origin 0.2.0        # triggers .github/workflows/release.yml
 ```
-(paste here, plus manual check results 1–8)
+- Wait for the **Release** workflow run (Actions tab) to pass.
+- Open **Releases**, then the draft `0.2.0`. Check that it has `main.js`, `manifest.json` and `styles.css` and is marked **Pre-release**, then select **Publish release**.
+- Optional: `gh release download 0.2.0 -R caseke/MDVaultSync -p main.js && gh attestation verify main.js -R caseke/MDVaultSync`.
+- **On the iPad,** in the test vault: BRAT → **Add a beta plugin for testing** → `caseke/MDVaultSync` → version `0.2.0` (or latest) → **Add plugin**, then enable MDVaultSync under Community plugins.
+
+For a later build, bump the version in a session (`npm version 0.2.3 --no-git-tag-version`), then tag and publish it the same way. In BRAT on the iPad choose **Check for updates to all beta plugins** (or re-add with the new version). **0.2.1** fixed iPad sign-in through a small window; **0.2.2** makes **Sign in** in settings open the browser on the first tap. A tag that doesn't equal `manifest.json`'s version fails the workflow.
+
+In **Settings → MDVaultSync**, paste the client ID from entra-setup.md.
+
+1. **Ubuntu sign-in.** In **Settings → MDVaultSync**, select **Sign in** (0.2.2: no intermediate window; the **Sign in to OneDrive** command still shows one). Your default browser opens Microsoft's page; **pass requires** the default browser, not an Obsidian tab (Obsidian's Web viewer core plugin can open external links in-app; turn its "open external links" option off if it does) (T-S3). Sign in and consent, then allow the browser to open the `obsidian://` link. Pass: Obsidian comes forward, the notice says "Signed in to OneDrive.", and **Status** reads "Signed in to OneDrive.". For the trailing slash: before allowing the link, copy it from the browser prompt or history, and record whether it starts with `obsidian://mdvaultsync-auth/?` or `obsidian://mdvaultsync-auth?`.
+2. **iPad sign-in** (0.2.2). Tap **Sign in** in settings. Safari shows Microsoft's page on that first tap. After consent it asks "Open in Obsidian?"; tap **Open**. **Pass requires** the Microsoft page to open in Safari (or a Safari tab sheet with Safari's address bar and Done button), not inside an Obsidian pane or tab (T-S3, RFC 8252). Record which. If it opens inside Obsidian, or never returns to Obsidian, it fails: record what you saw.
+3. ~~Paste fallback~~ withdrawn (R-AUTH-3). Also remove the `nativeclient` redirect URI from your app registration if you added it (entra-setup.md step 3).
+4. **Origin header.** Checks 1 and 2 succeeding means token redemption worked, so `requestUrl` sent no breaking `Origin` [I-AC-7]. If redemption fails, the notice ends with a code; `invalid_request` with AADSTS9002326 means `Origin` was sent. Record which.
+5. **Restart.** Quit and relaunch Obsidian on both devices. Pass: **Status** still says signed in. Record **Token storage**: the neutral note means `secret-storage`, and the red warning means `plugin-data`.
+   5a. On Ubuntu, run `xdg-mime query default x-scheme-handler/obsidian` and record the output. Then sign out. Lock the keyring (Seahorse → right-click **Login** → **Lock**), or log in to a fresh user session that has no keyring daemon. Sign in again. Record which **Token storage** line appears, and whether Obsidian showed a "secret storage provider" warning. Update research.md O-API-6.
+6. **Sign out.** Select **Sign out**. Pass: **Status** reads "Signed out.", and the notice shows the app-access link. In the developer console (Ctrl+Shift+I on Ubuntu), run `app.secretStorage.getSecret("mdvaultsync-refresh-token")`. It must return `""` or `null`. Also check that `data.json` in the plugin folder has no `fallbackRefreshToken`.
+7. Open https://account.microsoft.com/privacy/app-access. Pass: MDVaultSync (your app registration's name) is listed. Update research.md C-MSA-1.
+8. **entra-setup.md accuracy.** Did every portal label in the guide match what you saw? Differences get fixed in the guide, then its verification box is ticked.
+9. Confirm that check 1 ran with **Enable Live SDK support = No**, and record the result in research.md I-REG-7.
+
+Manual check results (owner):
 ```
+1 Ubuntu sign-in:        pass on 0.2.2 (one tap → default browser; also passed on 0.2.0 and 0.2.1). Trailing slash not visible; both handlers registered
+2 iPad sign-in:          pass on 0.2.2 (one tap → default browser). History: FAIL on 0.2.0 (window.open after await blocked), pass on 0.2.1 (link in a modal)
+3 Paste fallback:        withdrawn by owner (nativeclient page showed a phishing warning); R-AUTH-3 withdrawn; nativeclient redirect removed from the registration
+4 Origin header:         pass on both: token redemption succeeded on Ubuntu (Electron) and iPad (0.2.1)
+5 Restart, backend:      Ubuntu = still signed in, secret-storage.  iPad = still signed in, secret-storage
+5a xdg-mime / keyring:   md.obsidian.Obsidian.desktop (Flatpak). Pass: (a) keyring locked, unlocked, Obsidian reopened: still signed in; (b) Obsidian opened with the keyring locked: the OS prompted for the keyring password, then still signed in, no errors or warnings. The plugin-data fallback was not triggered on a device (unit-tested)
+6 Sign-out:              pass (Ubuntu): getSecret → null, no fallbackRefreshToken in data.json
+7 App-access page:       pass: app listed
+8 entra-setup verified:  pass: the owner corrected the portal wording in an earlier chat (commits c3e9655, 1cc3f8b, fe1379c, e486789); box ticked
+9 Live SDK = No:         pass
+(all results from the owner, 2026-10-12)
+```
+
+**Verification output** (session container, Node v22.22.0, 2026-10-12, final M2 commit)
+```
+$ npm ci --ignore-scripts --no-fund      → 3 moderate (unchanged from M1, see M1 "Optional")
+$ npm run lint                           → exit 0, 0 errors, 3 warnings (see Deviations)
+$ npm run typecheck                      → exit 0
+$ npm test
+# tests 121
+# suites 7
+# pass 121
+# fail 0
+$ npm run build                          → exit 0 (main.js 15750 bytes)
+$ npm audit --audit-level=high           → exit 0
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+```
+Tests were written first and run red (6 files failing to load) before the implementation. Mutation spot checks, each reverted, make the suite fail: clearing the pending sign-in on a wrong state, removing single-flight, a hostname-prefix origin check, not stripping caller `Authorization`, no expiry, and removing both epoch guards.
+
+**Tests added:**
+- `test/pkce.test.ts`: the RFC 7636 vector, the verifier alphabet and length, and the state format.
+- `test/auth.test.ts`: authorize URL and exact scope; every callback rejection; error_description absent from errors and console; token POST shape (no Origin, no Authorization, no secret); hostile token JSON; single-flight refresh; rotation order; invalid_grant and interaction_required; sign-out and redemption races.
+- `test/http.test.ts`: Authorization only for `https://graph.microsoft.com`; stripped for 10 look-alike and transfer hosts.
+- `test/token-store.test.ts`: SecretStorage, the fallback, migration back, and clear verification.
+- `test/request-url-transport.test.ts`, `test/settings.test.ts`, `test/auth-messages.test.ts`.
+- `test/fakes/fake-http.ts` (FakeHttp, FakeClock).
+
+**Deviations from this milestone's text** (recorded in design.md §4 and in commit messages):
+- `buildAuthorizeUrl` is async, because the S256 digest is. Because of that, `window.open` after it was blocked on iOS (check 2). Since 0.2.1 the URL is shown as a link in `src/ui/sign-in-modal.ts`, the pattern Remotely Save uses. Until the fallback was withdrawn, `handleCallback` also took the arrival channel; it now takes only the params.
+- A wrong `state` does not clear the pending sign-in, so a forged link can't cancel a real one. Expiry and a matching state do clear it.
+- **Paste fallback withdrawn** (owner, 2026-10-12, after check 3 showed a phishing warning): SPEC R-AUTH-3 withdrawn, D-4 and R-UI-1 updated, threat-model T-S4 n/a, design §4 and entra-setup.md updated; `REDIRECT_NATIVE`, `parsePastedUrl`, the paste UI and their tests removed.
+  - **0.2.2, owner request:** the settings **Sign in** is now itself the link, built before the tap (`AuthClient.prepareSignIn`). The tap starts the sign-in synchronously (`activateSignIn`) and opens the default browser with no intermediate window, using the link mechanism proven on both devices in 0.2.1. The command keeps the modal.
+  - Review of the 0.2.2 change (`security-reviewer`): no high or medium findings; T-S1 holds (an untapped link accepts no callback). Fixed, low:
+    - overlapping prepares could leave the link and the client disagreeing (now only the latest prepare wins, `superseded`);
+    - a failed tap now rebuilds the link instead of leaving it dead;
+    - stale prepares can't raise a false "signed out" notice (`renderId` is bumped on every render and on hide);
+    - `already-signed-in` is re-checked after the await and on activation;
+    - a double tap on an expired sign-in reports `expired`;
+    - closing settings discards an untapped link (`discardPrepared`);
+    - the double-tap test now asserts the result, and 6 edge-case tests were added;
+    - T-S1/T-S3, design §4 and SPEC R-AUTH-3 updated.
+  - Review of the 0.2.1 change (`security-reviewer`): no high findings.
+    - Fixed, medium: T-S3 rested on an unverified "system browser" claim. Checks 1 and 2 now pass only if the page opens in the system browser (or a Safari tab sheet), not an Obsidian pane.
+    - Fixed, medium: SPEC R-AUTH-3 and design §4 overstated that the primary flow worked on both devices. They now say iPad is pending, and R-AUTH-3 reopens if the iPad can't work.
+    - Fixed, low: a forged or stale `obsidian://` link (`no-pending`, `state-mismatch`) no longer closes the real sign-in modal.
+    - Fixed, low: `onunload` closes the modal.
+    - Fixed, low: stale doc lines in design.md, plan.md (M2 file list), cost-estimate.md and research.md I-RU-4.
+- `requestUrl` and SecretStorage are injected, so `request-url-transport.ts` and `token-store.ts` are unit tested. Extra supporting files: `src/settings.ts` (data.json shape and GUID check) and `src/ui/auth-messages.ts` (the error-code → message table, tested for completeness).
+- The token store also falls back when SecretStorage accepts a write but reads back a different value (SPEC D-5 updated).
+- Lint has 3 warnings in `settings-tab.ts`: `display()` is deprecated since 1.13 in favor of declarative settings. Declarative settings need 1.13.0 [O-API-18], and `minAppVersion` is 1.11.4 (R-ENV-3), so they can't be used yet. M7 must decide whether to raise `minAppVersion` or accept these warnings. The M7 criterion "no warnings from obsidianmd rules" conflicts with R-ENV-3 until then.
+- **Release workflow pulled forward from M9** (owner decision, 2026-10-12). BRAT can't install without a release, so manual check 2 needed one. `.github/workflows/release.yml` builds, attests and drafts a release on an `x.y.z` tag. 0.x versions are marked pre-release, and publishing stays manual. Version bumped to 0.2.0. `test/workflows.test.ts` checks SHA pins, permissions, the tag-only trigger and that no `${{ }}` appears inside `run:`.
+  - Review (`security-reviewer`, staged diff): no high findings.
+    - Fixed, medium: the workflow test passed even with the tag check deleted. It now asserts the step itself.
+    - Fixed, low: the permissions, trigger and job-set checks are now exact; `persist-credentials: false` is required; the injection check covers every workflow.
+    - Fixed, low: split into a read-only `build` job and a `release` job that runs no npm or repo code, so dev dependencies never see `id-token: write`.
+    - Fixed, low: the release job fails if the tag moved off the built commit during the run.
+    - Fixed, info: the M9 tag pattern now matches the workflow; `manifest.json` and `versions.json` keep their trailing newline (`version-bump.mjs` fixed); added a CHANGELOG `[0.2.0]` section.
+    - Open for the owner (optional now, an M9 action anyway): add a tag ruleset for `[0-9]*.[0-9]*.[0-9]*` so only you can create or move release tags (T-T8).
+    - To confirm on the first run: the attest step succeeds and `gh attestation verify` passes (O-REL-1, C-GH-3).
+- The neutral storage note says "your device's keyring", not "your OS keyring", because the obsidianmd sentence-case rule rejects "OS".
+
+**Security review** (`security-reviewer` agent; base: the M1 merge commit 6fcb471, since `origin/main` isn't fetched in the container):
+- No high findings.
+- Fixed, medium: `TokenStore.clear()` ignored a failed overwrite, so sign-out could report success while the token stayed readable. It now verifies and throws `TokenClearError`, and sign-out shows "Sign-out is incomplete".
+- Fixed, medium: the `sign-in` command worked while already signed in. That could relink the vault to another account without clearing state, and an older in-flight refresh could overwrite the new grant. Sign-in is now refused with `already-signed-in`, and redemption bumps the epoch.
+- Fixed, low: sign-out now catches and reports failures (code-only logging) and always refreshes the tab.
+- Fixed, low: short-lived tokens rotated the refresh token on every call. The margin is now capped at half the lifetime.
+- Fixed, low: `isGraphUrl` threw a `TypeError` that carries the URL. It now throws a URL-free `InvalidUrl`.
+- Fixed, low (documented): the read-back fallback is recorded in SPEC D-5.
+- Re-review of fix commit b0cee50: all of the above confirmed resolved, no new high or medium findings.
+  - Fixed, low: if a sign-out landed while a sign-in was writing its token and the undo then failed, the failure went unreported. It is now surfaced with a notice and an honest status. Tested.
+  - Fixed, info: a sync-state clear failure no longer shows the token-failure text.
+  - Open, low (M6): see the first item under Optional.
+  - Open, low: see the second item under Optional.
+
+**Optional for the owner** (not fixed, no security or requirement impact):
+- **For M6:** after "Sign-in required", the user can sign in with a *different* account (`prompt=select_account`) over the kept sync state. The `already-signed-in` guard doesn't cover that case. Harmless while `StateStore` is a stub. M6 should store the drive or account identity in `SyncState` and clear state (or refuse) when a redemption brings a different one.
+- If the token clear on `invalid_grant` fails (SecretStorage writes broken), "sign-in required" is in memory only. After a restart the dead token reads as signed in until the next refresh fails again. Within one session the dead grant is never re-sent. Persisting a flag in `data.json` would close this. It needs SecretStorage writes to fail, so it is left open.
+- `AuthClient.redeemCode` is public, as this milestone's interface lists it. It could be made private and reached only through `handleCallback`. Other plugins share the JS realm, so this isn't a security boundary (T-I1).
+- A web page can open `obsidian://mdvaultsync-auth?…` repeatedly. Each forged link shows a "Sign-in link ignored" notice: harmless spam. These notices could be suppressed for `no-pending` and `state-mismatch`.
+- M3 must check that `requestUrl` doesn't carry `Authorization` across a Graph redirect to a CDN host (O-API-2), or never follow Graph redirects with auth.
+- The README's token-storage residual-risk note is M9 scope. Tokens are stored for real from this milestone on.
 
 ---
 
@@ -495,11 +616,11 @@ npm run lint && npm run typecheck && npm test && npm run build && npm audit --au
 **Goal.** A first release, attested and built in CI, installable through BRAT on both devices.
 
 **Files**
-- `.github/workflows/release.yml`:
-  - Triggers on a tag push matching `[0-9]+.[0-9]+.[0-9]+*`.
-  - Runs `npm ci`, the standard checks, `npm run build`, then `actions/attest` over `main.js`, `manifest.json` and `styles.css` [O-REL-1], [C-GH-3].
+- `.github/workflows/release.yml` (**exists since M2**, pulled forward for BRAT pre-releases; M9 reviews it, adds the 1.0.0 release and the tag ruleset):
+  - Triggers on a tag push matching exactly `[0-9]+.[0-9]+.[0-9]+` (no suffix; `manifest.json` versions are `x.y.z` [O-SUB-1]).
+  - A `build` job (read-only token, no OIDC) runs `npm ci`, the standard checks and `npm run build`, and uploads the 3 files. A `release` job (no checkout, no npm) downloads them, re-checks that the tag still points at the built commit, then runs `actions/attest` over `main.js`, `manifest.json` and `styles.css` [O-REL-1], [C-GH-3]. This split came from the M2 review: dev-dependency code never runs next to `id-token: write`.
   - Creates a **draft** release with those assets.
-  - Job permissions: `contents: write`, `id-token: write`, `attestations: write`. Actions pinned by SHA.
+  - Job permissions: `build` has `contents: read`; `release` has `contents: write`, `id-token: write`, `attestations: write`. Actions pinned by SHA. `test/workflows.test.ts` enforces all of this.
   - Verifies that the tag equals `manifest.json` version, and fails otherwise [O-SUB-2], [O-BRAT-1].
 - `README.md`, complete:
   - what it does;
@@ -544,8 +665,8 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 ## Requirement traceability
 | Requirement | Milestone | Done |
 |---|---|---|
-| R-ENV-1…4 | M1, M2 | ☐ |
-| R-AUTH-1…8 | M2 | ☐ |
+| R-ENV-1…4 | M1, M2 | ☐ (M2 part done 2026-10-12: personal accounts only via /consumers, iPad and Ubuntu sign-in verified, minAppVersion 1.11.4) |
+| R-AUTH-1…8 | M2 | ☑ (M2, 2026-10-12; R-AUTH-3 withdrawn. R-AUTH-7 token clear verified on Ubuntu; clearing real sync state is verified with the M6 StateStore) |
 | R-SCOPE-1…4 | M4, M5, M7 | ☐ |
 | R-TRIG-1…4 | M6 (lock), M7 | ☐ |
 | R-CD-1 | M3, M5 | ☐ |
@@ -560,11 +681,11 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-GUARD-1 | M5, M7 | ☐ |
 | R-PATH-1…4 | M4, M6 | ☐ |
 | R-IO-1, R-IO-2 | M6 | ☐ |
-| R-NET-1 | M2, M3 | ☐ |
+| R-NET-1 | M2, M3 | ☐ (M2 part done 2026-10-12: all HTTP through the requestUrl transport; M3 adds Graph) |
 | R-RES-1 | M3 | ☐ |
 | R-RES-2, R-RES-3 | M3, M6 | ☐ |
-| R-UI-1…3 | M2, M7 | ☐ |
-| R-SEC-1, R-SEC-2 | M2 | ☐ |
+| R-UI-1…3 | M2, M7 | ☐ (M2 part done 2026-10-12: Account section) |
+| R-SEC-1, R-SEC-2 | M2 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 M2 part (SecretStorage observed on both devices, including a locked GNOME keyring) — README residual-risk text is owed in M9 |
 | R-SEC-3 | M3, M8 | ☐ |
 | R-SEC-4 | M3, M4 | ☐ |
 | R-SEC-5 | M1, M9 | ☐ (M1 part done: lockfile, Dependabot, CodeQL, audit, SHA pins, and secret scanning and push protection verified 2026-10-12; release attestation is M9) |
