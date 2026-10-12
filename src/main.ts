@@ -35,7 +35,8 @@ export default class MDVaultSyncPlugin extends Plugin {
 	private pluginDir = "";
 
 	override async onload(): Promise<void> {
-		this.data = parseData(await this.loadData());
+		const raw: unknown = await this.loadData();
+		this.data = parseData(raw);
 		const { configDir } = this.app.vault;
 		this.pluginDir = normalizePath(this.manifest.dir ?? `${configDir}/plugins/${this.manifest.id}`);
 		this.stateStore = new PluginStateStore({
@@ -48,6 +49,8 @@ export default class MDVaultSyncPlugin extends Plugin {
 			get: () => this.data,
 			save: () => this.saveData(this.data),
 		});
+		// Before AuthClient reads the token: a sign-in left by an uninstalled copy is removed (R-AUTH-9).
+		await this.clearLeftoverSignIn(raw !== null && raw !== undefined);
 		const transport = createRequestUrlTransport((p) => requestUrl(p));
 		const clock: Clock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => window.setTimeout(r, ms)) };
 		this.auth = new AuthClient({
@@ -141,6 +144,27 @@ export default class MDVaultSyncPlugin extends Plugin {
 		} catch (e) {
 			this.reportAuthError(e);
 		}
+	}
+
+	/**
+	 * Obsidian has no uninstall hook [O-API-17], and uninstalling leaves SecretStorage alone. A refresh token with no
+	 * data.json is therefore left over from a removed copy: clear it, and say where to revoke the grant itself,
+	 * which a public client can't do [I-TL-4] (R-AUTH-9).
+	 */
+	private async clearLeftoverSignIn(hasPluginData: boolean): Promise<void> {
+		try {
+			if (!(await this.tokenStore.clearOrphan(hasPluginData))) return;
+		} catch (e) {
+			console.error(`MDVaultSync: could not clear a leftover sign-in (${e instanceof Error ? e.name : "unknown"})`);
+			new Notice("A OneDrive sign-in from an earlier install of this plugin couldn't be removed. Sign out in the plugin settings.", 0);
+			return;
+		}
+		const msg = createFragment((f) => {
+			f.appendText("Removed a OneDrive sign-in left over from an earlier install of this plugin. To also remove this app's access to your account, visit ");
+			f.createEl("a", { text: APP_ACCESS_URL, href: APP_ACCESS_URL });
+			f.appendText(".");
+		});
+		new Notice(msg, 0);
 	}
 
 	/** Writes, renames and removes two files in the plugin folder and shows what adapter.rename did. */

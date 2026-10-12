@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Milestone 6 (0.4.0): the part that carries out a sync plan, safely and so it can pick up where it stopped. Sync still isn't switched on in the app (that is milestone 7), so the only visible changes are a new diagnostics command and sign-out clearing the saved sync state.
+Milestone 6 (0.4.0, 0.4.1): the part that carries out a sync plan, safely and so it can pick up where it stopped. Sync still isn't switched on in the app (that is milestone 7), so the only visible changes are a new diagnostics command and sign-out clearing the saved sync state.
 
 ### Added
 
@@ -23,6 +23,7 @@ Milestone 6 (0.4.0): the part that carries out a sync plan, safely and so it can
 
 ### Changed
 
+- A OneDrive sign-in left behind by an uninstalled copy of the plugin is now removed when the plugin is installed again, with a notice linking to the page where you can also remove the app's access from your Microsoft account. Obsidian gives plugins no way to clean up at uninstall, and the sign-in is kept in Obsidian's secret storage, which uninstalling doesn't clear.
 - Signing out now also deletes the saved sync state file. Your notes are untouched, and the next sign-in starts with a safe merge that deletes nothing.
 
 Milestone 5: the sync planner, which decides what each sync will do. Sync isn't wired up yet, so nothing changes in the app.

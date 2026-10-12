@@ -33,6 +33,7 @@ Requirement keywords: **MUST** is required for v1. **SHOULD** is expected unless
 - **R-AUTH-6.** Each refresh MUST replace the stored refresh token with the new one [I-TL-3]. Refreshes MUST be single-flight: concurrent callers share one refresh request.
 - **R-AUTH-7.** Sign-out MUST clear the stored tokens and all sync state, leave local files untouched, and show the user where to remove the app's access in their Microsoft account [I-TL-4], [C-MSA-1].
 - **R-AUTH-8.** The Entra application (client) ID MUST be a user setting, with no default value (D-14).
+- **R-AUTH-9.** *Added 2026-10-12 (owner report: still signed in after uninstall and reinstall).* Obsidian has no uninstall hook [O-API-17]: uninstalling deletes the plugin folder (`data.json`, `sync-state.json`) but not SecretStorage. A refresh token found in SecretStorage when the plugin has no `data.json` is left over from a removed copy, and MUST be cleared at load, with a notice pointing to the account page where the grant itself can be removed [I-TL-4], [C-MSA-1].
 
 ### Scope of synced content
 - **R-SCOPE-1.** The plugin MUST sync notes and attachments, which means every file the Vault API can see.
