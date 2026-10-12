@@ -1,6 +1,7 @@
 // HttpTransport over Obsidian's requestUrl, the only network path (R-NET-1) [O-API-1].
 // main.ts passes the real requestUrl in, so this module has no runtime obsidian import and runs under node --test.
 import type { HttpRequest, HttpResponse, HttpTransport } from "../core/ports.ts";
+import { NetworkError } from "../remote/errors.ts";
 
 /** The subset of Obsidian's RequestUrlParam this transport uses. */
 export interface RequestUrlParamLike {
@@ -18,13 +19,8 @@ export interface RequestUrlResponseLike {
 }
 export type RequestUrlFn = (p: RequestUrlParamLike) => Promise<RequestUrlResponseLike>;
 
-/** A request that failed below HTTP. Carries no URL or message, so nothing sensitive reaches a log (T-I3). */
-export class NetworkError extends Error {
-	constructor() {
-		super("network");
-		this.name = "NetworkError";
-	}
-}
+// NetworkError lives in remote/errors.ts so the retry policy can recognize it; re-exported for existing callers.
+export { NetworkError };
 
 export function createRequestUrlTransport(requestUrlFn: RequestUrlFn): HttpTransport {
 	return {

@@ -80,7 +80,7 @@ test("accepts 255-character names, hidden names, unicode and emoji", () => {
 	}
 });
 
-const hostileIds = ["", "a/b", "a b", "../x", "x".repeat(257), "a%2Fb", "a:b", 5, null, undefined];
+const hostileIds = [".", "..", "...", "", "a/b", "a b", "../x", "x".repeat(257), "a%2Fb", "a:b", 5, null, undefined];
 for (const id of hostileIds) {
 	test(`rejects item id ${JSON.stringify(id)?.slice(0, 20)}`, () => {
 		assert.throws(() => parseDriveItem(file({ id })), InvalidResponse);
@@ -159,6 +159,8 @@ test("transfer URL allowlist (design §8, T-T5)", () => {
 		"",
 		"javascript:alert(1)",
 		"https://api.onedrive.com./x",
+		"https://graph.microsoft.com/v1.0/me/drive/items/X",
+		"https://GRAPH.microsoft.com/v1.0/me/drive/items/X/content",
 		7,
 		null,
 	]) assert.throws(() => checkTransferUrl(u), UntrustedUrl, String(u));

@@ -1,4 +1,5 @@
 import type { Clock, HttpRequest, HttpResponse, HttpTransport } from "../../src/core/ports.ts";
+import { NetworkError } from "../../src/remote/errors.ts";
 
 export type Responder = (req: HttpRequest) => HttpResponse | Promise<HttpResponse>;
 
@@ -20,7 +21,7 @@ export class FakeHttp implements HttpTransport {
 	/** Queue a network failure (the transport contract: throw, never a status). */
 	enqueueNetworkError(): this {
 		return this.enqueue(() => {
-			throw new Error("network");
+			throw new NetworkError();
 		});
 	}
 

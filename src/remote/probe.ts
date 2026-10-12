@@ -1,6 +1,7 @@
 // Graph capability probe (plan M3 "Probes", research.md §6). Runs inside the hidden App Folder subfolder
 // PROBE_DIR, which normal sync excludes (design §7), then deletes it. The result holds statuses, codes, counts,
-// durations and hostnames only: no vault names, URLs, tokens or contents (T-I3). Every name it creates is fixed.
+// durations, hostnames, and the App Folder's own name and parent drive path (set by Microsoft and the app
+// registration, not vault data). No vault names, URLs, tokens or contents (T-I3). Every name it creates is fixed.
 import type { Clock, RemoteItem } from "../core/ports.ts";
 import type { DeltaForm } from "./capabilities.ts";
 import { GraphError, sanitizeGraphCode, toGraphError } from "./errors.ts";
@@ -170,6 +171,8 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 	let folder: RemoteItem | null = null;
 	try {
 		const old = await graph.getChildByName(approot.id, PROBE_DIR);
+		// Only a leftover folder is ours to remove; a file of that name stops the probe instead.
+		if (old && !old.isFolder) throw new GraphError(409, "probe-name-taken");
 		if (old) {
 			await graph.delete(old.id, old.eTag);
 			result.leftoverRemoved = true;

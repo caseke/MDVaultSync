@@ -20,11 +20,13 @@ export class Diagnostics {
 	private readonly app: App;
 	private readonly deps: () => Omit<ProbeDeps, "platform">;
 	private readonly isSignedIn: () => boolean;
+	private readonly resetBudget: () => void;
 
-	constructor(app: App, deps: () => Omit<ProbeDeps, "platform">, isSignedIn: () => boolean) {
+	constructor(app: App, deps: () => Omit<ProbeDeps, "platform">, isSignedIn: () => boolean, resetBudget: () => void) {
 		this.app = app;
 		this.deps = deps;
 		this.isSignedIn = isSignedIn;
+		this.resetBudget = resetBudget;
 	}
 
 	async run(): Promise<void> {
@@ -37,6 +39,8 @@ export class Diagnostics {
 			return;
 		}
 		this.running = true;
+		// Each probe is its own run for the retry budget (design §6.1); M6 resets it per sync run.
+		this.resetBudget();
 		const modal = new DiagnosticsModal(this.app);
 		modal.open();
 		try {

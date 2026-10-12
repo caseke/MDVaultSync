@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RetryPolicy, parseRetryAfter, isRetryableStatus } from "../src/remote/retry.ts";
-import { RetryBudgetExceeded } from "../src/remote/errors.ts";
+import { NetworkError, RetryBudgetExceeded } from "../src/remote/errors.ts";
 import { RingLogger } from "../src/core/logger.ts";
 import { FakeClock } from "./fakes/fake-http.ts";
 import type { HttpResponse } from "../src/core/ports.ts";
@@ -171,11 +171,11 @@ test("jitter is a fraction of the exponential window", async () => {
 
 test("network errors are retried, then rethrown after the last attempt", async () => {
 	const { policy, log } = setup();
-	const boom = new Error("network");
+	const boom = new NetworkError();
 	const s = script([boom, res(200)]);
 	assert.equal((await policy.execute(s.send)).status, 200);
 	assert.equal(log.entries()[0]?.code, "network");
-	const s2 = script(Array.from({ length: 6 }, () => new Error("network")));
+	const s2 = script(Array.from({ length: 6 }, () => new NetworkError()));
 	await assert.rejects(policy.execute(s2.send), /network/);
 	assert.equal(s2.calls(), 6);
 });
@@ -203,4 +203,14 @@ test("Retry-After retries are bounded by the budget, not the attempt cap", async
 	const s = script(items);
 	assert.equal((await policy.execute(s.send)).status, 200);
 	assert.equal(s.calls(), 9);
+});
+
+test("errors other than NetworkError are rethrown at once, without backoff", async () => {
+	const { policy, sleeps, log } = setup();
+	class AuthLike extends Error {}
+	const s = script([new AuthLike("sign-in-required"), res(200)]);
+	await assert.rejects(policy.execute(s.send), AuthLike);
+	assert.equal(s.calls(), 1);
+	assert.deepEqual(sleeps, []);
+	assert.equal(log.entries().length, 0);
 });

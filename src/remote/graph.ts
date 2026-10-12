@@ -28,6 +28,7 @@ import {
 	checkTransferUrl,
 	isGraphApiUrl,
 	isValidId,
+	isValidName,
 	parseChildrenPage,
 	parseDeltaPage,
 	parseDriveItem,
@@ -47,9 +48,17 @@ const MAX_TAG = 512;
 /** `$select` for single-item reads; the download URL must be selected explicitly [G-DLD-1]. */
 const ITEM_SELECT = "id,name,eTag,cTag,size,file,folder,parentReference,lastModifiedDateTime,deleted,@microsoft.graph.downloadUrl";
 const DRIVE_ROOT_PREFIX = "/drive/root:";
+/** Longest App Folder path accepted; the whole drive path is limited to 400 characters [G-NM-4]. */
+const MAX_PREFIX = 400;
 
 export interface GraphClientOptions {
+	/** For Graph API calls: the AuthorizingTransport. */
 	transport: HttpTransport;
+	/**
+	 * For upload and download URLs: a transport with no auth decorator, so a tampered transfer URL can never carry
+	 * the token [G-UP-7], [G-DLD-1] (T-I4). Defaults to `transport` (tests); main.ts passes the bare requestUrl one.
+	 */
+	transferTransport?: HttpTransport;
 	retry: RetryPolicy;
 	clock: Clock;
 	logger?: Logger;
@@ -69,9 +78,9 @@ function idSegment(id: string): string {
 	return encodeURIComponent(id);
 }
 
-/** If-Match goes out verbatim (eTags are opaque quoted strings [G-TAG-2]); refuse anything that could split headers. */
+/** If-Match goes out verbatim (eTags are opaque quoted strings [G-TAG-2]); printable ASCII only, so it can't split headers. */
 function checkIfMatch(v: string): string {
-	if (v.length === 0 || v.length > MAX_TAG || /[\r\n]/.test(v)) throw new RangeError("invalid-if-match");
+	if (!/^[\x20-\x7e]+$/.test(v) || v.length > MAX_TAG) throw new RangeError("invalid-if-match");
 	return v;
 }
 
@@ -81,6 +90,7 @@ function json(res: HttpResponse): unknown {
 
 export class GraphClient implements RemotePort {
 	private readonly transport: HttpTransport;
+	private readonly transferTransport: HttpTransport;
 	private readonly retry: RetryPolicy;
 	private readonly clock: Clock;
 	private readonly logger: Logger;
@@ -89,9 +99,11 @@ export class GraphClient implements RemotePort {
 	private readonly maxName: number;
 	private approotId: string | null = null;
 	private readonly call: session.Call;
+	private readonly transferCall: session.Call;
 
 	constructor(opts: GraphClientOptions) {
 		this.transport = opts.transport;
+		this.transferTransport = opts.transferTransport ?? opts.transport;
 		this.retry = opts.retry;
 		this.clock = opts.clock;
 		this.logger = opts.logger ?? NULL_LOGGER;
@@ -99,13 +111,14 @@ export class GraphClient implements RemotePort {
 		this.maxPages = opts.maxPages ?? MAX_PAGES;
 		this.maxName = opts.maxNameLength ?? NAME_LIMIT;
 		this.call = (req) => this.send(req);
+		this.transferCall = (req) => this.send(req, this.transferTransport);
 	}
 
 	/** One request through retry and logging. Logs status and duration only (design §9). */
-	private async send(req: HttpRequest): Promise<HttpResponse> {
+	private async send(req: HttpRequest, transport: HttpTransport = this.transport): Promise<HttpResponse> {
 		const t0 = this.clock.now();
 		try {
-			const res = await this.retry.execute(() => this.transport.send(req));
+			const res = await this.retry.execute(() => transport.send(req));
 			this.logger.event("graph.request", { status: res.status, durationMs: this.clock.now() - t0 });
 			return res;
 		} catch (e) {
@@ -147,8 +160,11 @@ export class GraphClient implements RemotePort {
 			throw new InvalidResponse();
 		}
 		const pathPrefix = `${parent}/${item.name}`;
+		// Every decoded segment must be a valid name with no control characters (R-SEC-4, M3 review).
 		const segments = pathPrefix.split("/").slice(1);
-		if (!pathPrefix.startsWith("/") || segments.some((s) => s === "" || s === "." || s === "..")) throw new InvalidResponse();
+		const hasControl = (s: string) => Array.from(s).some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f);
+		const segmentOk = (s: string) => isValidName(s) && !hasControl(s);
+		if (!pathPrefix.startsWith("/") || pathPrefix.length > MAX_PREFIX || !segments.every(segmentOk)) throw new InvalidResponse();
 		this.approotId = item.id;
 		return { item, pathPrefix };
 	}
@@ -261,15 +277,15 @@ export class GraphClient implements RemotePort {
 	}
 
 	putFragment(uploadUrl: string, start: number, total: number, bytes: ArrayBuffer): Promise<RemoteItem | null> {
-		return session.putFragment(this.call, uploadUrl, start, total, bytes);
+		return session.putFragment(this.transferCall, uploadUrl, start, total, bytes);
 	}
 
 	getUploadStatus(uploadUrl: string): Promise<UploadStatus> {
-		return session.getUploadStatus(this.call, uploadUrl);
+		return session.getUploadStatus(this.transferCall, uploadUrl);
 	}
 
 	cancelUpload(uploadUrl: string): Promise<void> {
-		return session.cancelUpload(this.call, uploadUrl);
+		return session.cancelUpload(this.transferCall, uploadUrl);
 	}
 
 	/**
@@ -280,7 +296,7 @@ export class GraphClient implements RemotePort {
 		const r = await this.getItemWithUrl(`${GRAPH_BASE}/me/drive/items/${idSegment(id)}?$select=${ITEM_SELECT}`);
 		if (!r) throw new GraphError(404, "itemNotFound");
 		if (r.item.isFolder || r.item.deleted || r.downloadUrl === null) throw new InvalidResponse();
-		const res = await this.send({ url: checkTransferUrl(r.downloadUrl), method: "GET" });
+		const res = await this.send({ url: checkTransferUrl(r.downloadUrl), method: "GET" }, this.transferTransport);
 		if (res.status !== 200) throw toGraphError(res);
 		if (res.body.byteLength !== r.item.size) throw new InvalidResponse();
 		return res.body;

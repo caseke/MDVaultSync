@@ -3,7 +3,7 @@
 // errors back off exponentially with full jitter; total backoff per run is capped.
 import type { Clock, HttpResponse } from "../core/ports.ts";
 import { NULL_LOGGER, type Logger } from "../core/logger.ts";
-import { RetryBudgetExceeded } from "./errors.ts";
+import { NetworkError, RetryBudgetExceeded } from "./errors.ts";
 
 export const RETRY_AFTER_MIN_MS = 1_000;
 export const RETRY_AFTER_MAX_MS = 300_000;
@@ -82,7 +82,7 @@ export class RetryPolicy {
 
 	/**
 	 * Sends until a non-retryable status, or attempts or budget run out. Returns the last response; rethrows the
-	 * last network error. Throws RetryBudgetExceeded when the next wait would pass the run budget.
+	 * last NetworkError, and any other error at once. Throws RetryBudgetExceeded when the next wait would pass the run budget.
 	 */
 	async execute(send: () => Promise<HttpResponse>): Promise<HttpResponse> {
 		for (let attempt = 1; ; attempt++) {
@@ -92,6 +92,9 @@ export class RetryPolicy {
 			try {
 				res = await send();
 			} catch (e) {
+				// Only transport failures are retried. Anything else (an auth error from the token refresh, a bad
+				// URL) can't be fixed by waiting, so it goes straight back to the caller (design §6.1).
+				if (!(e instanceof NetworkError)) throw e;
 				failure = e;
 			}
 			if (res && !isRetryableStatus(res.status)) return res;

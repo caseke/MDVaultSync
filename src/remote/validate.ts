@@ -81,7 +81,8 @@ export const TRANSFER_HOST_SUFFIXES: readonly string[] = [
 	".livefilestore.com",
 ];
 export const NAME_LIMIT = 255;
-const ID_RE = /^[A-Za-z0-9!._-]{1,256}$/;
+// Dot-only ids are refused: "..", unencoded in a URL path, would climb out of /items/ (M3 review).
+const ID_RE = /^(?!\.+$)[A-Za-z0-9!._-]{1,256}$/;
 const QXH_RE = /^[A-Za-z0-9+/]{27}=$/;
 const MAX_TAG = 512;
 const MAX_TIMESTAMP = 64;
@@ -105,6 +106,7 @@ function safeSize(v: unknown): number {
 }
 
 export function isValidId(v: unknown): v is string {
+	// ID_RE: 1–256 of [A-Za-z0-9!._-], not only dots (design §8).
 	return typeof v === "string" && ID_RE.test(v);
 }
 
@@ -120,6 +122,11 @@ function nameOk(v: unknown, max: number): v is string {
 		v !== "." &&
 		v !== ".."
 	);
+}
+
+/** True for a valid item name (design §8). */
+export function isValidName(v: unknown): v is string {
+	return nameOk(v, NAME_LIMIT);
 }
 
 /** Throws RangeError for a name we must not send. `max` is raised only by the probe's name-length test. */
@@ -201,6 +208,9 @@ export function checkTransferUrl(v: unknown): string {
 		u.username === "" &&
 		u.password === "" &&
 		u.port === "" &&
+		// Graph itself is never a transfer host: a Graph URL here would be an authorized, unconditional request
+		// (T-I4, M3 review). Transfers also use a transport with no auth decorator.
+		host !== "graph.microsoft.com" &&
 		TRANSFER_HOST_SUFFIXES.some((s) => host.endsWith(s) && host.length > s.length);
 	if (!ok) throw new UntrustedUrl();
 	return v;

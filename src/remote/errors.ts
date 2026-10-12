@@ -30,6 +30,14 @@ export class ResyncRequired extends GraphError {
 	}
 }
 
+/** A request that failed below HTTP (HttpTransport contract). Carries no URL or message (T-I3). */
+export class NetworkError extends Error {
+	constructor() {
+		super("network");
+		this.name = "NetworkError";
+	}
+}
+
 /** A transfer or paging URL outside the allowlist (design §8, T-T5). Carries no URL: they are bearer credentials. */
 export class UntrustedUrl extends Error {
 	constructor() {

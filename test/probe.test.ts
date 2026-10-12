@@ -143,3 +143,13 @@ test("a cleanup failure is reported", async () => {
 	const r = await runProbe(deps);
 	assert.deepEqual(r.cleanup, { ok: false, status: 403, code: "accessDenied" });
 });
+
+test("a file (not a folder) at the probe name is left alone and the probe stops", async () => {
+	const { fake, deps } = setup();
+	const f = fake.addFile("APPROOT", PROBE_DIR, enc("not ours"));
+	const r = await runProbe(deps);
+	assert.equal(fake.nodes.has(f.id), true);
+	assert.equal(r.leftoverRemoved, false);
+	assert.ok(r.errors >= 1);
+	assert.deepEqual(r.cleanup, { ok: true });
+});

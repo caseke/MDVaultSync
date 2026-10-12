@@ -51,13 +51,22 @@ export default class MDVaultSyncPlugin extends Plugin {
 		// Graph stack: requestUrl → Authorization for graph.microsoft.com only (401 → refresh once) → retry (design §6.1).
 		const graphTransport = new AuthorizingTransport(transport, this.auth);
 		const retry = new RetryPolicy({ clock, logger: this.logger });
+		// Transfer URLs use the bare transport: no auth decorator, so they can never carry the token (T-I4).
 		const graphFor = (deltaForm?: DeltaForm) =>
-			new GraphClient({ transport: graphTransport, retry, clock, logger: this.logger, ...(deltaForm ? { deltaForm } : {}) });
+			new GraphClient({
+				transport: graphTransport,
+				transferTransport: transport,
+				retry,
+				clock,
+				logger: this.logger,
+				...(deltaForm ? { deltaForm } : {}),
+			});
 		this.graph = graphFor();
 		const diagnostics = new Diagnostics(
 			this.app,
 			() => ({ graph: this.graph, graphFor, clock, pluginVersion: this.manifest.version }),
 			() => this.auth.status === "signed-in",
+			() => retry.resetBudget(),
 		);
 
 		this.settingTab = new MDVaultSyncSettingTab(this.app, this);

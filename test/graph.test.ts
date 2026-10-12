@@ -31,7 +31,16 @@ test("getAppRoot: percent-encoded parent path is decoded; bad paths are rejected
 	assert.equal((await g.getAppRoot()).pathPrefix, "/My Apps/My App");
 	http.enqueueJson(200, item("/drive/root:"));
 	assert.equal((await g.getAppRoot()).pathPrefix, "/My App");
-	for (const bad of ["/drives/x/root:/Apps", "/drive/root:/%E0%A4%A", "/drive/root:/a/../b", undefined]) {
+	for (const bad of [
+		"/drives/x/root:/Apps",
+		"/drive/root:/%E0%A4%A",
+		"/drive/root:/a/../b",
+		"/drive/root:/a%00b",
+		"/drive/root:/a%0Ab",
+		"/drive/root:/a%5Cb",
+		`/drive/root:/${"a/".repeat(200)}`,
+		undefined,
+	]) {
 		http.enqueueJson(200, item(bad));
 		await assert.rejects(g.getAppRoot(), InvalidResponse, String(bad));
 	}
@@ -207,7 +216,7 @@ test("uploadReplace sends If-Match verbatim; stale → 412 [G-UP-3], [G-TAG-2]",
 
 test("If-Match values with CR, LF or empty are refused locally", async () => {
 	const { g, fake } = setupGraph();
-	for (const bad of ["", "\"e\"\r\nX-Evil: 1", "a\nb", "e".repeat(513)]) {
+	for (const bad of ["", "\"e\"\r\nX-Evil: 1", "a\nb", "a\u0000b", "a\tb", "é", "e".repeat(513)]) {
 		await assert.rejects(g.uploadReplace("X", bad, bytes("1")), RangeError);
 		await assert.rejects(g.move("X", bad, "P", "n.md"), RangeError);
 		await assert.rejects(g.delete("X", bad), RangeError);
@@ -324,7 +333,7 @@ test("a network failure is logged by error name only and rethrown", async () => 
 	const { g, log } = graphOver(http);
 	for (let i = 0; i < 6; i++) http.enqueueNetworkError();
 	await assert.rejects(g.getAppRoot(), /network/);
-	assert.equal(last(log.entries().filter((e) => e.op === "graph.request"))?.code, "Error");
+	assert.equal(last(log.entries().filter((e) => e.op === "graph.request"))?.code, "NetworkError");
 });
 
 test("invalid JSON from Graph surfaces as InvalidResponse", async () => {
@@ -339,4 +348,34 @@ test("sendRaw goes through retry and logging, and only to Graph", async () => {
 	const res = await g.sendRaw({ url: `${GRAPH}/me/drive/special/approot`, method: "GET" });
 	assert.equal(res.status, 200);
 	await assert.rejects(g.sendRaw({ url: "https://evil.example/x", method: "GET" }), UntrustedUrl);
+});
+
+test("transfers use the transfer transport, Graph calls the authorizing one (T-I4)", async () => {
+	const { fake, transport } = setupGraph();
+	const graphSide: string[] = [];
+	const transferSide: string[] = [];
+	const spy = (inner: typeof transport, log: string[]) => ({
+		send: (req: Parameters<typeof transport.send>[0]) => {
+			log.push(new URL(req.url).hostname);
+			return inner.send(req);
+		},
+	});
+	const { g } = graphOver(spy(transport, graphSide), { transferTransport: spy(fake, transferSide) });
+	const n = fake.addFile("APPROOT", "a.bin", enc("abc"));
+	await g.download(n.id);
+	const s = await g.createUploadSession({ kind: "new", parentId: "APPROOT", name: "b.bin" }, null, 3);
+	await g.getUploadStatus(s.uploadUrl);
+	await g.putFragment(s.uploadUrl, 0, 3, bytes("xyz"));
+	assert.deepEqual([...new Set(graphSide)], ["graph.microsoft.com"]);
+	assert.deepEqual([...new Set(transferSide)].sort(), ["api.onedrive.com", "public.dm.files.1drv.com"]);
+	assert.deepEqual(fake.authLeaks, []);
+});
+
+test("dot-only ids never reach a URL", async () => {
+	const { g, fake } = setupGraph();
+	for (const id of [".", ".."]) {
+		await assert.rejects(g.getItem(id), RangeError);
+		await assert.rejects(g.delete(id, '"e"'), RangeError);
+	}
+	assert.equal(fake.requests.length, 0);
 });
