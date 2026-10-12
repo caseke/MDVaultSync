@@ -188,7 +188,7 @@ CI on GitHub: the `CI` workflow passed on Node 22.x and 24.x (run 38186164011 at
 ---
 
 ## M2: Authentication
-**Status:** awaiting-owner (session work verified 2026-10-12; manual checks 1–9 pending). **Owner prerequisite:** complete [entra-setup.md](entra-setup.md) and have the client ID ready.
+**Status:** done (2026-10-12). Session work verified; owner manual checks passed on 0.2.2 on Ubuntu (Flatpak) and the iPad. Check 3 withdrawn with R-AUTH-3. **Owner prerequisite:** complete [entra-setup.md](entra-setup.md) and have the client ID ready.
 
 **Goal.** Sign in, stay signed in across restarts, refresh, and sign out on both devices (design §4).
 
@@ -256,12 +256,12 @@ In **Settings → MDVaultSync**, paste the client ID from entra-setup.md.
 
 Manual check results (owner):
 ```
-1 Ubuntu sign-in:        pass on 0.2.0 (window.open) and 0.2.1 (modal link → default browser). Trailing slash not visible. Re-run on 0.2.2 (one tap)
-2 iPad sign-in:          FAIL on 0.2.0 (window.open after await did nothing); pass on 0.2.1 (modal link → default browser, sign-in successful). Re-run on 0.2.2 (one tap)
+1 Ubuntu sign-in:        pass on 0.2.2 (one tap → default browser; also passed on 0.2.0 and 0.2.1). Trailing slash not visible; both handlers registered
+2 iPad sign-in:          pass on 0.2.2 (one tap → default browser). History: FAIL on 0.2.0 (window.open after await blocked), pass on 0.2.1 (link in a modal)
 3 Paste fallback:        withdrawn by owner (nativeclient page showed a phishing warning); R-AUTH-3 withdrawn; nativeclient redirect removed from the registration
 4 Origin header:         pass on both: token redemption succeeded on Ubuntu (Electron) and iPad (0.2.1)
-5 Restart, backend:      Ubuntu = still signed in, secret-storage.  iPad = pending (quit and relaunch; record the Token storage line)
-5a xdg-mime / keyring:   md.obsidian.Obsidian.desktop (Flatpak); no warning after an OS logout/login. That login unlocks the keyring, so the locked/absent case was not run; optional (the plugin-data fallback is unit-tested)
+5 Restart, backend:      Ubuntu = still signed in, secret-storage.  iPad = still signed in, secret-storage
+5a xdg-mime / keyring:   md.obsidian.Obsidian.desktop (Flatpak). Pass: (a) keyring locked, unlocked, Obsidian reopened: still signed in; (b) Obsidian opened with the keyring locked: the OS prompted for the keyring password, then still signed in, no errors or warnings. The plugin-data fallback was not triggered on a device (unit-tested)
 6 Sign-out:              pass (Ubuntu): getSecret → null, no fallbackRefreshToken in data.json
 7 App-access page:       pass: app listed
 8 entra-setup verified:  pass: the owner corrected the portal wording in an earlier chat (commits c3e9655, 1cc3f8b, fe1379c, e486789); box ticked
@@ -665,8 +665,8 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 ## Requirement traceability
 | Requirement | Milestone | Done |
 |---|---|---|
-| R-ENV-1…4 | M1, M2 | ☐ |
-| R-AUTH-1…8 | M2 | ☐ (session part verified 2026-10-12: unit tests for R-AUTH-1, 3, 4, 5, 6, 8; R-AUTH-2 and R-AUTH-7 need manual checks 1–6) |
+| R-ENV-1…4 | M1, M2 | ☐ (M2 part done 2026-10-12: personal accounts only via /consumers, iPad and Ubuntu sign-in verified, minAppVersion 1.11.4) |
+| R-AUTH-1…8 | M2 | ☑ (M2, 2026-10-12; R-AUTH-3 withdrawn. R-AUTH-7 token clear verified on Ubuntu; clearing real sync state is verified with the M6 StateStore) |
 | R-SCOPE-1…4 | M4, M5, M7 | ☐ |
 | R-TRIG-1…4 | M6 (lock), M7 | ☐ |
 | R-CD-1 | M3, M5 | ☐ |
@@ -681,11 +681,11 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-GUARD-1 | M5, M7 | ☐ |
 | R-PATH-1…4 | M4, M6 | ☐ |
 | R-IO-1, R-IO-2 | M6 | ☐ |
-| R-NET-1 | M2, M3 | ☐ |
+| R-NET-1 | M2, M3 | ☐ (M2 part done 2026-10-12: all HTTP through the requestUrl transport; M3 adds Graph) |
 | R-RES-1 | M3 | ☐ |
 | R-RES-2, R-RES-3 | M3, M6 | ☐ |
-| R-UI-1…3 | M2, M7 | ☐ |
-| R-SEC-1, R-SEC-2 | M2 | ☐ (R-SEC-1 unit tested 2026-10-12; R-SEC-2 needs check 5a and the M9 README note) |
+| R-UI-1…3 | M2, M7 | ☐ (M2 part done 2026-10-12: Account section) |
+| R-SEC-1, R-SEC-2 | M2 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 M2 part (SecretStorage observed on both devices, including a locked GNOME keyring) — README residual-risk text is owed in M9 |
 | R-SEC-3 | M3, M8 | ☐ |
 | R-SEC-4 | M3, M4 | ☐ |
 | R-SEC-5 | M1, M9 | ☐ (M1 part done: lockfile, Dependabot, CodeQL, audit, SHA pins, and secret scanning and push protection verified 2026-10-12; release attestation is M9) |
