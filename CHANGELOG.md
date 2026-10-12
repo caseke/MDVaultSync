@@ -19,7 +19,7 @@ Milestone 6 (0.4.0, 0.4.1): the part that carries out a sync plan, safely and so
 - Large files (over 10 MB) upload in pieces. An interrupted upload continues where it stopped after a restart, or starts over if OneDrive dropped it.
 - Progress is saved at most a second after each step and right before anything is overwritten or deleted, so a sync stopped by iPadOS or a lost connection resumes without redoing or losing work.
 - Sync triggers that overlap never run two syncs at once; at most one more sync is queued.
-- A "Test file replace on this device" command, for checking how this device replaces files (results go in the build plan).
+- A "Test file replace on this device" command, for checking how this device replaces files (results go in the build plan). On both Ubuntu and the iPad, Obsidian can't rename one file over another, so the plugin removes the old file and then moves the new one into place.
 
 ### Changed
 

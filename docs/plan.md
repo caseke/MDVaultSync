@@ -895,7 +895,7 @@ $ npm audit --audit-level=high
 ---
 
 ## M6: Executor, engine, persistence, resume
-**Status:** awaiting-owner (2026-10-12). Everything the session can verify passes. Outstanding owner checks: the `adapter.rename` check on the iPad (Ubuntu passed), and the R-AUTH-9 reinstall check on both devices (0.4.1). M7 may start: it doesn't depend on the result unless the fallback has to change.
+**Status:** done (2026-10-12). The `adapter.rename` manual check passed on Ubuntu and the iPad. The R-AUTH-9 reinstall check (an M6 follow-up, 0.4.1) is tracked in the traceability table and doesn't block M7. M7 may start: it doesn't depend on the result unless the fallback has to change.
 
 **Goal.** Running a plan safely and resumably (design §5.5, §6).
 
@@ -935,7 +935,7 @@ $ npm audit --audit-level=high
     3. Copy the JSON (Copy result) and paste it below, one block per device.
   - **What the fields mean:** `renameOverExisting` is `replaced` (rename overwrites: writeAtomic is atomic on that device), `threw` or `kept-target` (rename refuses: writeAtomic uses the remove-then-rename fallback, which has a short crash window; see design §12). `fallbackWorks` must be `true` and `cleanedUp` must be `true` on both devices.
   - **Result, Ubuntu (2026-10-12, owner, Flatpak):** `{"renameOverExisting": "threw", "fallbackWorks": true, "cleanedUp": true, "platform": "linux", "pluginVersion": "0.4.0"}`. `adapter.rename` refuses to overwrite on Ubuntu, so writeAtomic uses the remove-then-rename fallback there; the fallback works. Matches the design (design §12, atomic.ts); no code change.
-  - **Result, iPad:** (pending)
+  - **Result, iPad (2026-10-12, owner):** `{"renameOverExisting": "threw", "fallbackWorks": true, "cleanedUp": true, "platform": "ios", "pluginVersion": "0.4.0"}`. Same as Ubuntu: `adapter.rename` refuses to overwrite, and writeAtomic's remove-then-rename fallback works with no temp file left. Both devices therefore always use the fallback, with its short crash window (design §12); the security review judged that window recoverable for notes (the next run downloads the file again, R-DEL-2), and sync-state.json recovers from its temp file. No code change.
 - **Leftover sign-in after uninstall (R-AUTH-9, added 2026-10-12 from the owner's report).** On 0.4.1, on each device: sign in, uninstall the plugin, reinstall it (BRAT), and open settings. Expected: a notice says a leftover sign-in was removed, with the account-page link, and the account section shows signed out. A normal restart or a BRAT update must keep the sign-in. Also: while signed in, replace data.json's content with `{not json` and restart: the sign-in must be kept (the file isn't overwritten by the check).
   - **Result, Ubuntu:** (pending)
   - **Result, iPad:** (pending)
@@ -982,7 +982,7 @@ $ node --test --experimental-test-coverage "test/**/*.test.ts"   (new modules, l
 #   obsidian-vault.ts 94.7 | 84.1 | 94.4   plugin-state-store.ts 95.9 | 92.9 | 85.7   atomic.ts 100 | 100 | 100
 #   (coverage measured before the review fixes; the fixes added tests for every changed branch)
 ```
-Manual rename results: pending (see **Manual checks**).
+Manual rename results: Ubuntu and iPad both `threw` / fallback works / cleaned up (see **Manual checks**).
 
 **What was built**
 - `src/core/remote-content.ts`: `TransformedRemoteContent`, the only caller of RemotePort content methods. `fetch` checks length and QuickXorHash before decoding (null hash: size only); `store` uses PUT for new files and for replaces (`PUT_HONORS_IF_MATCH`) up to 10 MiB and sessions above, persists the session through `onSession`, re-checks a replace session's eTag before the final fragment (`ReplaceRaced`), handles 416, and checks the returned hash; `resume` continues a persisted session. `RemoteContent.resume` was added to `ports.ts` and design §2.
@@ -1206,7 +1206,7 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-FIRST-1, R-FIRST-2 | M5, M7 | ☐ (M5 part done 2026-10-12: union mode never deletes (property-tested); malformed state, approot change and a missing approot id all force it) |
 | R-GUARD-1 | M5, M7 | ☐ (M5 part done 2026-10-12: `deleteCount`, `exceedsDeleteGuard` boundary, declined deletes suppressed until either side changes or "Sync now") |
 | R-PATH-1…4 | M4, M6 | ☑ (M4 part done 2026-10-12: NFC and collision detection, naming rules, 400-character limit and containment rules, unit tested; the pre-write re-check is M6; M6 part done 2026-10-12: containment and name rules re-checked before every local write, move, trash and mkdir, in the executor and in ObsidianVault) |
-| R-IO-1, R-IO-2 | M6 | ☐ (M6 2026-10-12: temp-then-rename and hash-before-write implemented and tested; the adapter.rename manual check is pending) |
+| R-IO-1, R-IO-2 | M6 | ☑ (M6 2026-10-12: temp-then-rename and hash-before-write implemented and tested; adapter.rename refuses to overwrite on Ubuntu and the iPad, and the remove-then-rename fallback passed on both) |
 | R-NET-1 | M2, M3 | ☑ (M2 and M3, 2026-10-12: auth and Graph go only through the requestUrl transport; lint and the CI script enforce it) |
 | R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested) |
 | R-RES-2, R-RES-3 | M3, M6 | ☑ (M3 part done 2026-10-12: 10 MiB upload-session primitives, status and 404 handling; a 12 MiB two-fragment round trip passed on both devices; persistence and resume are M6; M6 part done 2026-10-12: sessions persisted before the first fragment and resumed from nextExpectedRanges, 404 restarts; saves at most 1 s after an op and before every destructive op; crash injection after every mutating call converges) |

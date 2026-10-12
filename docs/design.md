@@ -660,7 +660,7 @@ All Graph and token JSON passes through hand-written type guards before use. Unk
 | File | Contents | Written via |
 |---|---|---|
 | `<configDir>/plugins/mdvaultsync/data.json` | settings, plus `fallbackRefreshToken` only when SecretStorage throws | `saveData` |
-| `<configDir>/plugins/mdvaultsync/sync-state.json` | `SyncState` | `platform/plugin-state-store.ts`: adapter write to `sync-state.json.tmp`, then `adapter.rename`; if rename refuses to replace the file (throws, or returns with the temp file still there), remove then rename (`platform/atomic.ts`, [O-API-10], M6 manual check) |
+| `<configDir>/plugins/mdvaultsync/sync-state.json` | `SyncState` | `platform/plugin-state-store.ts`: adapter write to `sync-state.json.tmp`, then `adapter.rename`; if rename refuses to replace the file (throws, or returns with the temp file still there), remove then rename (`platform/atomic.ts`, [O-API-10], M6 manual check: rename throws on both Ubuntu and the iPad, so the fallback is the normal path; a crash between remove and rename leaves the bytes in `sync-state.json.tmp`, which `load` reads) |
 | SecretStorage `mdvaultsync-refresh-token` | refresh token | `secretStorage.setSecret` |
 
 `configDir` is never synced (D-6), so none of these leave the device.
