@@ -376,7 +376,7 @@ stateDiagram-v2
 
 ### 5.2 Pull (remote change detection)
 - Call `delta(state.deltaLink)`, starting with null on first sync. Collect pages until `deltaLink` [G-DL-2]. Validate every item (§8). Keep only the last occurrence per ID [G-DL-6].
-- Apply to `remoteIndex` in memory: upsert live items and delete those with `deleted`.
+- Apply to `remoteIndex` in memory: upsert live items and delete those with `deleted`. A deleted folder takes its descendants out of the index too, whether or not delta lists them (M5 security review): `buildRemoteTree` treats a live item whose parent is missing as *unresolved*, which blocks its record rather than deleting it, so a descendant left behind would freeze. (A tombstone kept in the index works too: items under it count as deleted.)
 - Save `remoteIndex` and the new `deltaLink` together in one `StateStore.save`. The delta token is therefore never ahead of the index. Applying changes to the vault happens later, driven by the diff between `remoteIndex` and `files`, so a crash after this save loses nothing.
 - **410 or a `resync*` code** [G-DL-4]: set `unionPending = true`, `deltaLink = null`, and clear `remoteIndex`. Save, then re-enumerate from null. `files` (the bases) is kept, so files changed on only one side still sync normally. Union mode only stops deletes (§5.4).
 - **Delta unsupported on approot** (M3 probe result, [G-DL-1]): `RemotePort.delta` is implemented as a breadth-first `listChildren` walk returning a synthetic page. Deletes are inferred by absence. This costs more, so the interval floor rises to 15 minutes.
@@ -422,7 +422,7 @@ For every key in the union of {local paths, `files` records, remote items}:
   - If L is unchanged at the old path: `local-move`, then re-check content as above.
   - If L also moved, by a different rename: the remote path wins, and the local file moves to the remote path.
   - If L moved to the *same* target (both renamed alike, or a `remote-move` re-run after a crash): update `B.path` only, with no op.
-  - Paths are compared by `caseKey` (§7.5). When the remote and local names differ only by case, they are the same file. The record takes the remote spelling, and no `local-move` is emitted. A case-only rename can only travel from local to remote (`remote-move`), never back, so the two sides can't loop.
+  - Paths are compared by `caseKey` (§7.5). When the remote and local names differ only by case, they are the same file. The record keeps the local spelling (M5; see below), and no `local-move` is emitted. A case-only rename can only travel from local to remote (`remote-move`), never back, so the two sides can't loop.
 - **Local renames.** A `renamed` hint from vault events, or at startup an unmatched local-new path whose hash and size equal those of an unmatched local-deleted record (unique match only).
   - If R is unchanged: `remote-move` (PATCH by ID, If-Match) [G-MV-1].
   - If R was renamed too: the remote path wins.
@@ -430,6 +430,26 @@ For every key in the union of {local paths, `files` records, remote items}:
 - **Folders.** Remote folder renames show up as one item [G-DL-6], and descendants are re-pathed by the rebuild in §5.2. A local folder rename produces one rename event per file plus one for the folder. The planner collapses these into one `remote-move` of the folder when every child was renamed under the same prefix.
 - **Empty folders** are created on the other side when they appear. They are removed when empty after the deletes run [G-DL-5].
 - **Remote folder deletes.** Graph's `DELETE` on a folder is recursive. A remote folder delete is planned only when `remoteIndex` shows the folder has **zero** children. That includes skipped, excluded or too-large children this device doesn't sync. It is sent with If-Match on the folder's eTag, and a 412 cancels it. Local folders are removed only if empty (`removeEmptyFolder`).
+
+**M5 implementation (`core/planner.ts`, `core/remote-tree.ts`, `core/state.ts`).** `plan(state, local, remoteIndex, settings)` is pure and deterministic. Its inputs beyond `ports.ts` are planner-local types: `ScannedEntry` (the M6 scan's output: the raw vault path, size, mtime, `localHash`, and `storedHash` from `RemoteContent.storedHashOf`, so the D-10 comparison stays out of the planner) and `PlanSettings` (configDir, patterns, size cap, `pathPrefixLen`, device name, the conflict timestamp, and `reofferDeclined` for "Sync now"). Clarifications of the rules above:
+- **Blocked keys.** Every skipped local, remote or base path blocks its `caseKey`: no op other than `skip` is emitted there and the record is kept. A base whose remote item is skipped (by id) is blocked too. This is how "skips never delete" holds on both sides (T-D1).
+- **Renamed to a skipped name.** A tracked file whose only trace is a local file skipped for its *name or size* (invalid, reserved, too long, collision, too large), matched by a rename event or a unique hash and size, blocks its record instead of deleting the remote copy. Hidden and excluded targets don't count: moving a note into Obsidian's `.trash` is a delete.
+- **Case-only renames.** The record and every local op use the *local* spelling. A case-only remote rename emits nothing (so the remote spelling may differ until the next local rename); a case-only local rename emits `remote-move`. Either way there is no loop. (Earlier text said "the record takes the remote spelling"; on ext4 that spelling doesn't exist locally, so local stat and move would fail.)
+- **Both renamed to the same target** emits `adopt` at the new path: a record-only update, no transfer, no new PlanOp kind.
+- **A different item at the base's path** (same name, new id) counts as a remote change: same bytes adopt, otherwise the table's "changed R" rows apply. `upload-replace` and `remote-delete` are emitted only against the base's own item.
+- **Remote move onto a path a new local file holds** is not applied as a move; the table then keeps both files (conflict at the target).
+- **Deleted here, moved there** restores at the new path (download), in normal mode too.
+- **Folder collapse** works on paths: after a collapsed local folder rename, every remote entry and base under the old folder is re-pathed to the new one (and the reverse for a remote rename), so child edits plan normally at the new paths. A collapse is refused, falling back to per-file ops, if anything under either path is skipped.
+- **New folders** are emitted as `upload-new` / `download` on the folder path even when not empty, so M6 can create folders first, shallowest first. `local-trash` on a folder means `removeEmptyFolder`, and is planned only when no local entry (skipped ones included) remains under it.
+- **Null remote hash on a no-base pair** is equal only when both sides are zero bytes; otherwise it is a conflict (both kept), never a silent overwrite.
+- **Order.** Skips first, then every `local-move` and `remote-move`, then all other ops, each group sorted by `caseKey` of the target path. No write may run at a move's source or destination before the move (security review: a new remote item at a path vacated by a remote rename would otherwise be downloaded over the file about to move, with its unsynced edit). M6 must keep this: within a side, moves first; a move into a folder that doesn't exist yet creates it on demand.
+- **Collision losers.** A key that still holds a skipped local file (a case-collision loser) gets no transfer even after the tracked keeper moved away, so nothing lands on the skipped file.
+- **Pending conflicts** (crash resume, §5.5 step 1). The saved `copyPath` is reused only for the same pair (`localHash` and `remoteId` match), when it differs from the original under `caseKey`, passes the name and exclusion rules, and nothing but that copy is there. Otherwise a fresh name is chosen. The state parser also rejects a copy path equal to its original.
+- **Unplaceable remote items.** A live item whose parent chain ends at a missing id or a cycle is in `RemoteTree.unresolvedIds`. Its base is blocked (`skip … outside-vault`), never trashed: only an item gone from the index, or under a tombstoned folder, is a remote delete.
+- **No approot id** (`state.appRootId === null`) plans in union mode, and `applyAppRoot` from null with records sets `unionPending`.
+- **`deleteCount`** counts file deletes only, so the guard measures the share of tracked files (R-GUARD-1).
+- **Declined deletes** match on `{localHash: null, eTag}` for a `remote-delete` and `{localHash, eTag: null}` for a `local-trash`, by own key only.
+- **`applyAppRoot`** (preflight, §5.1) also clears `pendingConflicts` and `declinedDeletes`, which name items of the old App Folder.
 
 **Filters**, applied to every candidate path before planning (D-6, §8):
 - the exclusion rules (configDir, hidden segments, user patterns);
@@ -455,7 +475,7 @@ Rejected paths become `skip` ops with a reason and appear in the report. Skipped
 
 ### 5.5 Execute
 Order: every pull-side op first (`local-move`, `download`, `local-trash`, conflict handling), then every push-side op (`remote-move`, `upload-*`, `remote-delete`) [SPEC R-ORDER].
-- Within a side, folder creation runs first (sorted shallowest first), then file ops with concurrency 4, then folder deletes (deepest first).
+- Within a side, moves run first, one at a time and each to completion, in plan order (M5 security review: a write at a move's source or destination must never run before the move). A move into a parent folder that doesn't exist yet creates it. Then folder creation (sorted shallowest first), then file ops with concurrency 4, then folder deletes (deepest first).
 - After each op succeeds, the executor updates `files` and `folders` in memory. State is saved at most once per second, once at the end, and immediately before any destructive op (overwrite, trash, delete, conflict). This keeps iPad writes low. A crash repeats at most one second of idempotent work: re-running a completed download or upload finds equal hashes and adopts.
 
 **Pre-write check.** This runs before every op that overwrites, moves or trashes a *local* file: `download` onto an existing file, `local-trash`, `local-move`, and the conflict procedure.
