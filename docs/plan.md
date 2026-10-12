@@ -3,7 +3,7 @@
 Nine milestones, each sized for one Claude Code session. Do them in order. Each one builds on the interfaces defined in [design.md](design.md) and satisfies requirements in [SPEC.md](../SPEC.md).
 
 ## Session protocol (every implementation session)
-1. **Read.** Read `CLAUDE.md`, `SPEC.md`, `docs/design.md`, and this file. Find the first milestone whose status isn't `done`. Read the research facts it cites.
+1. **Read.** Read `CLAUDE.md`, `SPEC.md`, `docs/design.md`, and this file. Find the first milestone whose status isn't `done`. Read the research facts it cites. Read that milestone's **Carry-ins** list too: each item is a requirement for the milestone, handed over by an earlier milestone's build or security review, and it overrides nothing in SPEC.md.
 2. **Set up.** Run `npm ci`. Skip this for M1, before `package.json` exists.
 3. **Work inside the milestone.** Build only what it lists. If the design has to change, update `docs/design.md` in the same session and say why in the commit message. Probe results go into `docs/research.md` (change the row's status and add the observed result and date).
 4. **Verify.** Run the milestone's verification commands. Paste the trimmed output into the milestone's **Verification output** block: the final summary lines of each command, not the full logs.
@@ -814,6 +814,12 @@ $ npm audit --audit-level=high
   - union mode never emits deletes;
   - conflicts emit only when both sides changed with different hashes.
 
+**Carry-ins** (requirements handed over by earlier milestones; each names its source)
+- **Skips never delete** (M3 review of 0.3.1, see M3 **Security review**): a skipped remote item (a name over 255, or any other skip reason) must never produce a local or remote delete, and it counts as a child for the folder-delete rule R-DEL-3 (T-D1). Test both. Since M4 this also covers local files whose names contain U+00A0 or U+202F, which `validateSegment` now skips (M4 re-review).
+- **Use the M4 path helpers** (M4 **Notes for M5 and later**): call `remoteToVaultPath(segments, configDir, pathPrefixLen, isFolder)` for every remote item's rebuilt name chain (approot excluded) and skip on `ok: false` with its reason. Call `exclusionReason(path, configDir, patterns, isFolder)` with the real configDir. Call `findCollisions(rawLocalPaths, tracked)` with `tracked` = the NFC paths in `files`.
+- **Remote-side collisions** (M4 review, low): remote names that differ only in Unicode form or case map to one VaultPath, and `findCollisions` sees only local paths. Group remote-derived VaultPaths by exact path and by `caseKey`, and skip every member of a group as `unicode-collision` or `case-collision`. Test it.
+- **Matching key** (M4): match remote and local by `caseKey` (design §5.4). Don't use `isConfigDirName`'s wider fold for matching; it exists only for the configDir check.
+
 **Acceptance criteria**
 - The tests above pass.
 - `src/core/**` has no `obsidian` import (the lint rule passes).
@@ -868,6 +874,14 @@ node --test --experimental-test-coverage "test/**/*.test.ts" 2>&1 | grep -E "pla
 **Manual checks**
 - In a diagnostics sub-command, `adapter.rename` onto an existing file on Ubuntu and on the iPad. Record whether it overwrites. If not, `writeAtomic` uses remove-then-rename and research.md is updated [O-API-10].
 
+**Carry-ins** (requirements handed over by earlier milestones; each names its source)
+- **Size cap before download** (M3 review, T-D6): skip items over the size cap before calling `download()`. The length check in `download()` runs only after `requestUrl` has buffered the whole body.
+- **If-Match on replace** (M3 review of 0.3.2): when the executor starts using `PUT_HONORS_IF_MATCH`, keep the upload-session path as the fallback, and make sure a stale replace still surfaces as 412.
+- **Pre-write check** (M4, T-T1; M4 re-review): right before every local write, call `containmentProblem(path, configDir)` **and** `validatePath(path, pathPrefixLen, isFolder)` on the final path. `containmentProblem` checks containment only; the name rules, including the U+00A0/U+202F rule, need `validatePath`.
+- **Conflict copy names** (M4 review): the `exists` callback passed to `conflictCopyPath` must compare case-insensitively (`caseKey`). Pass the real `pathPrefixLen` (`AppRoot.pathPrefix` without its leading `/`). A `RangeError` from it means "conflict not resolved": keep both sides untouched and report an error, never overwrite.
+- **Session body** (M3 review of 0.3.1, info): one probe body sent no `conflictBehavior` and relied on Graph's documented default, `fail`. Before M6 depends on new-file upload sessions, confirm from the M3 probe records (M3 **Ubuntu probe** results) that the body M6 sends, with `"@microsoft.graph.conflictBehavior":"fail"`, is accepted. If only the empty body works, verify that the default really is `fail` (a name clash must give 409, never a silent overwrite) and record it in research.md.
+- Optional (M3 review, owner's call): make `GraphClientOptions.transferTransport` required instead of falling back to `transport`; give `getItemWithUrl`'s `downloadUrl` a branded `UncheckedUrl` type.
+
 **Acceptance criteria**
 - The tests above pass.
 - A fake end-to-end run of 1,000 files through two FakeVaults (device A and device B) sharing one FakeRemote converges in at most 2 runs per device, with zero data loss assertions passing.
@@ -895,6 +909,10 @@ npm run lint && npm run typecheck && npm test && npm run build
 - `src/ui/plan-preview-modal.ts`, `src/ui/confirm-deletes-modal.ts` and `src/ui/report-view.ts` (built with `createEl` only [O-GL-3]).
 - `src/ui/notices.ts`: notices for conflicts (persistent until dismissed), errors and sign-in required.
 - `styles.css`: classes for the modals and report.
+
+**Carry-ins** (requirements handed over by earlier milestones; each names its source)
+- **Exclude-setting help** (M4 review, info): the help text must say that `!` lines and backslash escapes are unsupported (such patterns never match), and that matching is case-sensitive, so on the iPad a remote `PRIVATE/` isn't excluded by a local `Private/` rule. The supported syntax is in design §7.
+- **Showing names** (M4 review, info): C1 controls, DEL, bidi overrides (for example U+202E) and U+2028/U+2029 pass `validateSegment`. They can't escape the vault, but they can disguise names in the report, preview and conflict notice. Consider escaping them when names are displayed.
 
 **Acceptance criteria**
 - Lint passes with no warnings from `obsidianmd` rules.
@@ -954,6 +972,9 @@ npm run lint && npm run typecheck && npm test && npm run build
 | 10 | Revoke the app at account.microsoft.com | Next sync shows "Sign-in required" |
 | 11 | Stale device rejoins: sign out on Ubuntu, edit 3 notes on iPad and sync, edit 1 *other* note on Ubuntu, sign in on Ubuntu | Preview shows "Differs on both sides, no sync history (4)"; after Run there are 4 conflict copies and nothing is lost |
 | 12 | Type in a note continuously while a sync downloads a remote change to it | No keystrokes lost; conflict copy or deferred op (R-CONF-4) |
+
+**Carry-ins** (requirements handed over by earlier milestones; each names its source)
+- **Redirects** (M3 final review, O-API-2): `requestUrl` follows redirects from an allowlisted transfer host without re-checking the target. No token can go along, because the transfer transport is bare, and download bytes are length- and hash-checked. Cover this in the hardening review.
 
 **Acceptance criteria**
 - Every matrix row passes on both devices, with results recorded below.
