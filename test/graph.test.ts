@@ -438,4 +438,8 @@ test("download reads the item without $select, because OneDrive personal drops d
 	assert.deepEqual(new Uint8Array(await g.download(n.id)), enc("hello"));
 	const meta = fake.requests.filter((r) => r.url.startsWith(`${GRAPH}/me/drive/items/`));
 	assert.equal(last(meta)?.url, `${GRAPH}/me/drive/items/${encodeURIComponent(n.id)}`);
+	const dl = last(fake.requests);
+	assert.ok(dl?.url.startsWith(DOWNLOAD_HOST));
+	assert.ok(!Object.keys(dl?.headers ?? {}).some((k) => k.toLowerCase() === "authorization"));
+	assert.deepEqual(fake.authLeaks, []);
 });
