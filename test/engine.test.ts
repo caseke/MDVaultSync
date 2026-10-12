@@ -782,3 +782,33 @@ test("a sync requested after reset() while the old run is still settling starts 
 	assert.equal(r.trigger, "command");
 	assert.equal(lists, 2, "the old run and a new one");
 });
+
+test("the full re-hash after a hint overflow stays pending through a cancelled run and a reset (third review)", async () => {
+	const remote = new FakeRemote();
+	let answer = true;
+	const a = new Device(remote, { confirmPlan: () => Promise.resolve(answer), settings: { previewEveryRun: true } });
+	a.vault.write("m.md", "same size");
+	await a.sync("startup");
+	const sneak = (text: string) => {
+		const mtime = a.store.state?.files["m.md" as VaultPath]?.mtime ?? 0;
+		a.vault.write("m.md", text);
+		const f = a.vault.files.get("m.md");
+		assert.ok(f);
+		f.mtime = mtime; // same size, same mtime: only a re-hash can see it
+	};
+	for (let i = 0; i < MAX_PENDING_HINTS + 1; i++) a.engine.noteLocalChange({ kind: "dirty", path: `f${i}.md` as VaultPath });
+	sneak("SAME SIZE");
+	answer = false;
+	assert.equal((await a.sync("interval")).result, "cancelled");
+	// A reset mid-run (sign-out) doesn't clear it either.
+	answer = true;
+	const { gate, entered } = holdNextList(a);
+	const p = a.sync("interval");
+	await entered;
+	a.engine.reset();
+	gate.resolve();
+	await p;
+	const r = await a.sync("interval");
+	assert.equal(r.counts["upload-replace"], 1, "still re-hashed after the cancel and the reset");
+	assert.equal(remote.contentAt("m.md"), "SAME SIZE");
+});

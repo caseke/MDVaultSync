@@ -20,7 +20,7 @@ import { classifyError } from "./remote/classify.ts";
 import { GraphClient } from "./remote/graph.ts";
 import { AuthorizingTransport } from "./remote/http.ts";
 import { RetryPolicy } from "./remote/retry.ts";
-import { defaultDeviceName, excludePatternsInvalid, isValidClientId, parseData, snapshotForSave, toEngineSettings, type PluginData } from "./settings.ts";
+import { defaultDeviceName, isValidClientId, pauseFromData, parseData, snapshotForSave, toEngineSettings, type PluginData } from "./settings.ts";
 import { AUTH_ERROR_MESSAGES, authErrorText } from "./ui/auth-messages.ts";
 import { ConfirmDeletesModal } from "./ui/confirm-deletes-modal.ts";
 import { DiagnosticsModal, FILE_REPLACE_TEXT } from "./ui/diagnostics-modal.ts";
@@ -92,6 +92,9 @@ export default class MDVaultSyncPlugin extends Plugin {
 	patternsInvalid = false;
 	/** The unreadable excludePatterns value from data.json, written back by every save while paused. */
 	private pausedPatterns: unknown = undefined;
+	/** The readable lines of the unusable value, to pre-fill the settings field. */
+	pausedReadable: string[] = [];
+	private pauseNotice: Notice | null = null;
 	/** Set in onunload: no prompt opens after it. */
 	private disposed = false;
 	/** Every data.json write goes through one queue and snapshots `data` when it runs (M7 review). */
@@ -100,11 +103,16 @@ export default class MDVaultSyncPlugin extends Plugin {
 	override async onload(): Promise<void> {
 		const raw: unknown = await this.loadData();
 		this.data = parseData(raw);
-		this.patternsInvalid = excludePatternsInvalid(raw);
-		if (this.patternsInvalid) this.pausedPatterns = (raw as Record<string, unknown>)["excludePatterns"];
 		this.defaultDeviceName = defaultDeviceName(platformName());
 		const { configDir } = this.app.vault;
 		this.pluginDir = normalizePath(this.manifest.dir ?? `${configDir}/plugins/${this.manifest.id}`);
+		// Unknown exclude patterns pause sync (T-I6). Checked on disk, like R-AUTH-9: a corrupt data.json loads as null.
+		const pause = pauseFromData(raw, await this.app.vault.adapter.exists(`${this.pluginDir}/data.json`));
+		if (pause.paused) {
+			this.patternsInvalid = true;
+			this.pausedPatterns = pause.raw;
+			this.pausedReadable = pause.readable;
+		}
 		this.stateStore = new PluginStateStore({
 			adapter: this.app.vault.adapter,
 			dir: this.pluginDir,
@@ -272,7 +280,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 			patterns: () => this.data.excludePatterns,
 			sink: (op) => this.engine.noteLocalChange(op),
 		});
-		if (this.patternsInvalid) new Notice(PATTERNS_TEXT, 0);
+		if (this.patternsInvalid) this.pauseNotice = new Notice(PATTERNS_TEXT, 0);
 		const startup = window.setTimeout(() => void this.sync("startup"), 5000);
 		this.register(() => window.clearTimeout(startup));
 		this.restartTimer();
@@ -341,6 +349,9 @@ export default class MDVaultSyncPlugin extends Plugin {
 				if (patch.excludePatterns !== undefined) {
 					this.patternsInvalid = false;
 					this.pausedPatterns = undefined;
+					this.pausedReadable = [];
+					this.pauseNotice?.hide();
+					this.pauseNotice = null;
 				}
 			});
 		this.saveChain = run;

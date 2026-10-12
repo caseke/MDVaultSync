@@ -6,6 +6,7 @@ import {
 	defaultDeviceName,
 	effectiveDeviceName,
 	excludePatternsInvalid,
+	pauseFromData,
 	snapshotForSave,
 	intervalFloor,
 	isValidClientId,
@@ -172,4 +173,21 @@ test("while paused for bad patterns, every other save writes the unreadable valu
 	const resumed = snapshotForSave(data, { excludePatterns: ["Private/"] }, raw.excludePatterns);
 	assert.equal(excludePatternsInvalid(resumed), false, "saving patterns resumes");
 	assert.deepEqual(snapshotForSave(data, { previewEveryRun: true }, undefined).excludePatterns, [], "not paused: the parsed value");
+});
+
+test("a data.json on disk that doesn't parse to an object pauses sync too: its patterns are unknown (third review)", () => {
+	assert.deepEqual(pauseFromData(null, false), { paused: false }, "no file: a fresh install");
+	assert.deepEqual(pauseFromData({}, true), { paused: false });
+	assert.deepEqual(pauseFromData({ excludePatterns: ["a"] }, true), { paused: false });
+	for (const raw of [null, "x", 5, []]) {
+		const p = pauseFromData(raw, true);
+		assert.equal(p.paused, true, JSON.stringify(raw));
+		assert.ok(p.paused && p.raw === null && excludePatternsInvalid({ excludePatterns: p.raw }), "the marker written back still reads as invalid");
+	}
+	const bad = pauseFromData({ excludePatterns: ["Private/", 1, "x".repeat(1001), "*.tmp"] }, true);
+	assert.ok(bad.paused);
+	assert.deepEqual(bad.readable, ["Private/", "*.tmp"], "readable lines pre-fill the field");
+	const garbled = pauseFromData(null, true);
+	assert.ok(garbled.paused);
+	assert.deepEqual(garbled.readable, []);
 });

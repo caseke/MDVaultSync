@@ -22,7 +22,7 @@ Milestone 7 (0.5.0): sync is switched on. The plugin now syncs by itself and can
 
 ### Changed
 
-- If the saved exclude patterns can't be read (for example after a hand edit), sync pauses with a notice until you enter them again and select **Save and resume sync**, instead of syncing with no exclusions.
+- If the saved exclude patterns can't be read (for example after a hand edit, or a damaged plugin data file), sync pauses with a notice until you check them in settings and select **Save and resume sync**, instead of syncing with no exclusions.
 - Signing out also closes any open sync preview or delete prompt, and disabling or updating the plugin during a sync stops it from starting anything new.
 
 Milestone 6 (0.4.0, 0.4.1): the part that carries out a sync plan, safely and so it can pick up where it stopped. Sync still isn't switched on in the app (that is milestone 7), so the only visible changes are a new diagnostics command and sign-out clearing the saved sync state.

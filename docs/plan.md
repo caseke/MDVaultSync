@@ -1040,7 +1040,7 @@ Manual rename results: Ubuntu and iPad both `threw` / fallback works / cleaned u
 ---
 
 ## M7: Obsidian integration and UI
-**Status:** awaiting-owner (2026-10-12). Session work done and verified: lint with no warnings, typecheck, 801 tests and the build pass, and two security-review rounds (plus a focused third pass) are fixed. Manual checks 1–11 below need the owner on both devices with 0.5.0. M8 may start on its unit-test work (sentinel test, notice table, quota mapping), but its device matrix needs M7's checks first.
+**Status:** awaiting-owner (2026-10-12). Session work done and verified: lint with no warnings, typecheck, 803 tests and the build pass, and three security-review passes are done and their findings fixed. Manual checks 1–11 below need the owner on both devices with 0.5.0. M8 may start on its unit-test work (sentinel test, notice table, quota mapping), but its device matrix needs M7's checks first.
 
 **Goal.** A usable plugin: triggers, events, settings, status and notices (design §3, §10).
 
@@ -1096,16 +1096,16 @@ npm run lint && npm run typecheck && npm test && npm run build
 - Ubuntu (Obsidian version: ____): 1 ☐ 2 ☐ 3 ☐ 4 ☐ 5 ☐ 6 ☐ 7 ☐ 8 ☐ 9 ☐ 10 n/a 11 ☐
 - iPad (Obsidian version: ____): 1 ☐ 2 ☐ 3 ☐ 4 ☐ 5 ☐ 6 ☐ 7 ☐ 8 ☐ 9 ☐ 10 ☐ 11 ☐
 
-**Verification output** (2026-10-12, after both review rounds; Node 22.22, container)
+**Verification output** (2026-10-12, after all three review passes; Node 22.22, container)
 ```
 $ npm run lint
 > eslint .                              (exit 0, no problems: 0 errors, 0 warnings)
 $ npm run typecheck
 > tsc --noEmit                          (exit 0)
 $ npm test
-# tests 801
+# tests 803
 # suites 8
-# pass 801
+# pass 803
 # fail 0
 $ npm run build
 > tsc --noEmit && node esbuild.config.mjs production   (exit 0)
@@ -1128,7 +1128,7 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 - `src/core/engine.ts`: the rerun keeps the strongest trigger and the Sync now re-offer; no rerun after `reset()` and a fresh run for a request after it; a cancelled preview drops timer reruns; `onReport`; `pathPrefixLen`; the scan consumes `expectedWrites`; bounded hints with the full re-hash past the cap. `upload-resume.ts` stops between sessions after a reset. Conflict ops carry `noHistory` (planner, ports).
 - `styles.css`; `eslint.config.mjs` turns `obsidianmd/hardcoded-config-path` off for tests only (fixtures use `.obsidian` on purpose; inline disables of that rule are banned). Version 0.5.0.
 
-**Tests added:** `test/settings.test.ts` (rewritten, 16), `display.test.ts` (5), `status.test.ts` (5), `notices.test.ts` (8), `plan-groups.test.ts` (6), `triggers.test.ts` (3), `vault-events.test.ts` (6), 14 engine tests (rerun trigger, Sync now re-offer, echo filter for writes, moves and trashes, edit after download, `pathPrefixLen`, `onReport`, reset with a queued rerun, cancel, preview plus Sync now, the hint cap and re-hash, rename hints over the cap, the hint boundary, a request after reset), a planner assertion pair for `noHistory`, and an upload-resume test for `live`. Each review-fix test was checked to fail with its fix reverted.
+**Tests added:** `test/settings.test.ts` (rewritten, 17), `display.test.ts` (5), `status.test.ts` (5), `notices.test.ts` (8), `plan-groups.test.ts` (6), `triggers.test.ts` (3), `vault-events.test.ts` (6), 15 engine tests (rerun trigger, Sync now re-offer, echo filter for writes, moves and trashes, edit after download, `pathPrefixLen`, `onReport`, reset with a queued rerun, cancel, preview plus Sync now, the hint cap and re-hash, rename hints over the cap, the hint boundary, a request after reset, the re-hash surviving a cancel and a reset), a planner assertion pair for `noHistory`, and an upload-resume test for `live`. Each review-fix test was checked to fail with its fix reverted.
 
 **Acceptance**
 - Lint passes with no warnings from `obsidianmd` rules (no warnings at all).
@@ -1152,7 +1152,7 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 - Fixed, low: unbounded `pendingLocal` (now deduplicated and capped); Cancel re-prompting from a queued timer run; racing data.json writes that could put a removed fallback token back (one serialized queue); upload resume ignoring a reset; invisible characters missing from the display escaping; status lines without the last sync time. Fixed, info: prompts close on sign-out and never open after unload; the design §3 and T-D8 echo wording; `refresh()` only while the tab is on screen; Sync now's re-offer survives a preview outranking it.
 - **Re-review of the fixes** (base c1a35ae): all of the above confirmed fixed. Two new mediums came from the fixes, both **fixed**: the dedupe could drop a hint the running sync would then clear, losing an edit made right after a download (the dedupe now only looks at hints newer than the run's snapshot); and the pause didn't survive another save plus a restart (every save writes the unreadable value back until the patterns are saved). Fixed lows: the pause cleared on the first keystroke (now only **Save and resume sync**); early hints bypassed the cap; dropping hints over the cap could lose an edit or a rename hint (now a full re-hash until an ok run, and rename hints are kept up to 50,000); more default-ignorable characters escaped (`\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}`). Fixed info: a request after `reset()` joined the dead loop.
 - Declined, low (owner's call): checking `live()` between fragments inside `RemoteContent.resume`. After a reset, a session already resuming sends its remaining fragments (up to about ten 10 MiB fragments at the 100 MiB cap). They carry no token (T-I4), nothing is saved afterwards, and the executor also stops only between ops; the check would need a `RemoteContent` port change.
-- **Third pass** on the second-round fixes (commit 0329a38): pending.
+- **Third pass** on the second-round fixes (base c1a35ae, commit 0329a38): every second-round item confirmed fixed, no high or medium. Fixed, low: a data.json on disk that doesn't load as an object (corrupt or truncated) now pauses sync too, since its patterns are unknown (T-I6); a test pins that the full re-hash survives a cancelled and a reset run; a failed **Save and resume sync** says so; the pause notice is hidden on resume and names the button. Fixed, info: the field is pre-filled with the readable lines. Open, info (no action): the re-hash generation is in memory only (same exposure as the approved deviation); rename hints over 50,000 are dropped (the scan hashes name-skipped files, so the record still matches by hash); visible look-alikes (Zs spaces, combining marks) aren't escaped, by design: they're visible.
 
 **Notes for M8 and later** (carry-ins)
 - **Notice table:** `src/ui/notices.ts` `ERROR_TEXT` holds the M6 codes and the run-level codes; M8 adds every `GraphError` code and the test that each maps to a message. `quota` text exists; 507 → `quota` mapping is already in `classify.ts`.

@@ -108,6 +108,23 @@ export function excludePatternsInvalid(raw: unknown): boolean {
 	return !validPatterns((raw as Record<string, unknown>)["excludePatterns"]);
 }
 
+export type PauseState = { paused: false } | { paused: true; raw: unknown; readable: string[] };
+
+/**
+ * Whether sync must pause for unknown exclude patterns (T-I6): the patterns are present but unusable, or a
+ * data.json exists on disk but didn't load as an object (corrupt or truncated: Obsidian then hands back nothing,
+ * O-API-19). `raw` is what every save writes back while paused; `readable` pre-fills the settings field.
+ */
+export function pauseFromData(raw: unknown, fileExists: boolean): PauseState {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		return fileExists ? { paused: true, raw: null, readable: [] } : { paused: false };
+	}
+	if (!excludePatternsInvalid(raw)) return { paused: false };
+	const value = (raw as Record<string, unknown>)["excludePatterns"];
+	const readable = Array.isArray(value) ? value.filter((p): p is string => typeof p === "string" && p.length <= MAX_PATTERN_LENGTH).slice(0, MAX_PATTERN_LINES) : [];
+	return { paused: true, raw: value, readable };
+}
+
 /**
  * What a save writes to data.json. While sync is paused for unreadable patterns (`pausedRaw` is the value read
  * at load), every save that doesn't set new patterns writes that value back unchanged, so a restart is still

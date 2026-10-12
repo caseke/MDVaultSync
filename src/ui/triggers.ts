@@ -9,7 +9,7 @@ export type TriggerDecision = { action: "run" } | { action: "skip" } | { action:
 const UNATTENDED = new Set<Trigger>(["startup", "interval", "rerun"]);
 
 export const PATTERNS_TEXT =
-	"Sync is paused: the exclude patterns saved on this device couldn't be read. Enter them again in the MDVaultSync settings under Exclude patterns.";
+	"Sync is paused: the exclude patterns saved on this device couldn't be read. In the MDVaultSync settings, check Exclude patterns, then select Save and resume sync.";
 
 /** `patternsOk` false: data.json held unusable exclude patterns; nothing syncs until they're saved again (T-I6). */
 export function triggerDecision(trigger: Trigger, auth: AuthStatus, hasClientId: boolean, patternsOk: boolean): TriggerDecision {

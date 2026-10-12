@@ -338,9 +338,9 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 						);
 					});
 					const paused = this.plugin.patternsInvalid;
-					if (paused) setDescError(s, "The saved patterns couldn't be read, so sync is paused. Enter them again, then select Save and resume sync.");
+					if (paused) setDescError(s, "The saved patterns couldn't be read, so sync is paused. The lines that could be read are shown. Check them, then select Save and resume sync.");
 					else s.setDesc(desc);
-					let text = d.excludePatterns.join("\n");
+					let text = (paused ? this.plugin.pausedReadable : d.excludePatterns).join("\n");
 					const tooLong = "Too many lines (at most 200) or a line over 1000 characters. Not saved.";
 					s.addTextArea((ta) => {
 						ta.inputEl.rows = 6;
@@ -370,7 +370,12 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 										setDescError(s, tooLong);
 										return;
 									}
-									await this.save({ excludePatterns: lines });
+									try {
+										await this.save({ excludePatterns: lines });
+									} catch {
+										setDescError(s, "Couldn't save. Sync is still paused.");
+										return;
+									}
 									this.refresh();
 								}),
 						);
