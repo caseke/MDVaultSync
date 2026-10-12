@@ -41,7 +41,10 @@ export function caseKey(path: string): string {
 export function isConfigDirName(name: string, configDir: string): boolean {
 	const a = nfc(name);
 	const b = nfc(configDir);
-	return caseKey(a) === caseKey(b) || a.toUpperCase().toLowerCase() === b.toUpperCase().toLowerCase();
+	// lower→upper→lower also catches U+1E9E "ẞ", which full case folding maps to "ss".
+	const folds = (s: string) => [caseKey(s), s.toUpperCase().toLowerCase(), s.toLowerCase().toUpperCase().toLowerCase()];
+	const fb = folds(b);
+	return folds(a).some((f, i) => f === fb[i]);
 }
 
 function nfc(s: string): string {

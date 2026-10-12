@@ -253,4 +253,6 @@ test("configDir match also catches Unicode-fold variants (U+017F, U+212A)", () =
 	assert.deepEqual(remote(["\u017fettings", "plugins", "x", "main.js"], "settings"), { ok: false, reason: "hidden" });
 	assert.deepEqual(remote(["\u212Aonfig", "a.md"], "konfig"), { ok: false, reason: "hidden" });
 	assert.equal(containmentProblem("\u017fettings/x", "settings"), "hidden");
+	assert.equal(containmentProblem("gro\u1E9Ee/x", "grosse"), "hidden");
+	assert.equal(containmentProblem("notes/x", "settings"), null);
 });

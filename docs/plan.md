@@ -778,13 +778,13 @@ $ npm audit --audit-level=high
   - `exclusionReason` NFC-normalizes the path.
   - `sanitizeDeviceName` replaces `_vti_`, so the conflict copy stays uploadable.
   - `pathPrefixLen` is required.
-- Re-review of the fixes: pending at the time of this commit; the result is recorded in the next commit.
+- Re-review of the fix diff (`security-reviewer`): every finding above is confirmed resolved, with no new high, medium or low issues. Info, fixed: U+1E9E "ẞ" (fully case-folds to "ss") passed both folds; `isConfigDirName` now also compares lower-upper-lower, and a test covers it. Info, carried forward: see the M6 note on `validatePath` below, and local files with NBSP in their name are now skipped, which falls under the existing M5 "a skip never deletes" requirement (T-D1).
 
 **Notes for M5 and later** (carry-ins from the review and the build):
 - **M5 must** call `remoteToVaultPath` for every remote item's rebuilt name chain and skip on `ok: false`. It must call `exclusionReason` with the real configDir, and `findCollisions` on the raw local paths with `tracked` = the NFC paths in `files`.
 - **M5 must** group remote-derived VaultPaths by path and by `caseKey`, and skip every member of a group as `unicode-collision` or `case-collision`. Remote names that differ only in normalization map to one VaultPath, and `findCollisions` sees only local paths (review, low). Test it.
 - **M5:** match remote and local by `caseKey` (design §5.4). `caseKey` deliberately stays `toLocaleLowerCase("en-US")`; the wider fold is used only for configDir.
-- **M6:** the `exists` callback for `conflictCopyPath` must be case-insensitive. A `RangeError` from it means "conflict not resolved, keep both sides untouched", never an overwrite (review, info). Call `containmentProblem` right before every local write.
+- **M6:** the `exists` callback for `conflictCopyPath` must be case-insensitive. A `RangeError` from it means "conflict not resolved, keep both sides untouched", never an overwrite (review, info). Call `containmentProblem` right before every local write, and `validatePath` on the same final path: `containmentProblem` checks containment only, so the name rules (the NBSP rule included) need `validatePath` (re-review, info).
 - **M7:** the exclude-setting help must say that `!` lines and backslash escapes are unsupported and that matching is case-sensitive, so on the iPad a remote `PRIVATE/` isn't excluded by `Private/` (review, info). Consider escaping or rejecting C1 controls, DEL and bidi overrides when names are shown in reports (review, info: they can't escape the vault, but they can spoof names).
 
 ---
