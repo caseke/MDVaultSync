@@ -20,7 +20,7 @@ import { classifyError } from "./remote/classify.ts";
 import { GraphClient } from "./remote/graph.ts";
 import { AuthorizingTransport } from "./remote/http.ts";
 import { RetryPolicy } from "./remote/retry.ts";
-import { defaultDeviceName, isValidClientId, parseData, toEngineSettings, type PluginData } from "./settings.ts";
+import { defaultDeviceName, excludePatternsInvalid, isValidClientId, parseData, snapshotForSave, toEngineSettings, type PluginData } from "./settings.ts";
 import { AUTH_ERROR_MESSAGES, authErrorText } from "./ui/auth-messages.ts";
 import { ConfirmDeletesModal } from "./ui/confirm-deletes-modal.ts";
 import { DiagnosticsModal, FILE_REPLACE_TEXT } from "./ui/diagnostics-modal.ts";
@@ -31,7 +31,7 @@ import { ReportModal } from "./ui/report-modal.ts";
 import { MDVaultSyncSettingTab } from "./ui/settings-tab.ts";
 import { SignInModal } from "./ui/sign-in-modal.ts";
 import { statusText } from "./ui/status.ts";
-import { triggerDecision } from "./ui/triggers.ts";
+import { PATTERNS_TEXT, triggerDecision } from "./ui/triggers.ts";
 
 /**
  * ObsidianVault's structural view of app.vault and app.fileManager. It only ever hands back the TFile and TFolder
@@ -88,9 +88,20 @@ export default class MDVaultSyncPlugin extends Plugin {
 	private timerId: number | null = null;
 	private layoutReady = false;
 	private readonly prompts = new Set<PromptModal>();
+	/** data.json held unusable exclude patterns: sync is paused until they're saved again (T-I6, fail closed). */
+	patternsInvalid = false;
+	/** The unreadable excludePatterns value from data.json, written back by every save while paused. */
+	private pausedPatterns: unknown = undefined;
+	/** Set in onunload: no prompt opens after it. */
+	private disposed = false;
+	/** Every data.json write goes through one queue and snapshots `data` when it runs (M7 review). */
+	private saveChain: Promise<void> = Promise.resolve();
 
 	override async onload(): Promise<void> {
-		this.data = parseData(await this.loadData());
+		const raw: unknown = await this.loadData();
+		this.data = parseData(raw);
+		this.patternsInvalid = excludePatternsInvalid(raw);
+		if (this.patternsInvalid) this.pausedPatterns = (raw as Record<string, unknown>)["excludePatterns"];
 		this.defaultDeviceName = defaultDeviceName(platformName());
 		const { configDir } = this.app.vault;
 		this.pluginDir = normalizePath(this.manifest.dir ?? `${configDir}/plugins/${this.manifest.id}`);
@@ -102,7 +113,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 		});
 		this.tokenStore = new PluginTokenStore(this.app.secretStorage, {
 			get: () => this.data,
-			save: () => this.saveData(this.data),
+			save: () => this.persist(),
 		});
 		// Before AuthClient reads the token: a sign-in left by an uninstalled copy is removed (R-AUTH-9).
 		await this.clearLeftoverSignIn(!(await isLeftoverInstall(this.app.vault.adapter, this.pluginDir)));
@@ -234,6 +245,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 	override onunload(): void {
 		// Handlers, commands, events and timers are released through register* above. A live sign-in link would
 		// outlive its callback handler, so close it. Open prompts answer "no", and a running sync starts no new op.
+		this.disposed = true;
 		this.closeSignInModal();
 		for (const m of [...this.prompts]) m.close();
 		// Undefined only if onload failed before constructing it.
@@ -260,6 +272,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 			patterns: () => this.data.excludePatterns,
 			sink: (op) => this.engine.noteLocalChange(op),
 		});
+		if (this.patternsInvalid) new Notice(PATTERNS_TEXT, 0);
 		const startup = window.setTimeout(() => void this.sync("startup"), 5000);
 		this.register(() => window.clearTimeout(startup));
 		this.restartTimer();
@@ -284,7 +297,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 
 	/** Every trigger comes here; the engine's single-flight lock keeps runs sequential (R-TRIG-4). */
 	async sync(trigger: Trigger): Promise<void> {
-		const d = triggerDecision(trigger, this.auth.status, isValidClientId(this.data.clientId));
+		const d = triggerDecision(trigger, this.auth.status, isValidClientId(this.data.clientId), !this.patternsInvalid);
 		if (d.action === "skip") return;
 		if (d.action === "notice") {
 			new Notice(d.text);
@@ -305,10 +318,33 @@ export default class MDVaultSyncPlugin extends Plugin {
 
 	/** Shows a prompt the engine waits on; the engine applies its own 10-minute timeout too (design §5.4). */
 	private ask(modal: PromptModal): Promise<boolean> {
+		if (this.disposed) return Promise.resolve(false);
 		this.prompts.add(modal);
 		void modal.answer.finally(() => this.prompts.delete(modal));
 		modal.open();
 		return modal.answer;
+	}
+
+	/**
+	 * Applies `patch` and writes data.json. Writes are serialized, and each one snapshots `data` when it runs, so
+	 * an older snapshot can never land after a newer one; for example, a settings save can't put back a fallback
+	 * token that sign-out just removed (R-AUTH-7). Memory is updated only after the write, so a client ID is on
+	 * disk before it can be used (R-AUTH-9).
+	 */
+	persist(patch: Partial<PluginData> = {}): Promise<void> {
+		const run = this.saveChain
+			.catch(() => undefined)
+			.then(async () => {
+				await this.saveData(snapshotForSave(this.data, patch, this.patternsInvalid ? this.pausedPatterns : undefined));
+				Object.assign(this.data, patch);
+				// Saving patterns is the user's explicit fix: sync resumes (T-I6).
+				if (patch.excludePatterns !== undefined) {
+					this.patternsInvalid = false;
+					this.pausedPatterns = undefined;
+				}
+			});
+		this.saveChain = run;
+		return run;
 	}
 
 	/** After every run (reruns included): notices for conflicts and errors only (R-UI-3, R-CONF-2). */
@@ -399,6 +435,8 @@ export default class MDVaultSyncPlugin extends Plugin {
 
 	/** Clears tokens and sync state; local files stay (R-AUTH-7). */
 	async signOut(): Promise<void> {
+		// An open preview or delete prompt belongs to a run that can no longer act.
+		for (const m of [...this.prompts]) m.close();
 		// The engine is reset first, so a running sync can't save state after the clear.
 		const { tokenCleared, stateCleared } = await clearSession({ engine: this.engine, signOut: () => this.auth.signOut(), store: this.stateStore });
 		this.lastReport = null;

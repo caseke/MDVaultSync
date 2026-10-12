@@ -76,6 +76,15 @@ export interface EngineDeps {
 }
 
 export const PROMPT_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * Local-change hints kept between runs (M7 review). A long stretch of failing runs must never grow pendingLocal
+ * past what the state parser accepts (100,000), which would discard the whole state. Past this cap `dirty` and
+ * `deleted` hints aren't stored; instead the next scans re-hash every file until an ok run, so no edit depends on
+ * a dropped hint. `renamed` hints are kept up to MAX_RENAME_HINTS, because they also protect the record of a file
+ * renamed to a name OneDrive refuses (design §5.4).
+ */
+export const MAX_PENDING_HINTS = 10_000;
+const MAX_RENAME_HINTS = 50_000;
 const MAX_DELTA_PAGES = 10_000;
 /** The children-walk fallback's sentinel link (src/remote/graph.ts CHILDREN_WALK_LINK): always a full listing. */
 const FULL_LISTING_PREFIX = "mdvaultsync:";
@@ -115,7 +124,16 @@ export class Engine implements SyncEngine {
 	private rerunRequested = false;
 	/** The strongest trigger asked for during the current run; the rerun uses it ("rerun" if none was user-made). */
 	private rerunTrigger: Trigger = "rerun";
+	/** "Sync now" was asked for during the run: the rerun re-offers declined deletes even if it is a preview. */
+	private rerunReoffer = false;
 	private prefixLen: number | null = null;
+	/** The epoch the running loop belongs to: a request after reset() doesn't join a dead loop. */
+	private runningEpoch = 0;
+	/** pendingLocal entries the running sync took (from its scan on) and will clear: never deduplicated against. */
+	private hintBoundary = 0;
+	/** Hint overflow count, and the count an ok run has covered: while they differ, the scan re-hashes all files. */
+	private overflowGen = 0;
+	private clearedGen = 0;
 	private current: EngineStatus = { state: "idle", lastSyncAt: null };
 	private readonly early: PendingLocalOp[] = [];
 
@@ -138,22 +156,51 @@ export class Engine implements SyncEngine {
 	 * get the running promise. Runs never overlap, and any number of overlapping requests add at most one run.
 	 */
 	requestSync(trigger: Trigger): Promise<SyncReport> {
+		if (this.running && this.runningEpoch !== this.epoch) {
+			// The running loop was reset (sign-out, unload) and will stop: start a fresh run once it settles.
+			const old = this.running;
+			return old.then(
+				() => this.requestSync(trigger),
+				() => this.requestSync(trigger),
+			);
+		}
 		if (this.running) {
 			this.rerunRequested = true;
 			if (triggerRank(trigger) > triggerRank(this.rerunTrigger)) this.rerunTrigger = trigger;
+			if (trigger === "command" || trigger === "ribbon") this.rerunReoffer = true;
 			return this.running;
 		}
 		const run = this.loop(trigger).finally(() => {
-			this.running = null;
+			if (this.running === run) this.running = null;
 		});
 		this.running = run;
+		this.runningEpoch = this.epoch;
 		return run;
 	}
 
-	/** A vault event (M7). Kept in memory with the state and saved with it. */
+	/** A vault event (M7). Kept in memory with the state and saved with it (design §3). */
 	noteLocalChange(op: PendingLocalOp): void {
-		if (this.state) this.state.pendingLocal.push(op);
-		else this.early.push(op);
+		if (this.state) this.addHint(this.state.pendingLocal, op, this.hintBoundary);
+		else this.addHint(this.early, op, 0);
+	}
+
+	/**
+	 * Typing fires a modify per autosave, so a repeat of the last hint is dropped, but only when that hint is
+	 * newer than the running sync's snapshot: one the sync will clear when it ends can't stand in for a new edit.
+	 */
+	private addHint(list: PendingLocalOp[], op: PendingLocalOp, boundary: number): void {
+		const last = list.length > boundary ? list[list.length - 1] : undefined;
+		if (last && JSON.stringify(last) === JSON.stringify(op)) return;
+		if (op.kind === "renamed" ? list.length >= MAX_RENAME_HINTS : list.length >= MAX_PENDING_HINTS) {
+			if (op.kind !== "renamed") this.overflowGen++;
+			return;
+		}
+		list.push(op);
+	}
+
+	/** Local-change hints waiting for a run (tests and diagnostics). */
+	get pendingHintCount(): number {
+		return (this.state?.pendingLocal.length ?? 0) + this.early.length;
 	}
 
 	/**
@@ -162,6 +209,11 @@ export class Engine implements SyncEngine {
 	 */
 	reset(): void {
 		this.epoch++;
+		// A queued follow-up must not start after sign-out or unload (M7 review).
+		this.rerunRequested = false;
+		this.rerunTrigger = "rerun";
+		this.rerunReoffer = false;
+		this.hintBoundary = 0;
 		this.state = null;
 		this.early.length = 0;
 		this.expectedWrites.clear();
@@ -174,14 +226,22 @@ export class Engine implements SyncEngine {
 	}
 
 	private async loop(trigger: Trigger): Promise<SyncReport> {
+		const epoch = this.epoch;
 		let t = trigger;
+		let reoffer = false;
 		let report: SyncReport;
-		do {
+		for (;;) {
 			this.rerunRequested = false;
 			this.rerunTrigger = "rerun";
-			report = await this.runOnce(t);
+			this.rerunReoffer = false;
+			report = await this.runOnce(t, reoffer);
+			// reset() (sign-out, unload) ends the loop: no new run after it.
+			if (!this.rerunRequested || this.epoch !== epoch) break;
+			// Cancel means "not now": a timer that fired while the preview was open doesn't reopen it (M7 review).
+			if (report.result === "cancelled" && this.rerunTrigger === "rerun" && !this.rerunReoffer) break;
 			t = this.rerunTrigger;
-		} while (this.rerunRequested);
+			reoffer = this.rerunReoffer;
+		}
 		return report;
 	}
 
@@ -195,7 +255,7 @@ export class Engine implements SyncEngine {
 		}
 	}
 
-	private async runOnce(trigger: Trigger): Promise<SyncReport> {
+	private async runOnce(trigger: Trigger, reoffer = false): Promise<SyncReport> {
 		const { deps } = this;
 		const epoch = this.epoch;
 		const live = () => this.epoch === epoch;
@@ -217,6 +277,7 @@ export class Engine implements SyncEngine {
 		/** Every planned op got its turn (no early stop): only then may union mode end. */
 		let completed = false;
 		let pendingSeen = 0;
+		let rehashGen: number | null = null;
 
 		this.setStatus({ state: "syncing", phase: "preflight" });
 		try {
@@ -226,7 +287,7 @@ export class Engine implements SyncEngine {
 				const loaded = (await deps.store.load()) ?? emptyState(deps.newDeviceId());
 				if (!live()) throw new RunStop({ kind: "auth", code: "signed-out" });
 				this.state = loaded;
-				this.state.pendingLocal.push(...this.early.splice(0));
+				for (const op of this.early.splice(0)) this.addHint(loaded.pendingLocal, op, 0);
 			}
 			// Preflight (design §5.1): a new or changed approot id means a union merge (D-18).
 			const root = await deps.remote.getAppRoot();
@@ -238,14 +299,16 @@ export class Engine implements SyncEngine {
 			await saver.flush();
 
 			this.setStatus({ state: "syncing", phase: "resume" });
-			await resumeUploads({ state, vault: deps.vault, remote: deps.remote, content: deps.content, classify: deps.classify, saver, transformId: deps.transformId, logger: this.logger });
+			await resumeUploads({ state, vault: deps.vault, remote: deps.remote, content: deps.content, classify: deps.classify, saver, transformId: deps.transformId, logger: this.logger, live });
 
 			this.setStatus({ state: "syncing", phase: "pull" });
 			await this.pull(state, saver);
 
 			this.setStatus({ state: "syncing", phase: "scan" });
 			pendingSeen = state.pendingLocal.length;
-			const scan = await this.scan(state, settings);
+			this.hintBoundary = pendingSeen;
+			rehashGen = this.overflowGen;
+			const scan = await this.scan(state, settings, rehashGen !== this.clearedGen);
 
 			plan = makePlan(state, scan, state.remoteIndex, {
 				configDir: deps.configDir,
@@ -255,7 +318,7 @@ export class Engine implements SyncEngine {
 				deviceName: settings.deviceName,
 				now: new Date(deps.clock.now()),
 				// "Sync now" (command or ribbon) re-offers deletes the user declined (R-GUARD-1).
-				reofferDeclined: trigger === "command" || trigger === "ribbon",
+				reofferDeclined: reoffer || trigger === "command" || trigger === "ribbon",
 			});
 			this.logger.event("sync.plan", { count: plan.ops.length });
 
@@ -336,6 +399,11 @@ export class Engine implements SyncEngine {
 			runErrors,
 		});
 		await this.finish(report, plan, completed, pendingSeen, saver, live);
+		if (live()) {
+			this.hintBoundary = 0;
+			// The full re-hash that covered every dropped hint ends with an ok run.
+			if (report.result === "ok" && rehashGen !== null) this.clearedGen = rehashGen;
+		}
 		this.logger.event("sync.run", { count: results.length, durationMs: report.finishedAt - startedAt, code: report.result });
 		if (!live()) return report;
 		try {
@@ -485,7 +553,7 @@ export class Engine implements SyncEngine {
 	 * differ from their record, and files with no record. Files over the size cap are not read (the planner skips
 	 * them). Files skipped for their name are hashed too, so a rename to such a name still matches its record.
 	 */
-	private async scan(state: SyncState, settings: EngineSettings): Promise<ScannedEntry[]> {
+	private async scan(state: SyncState, settings: EngineSettings, rehashAll = false): Promise<ScannedEntry[]> {
 		const t0 = this.deps.clock.now();
 		const dirty = new Set<string>();
 		for (const ev of state.pendingLocal) {
@@ -509,7 +577,7 @@ export class Engine implements SyncEngine {
 			}
 			const p = e.path.normalize("NFC");
 			const rec = own(state.files, p) ? state.files[p as VaultPath] : undefined;
-			if (rec && !dirty.has(p) && rec.size === e.size && rec.mtime === e.mtime && rec.mtime !== 0 && rec.transformId === this.deps.transformId) {
+			if (rec && !rehashAll && !dirty.has(p) && rec.size === e.size && rec.mtime === e.mtime && rec.mtime !== 0 && rec.transformId === this.deps.transformId) {
 				out.push({ path: e.path, isFolder: false, size: e.size, mtime: e.mtime, localHash: rec.localHash, storedHash: rec.remoteHash });
 				continue;
 			}

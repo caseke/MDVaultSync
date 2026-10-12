@@ -19,12 +19,15 @@ export interface ResumeContext {
 	saver: Saver;
 	transformId: string;
 	logger?: Logger;
+	/** False once the engine was reset (sign-out, unload): resume nothing more (M7 review). */
+	live?: () => boolean;
 }
 
 /** Finishes or drops every persisted session. Rethrows run-ending failures (auth, network…) with the record kept. */
 export async function resumeUploads(ctx: ResumeContext): Promise<void> {
 	const { state, vault, remote } = ctx;
 	for (const [key, rec] of Object.entries(state.uploadSessions)) {
+		if (ctx.live && !ctx.live()) return;
 		const path = key as VaultPath;
 		const drop = async (cancel: boolean) => {
 			delete state.uploadSessions[path];

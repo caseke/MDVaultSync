@@ -99,7 +99,7 @@ Data loss is the top risk for a sync tool.
 | D5 | **Throttling or blocking by Microsoft** from aggressive polling. | **T-D5.** Delta with a token (1 resource unit) [G-DL-9]. Retry-After honored with a global pause. Exponential backoff with jitter. A 10-minute backoff budget per run. Minimum interval of 1 minute, or 15 minutes on the listing fallback. The single-flight lock. | M3, M7 |
 | D6 | **Memory exhaustion on iPad** from large files, since requestUrl buffers whole bodies [O-API-2]. | **T-D6.** 100 MiB default cap (D-12). 10 MiB upload fragments. JSON size cap. M3 checks a large-file round trip on the iPad. | M3, M6 |
 | D7 | **Quota exhaustion** (5 GB free; recycle bin counts too) [C-OD-1], [G-DEL-2]. | **T-D7.** Handle 507 and `quotaLimitReached` as a clear notice. Read quota for the settings display when the scope allows it [G-QT-1]. | M8 |
-| D8 | **Sync loop:** the plugin's own writes trigger vault events that look like new edits. | **T-D8.** Echo filter for in-flight writes (design §3). Hash comparison makes any leftover echo a no-op. | M7 |
+| D8 | **Sync loop:** the plugin's own writes trigger vault events that look like new edits. | **T-D8.** Echoes are recorded like any event and resolved by the scan: the re-hashed file equals its sync record, so nothing is planned (design §3). Vault events don't trigger syncs, so an echo can't start a loop; repeated hints are deduplicated and capped (M7). | M7 |
 
 ### Elevation of privilege
 | ID | Threat | Mitigation | Milestone |

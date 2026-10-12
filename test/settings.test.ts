@@ -5,6 +5,8 @@ import {
 	MAX_PATTERN_LINES,
 	defaultDeviceName,
 	effectiveDeviceName,
+	excludePatternsInvalid,
+	snapshotForSave,
 	intervalFloor,
 	isValidClientId,
 	parseData,
@@ -149,4 +151,25 @@ test("toEngineSettings converts MiB to bytes and copies the rest", () => {
 		massDeleteThresholdPct: 40,
 	});
 	assert.notEqual(s.excludePatterns, d.excludePatterns, "a copy: a later settings change doesn't change a running sync's view");
+});
+
+test("exclude patterns fail closed: a present but invalid list is flagged, never silently empty (T-I6, M7 review)", () => {
+	assert.equal(excludePatternsInvalid(null), false);
+	assert.equal(excludePatternsInvalid({}), false, "absent: the default (none)");
+	assert.equal(excludePatternsInvalid({ excludePatterns: ["Private/"] }), false);
+	assert.equal(excludePatternsInvalid({ excludePatterns: ["Private/", 1] }), true);
+	assert.equal(excludePatternsInvalid({ excludePatterns: "Private/" }), true);
+	assert.equal(excludePatternsInvalid({ excludePatterns: Array.from({ length: MAX_PATTERN_LINES + 1 }, () => "x") }), true);
+	assert.equal(excludePatternsInvalid({ excludePatterns: ["x".repeat(1001)] }), true);
+});
+
+test("while paused for bad patterns, every other save writes the unreadable value back, so a restart stays paused", () => {
+	const raw = { clientId: "", excludePatterns: ["Private/", 1] };
+	const data = parseData(raw);
+	const snap = snapshotForSave(data, { intervalMinutes: 10 }, raw.excludePatterns);
+	assert.equal(snap.intervalMinutes, 10);
+	assert.equal(excludePatternsInvalid(snap), true, "reloading the written data.json still pauses");
+	const resumed = snapshotForSave(data, { excludePatterns: ["Private/"] }, raw.excludePatterns);
+	assert.equal(excludePatternsInvalid(resumed), false, "saving patterns resumes");
+	assert.deepEqual(snapshotForSave(data, { previewEveryRun: true }, undefined).excludePatterns, [], "not paused: the parsed value");
 });

@@ -94,6 +94,31 @@ export function effectiveDeviceName(data: PluginData, platformDefault: string): 
 	return data.deviceName === "" ? platformDefault : data.deviceName;
 }
 
+function validPatterns(v: unknown): v is string[] {
+	return Array.isArray(v) && v.length <= MAX_PATTERN_LINES && v.every((p) => typeof p === "string" && p.length <= MAX_PATTERN_LENGTH);
+}
+
+/**
+ * True when data.json holds exclude patterns that can't be used. Every other bad field falls back to a safe
+ * default, but "no exclusions" is the unsafe default here: it would upload what the user meant to keep off
+ * OneDrive (T-I6). So sync pauses until the patterns are saved again in settings (M7 review).
+ */
+export function excludePatternsInvalid(raw: unknown): boolean {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw) || !("excludePatterns" in raw)) return false;
+	return !validPatterns((raw as Record<string, unknown>)["excludePatterns"]);
+}
+
+/**
+ * What a save writes to data.json. While sync is paused for unreadable patterns (`pausedRaw` is the value read
+ * at load), every save that doesn't set new patterns writes that value back unchanged, so a restart is still
+ * paused instead of loading the parsed fallback (no exclusions) as if it were the user's choice (T-I6).
+ */
+export function snapshotForSave(data: PluginData, patch: Partial<PluginData>, pausedRaw: unknown): Record<string, unknown> {
+	const out: Record<string, unknown> = { ...data, ...patch };
+	if (pausedRaw !== undefined && patch.excludePatterns === undefined) out["excludePatterns"] = pausedRaw;
+	return out;
+}
+
 /** data.json can be edited by hand or by another plugin (T-T6): keep only well-typed, in-range fields. */
 export function parseData(raw: unknown): PluginData {
 	const out: PluginData = { ...DEFAULT_DATA, excludePatterns: [] };
@@ -108,9 +133,7 @@ export function parseData(raw: unknown): PluginData {
 	if (inRange(iv, 0, 1440) && (iv === 0 || iv >= FLOOR)) out.intervalMinutes = iv;
 	if (inRange(o["maxFileSizeMiB"], 1, 1024)) out.maxFileSizeMiB = o["maxFileSizeMiB"];
 	const pats = o["excludePatterns"];
-	if (Array.isArray(pats) && pats.length <= MAX_PATTERN_LINES && pats.every((p): p is string => typeof p === "string" && p.length <= MAX_PATTERN_LENGTH)) {
-		out.excludePatterns = [...pats];
-	}
+	if (validPatterns(pats)) out.excludePatterns = [...pats];
 	if (typeof o["previewEveryRun"] === "boolean") out.previewEveryRun = o["previewEveryRun"];
 	if (inRange(o["massDeleteThresholdPct"], 1, 100)) out.massDeleteThresholdPct = o["massDeleteThresholdPct"];
 	return out;

@@ -56,6 +56,8 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 
 	/** Re-render after auth or sync changes: update() on 1.13+, the fallback renderer before. */
 	refresh(): void {
+		// Only while the tab is on screen: rendering prepares a sign-in, and only hide() discards it (R-SEC-1).
+		if (!this.containerEl.isConnected) return;
 		if (requireApiVersion("1.13.0")) this.update();
 		else if (this.shown) this.renderFallback();
 	}
@@ -115,10 +117,9 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 		];
 	}
 
-	/** Saves data.json first, then applies the change in memory (R-AUTH-9: data.json must exist before use). */
-	private async save(patch: Partial<PluginData>): Promise<void> {
-		await this.plugin.saveData({ ...this.plugin.data, ...patch });
-		Object.assign(this.plugin.data, patch);
+	/** Through the plugin's serialized write queue: data.json first, then memory (R-AUTH-9). */
+	private save(patch: Partial<PluginData>): Promise<void> {
+		return this.plugin.persist(patch);
 	}
 
 	// ---------- Account ----------
@@ -336,21 +337,44 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 								"Hidden files and the settings folder are always excluded. At most 200 lines.",
 						);
 					});
-					s.setDesc(desc);
+					const paused = this.plugin.patternsInvalid;
+					if (paused) setDescError(s, "The saved patterns couldn't be read, so sync is paused. Enter them again, then select Save and resume sync.");
+					else s.setDesc(desc);
+					let text = d.excludePatterns.join("\n");
+					const tooLong = "Too many lines (at most 200) or a line over 1000 characters. Not saved.";
 					s.addTextArea((ta) => {
 						ta.inputEl.rows = 6;
 						ta.setPlaceholder("Private/")
-							.setValue(d.excludePatterns.join("\n"))
+							.setValue(text)
 							.onChange(async (raw) => {
+								text = raw;
+								// While paused, a half-typed list must not resume sync: only the button saves (T-I6).
+								if (this.plugin.patternsInvalid) return;
 								const lines = parseExcludePatterns(raw);
 								if (lines === null) {
-									setDescError(s, "Too many lines (at most 200) or a line over 1000 characters. Not saved.");
+									setDescError(s, tooLong);
 									return;
 								}
 								s.setDesc(desc);
 								await this.save({ excludePatterns: lines });
 							});
 					});
+					if (paused) {
+						s.addButton((b) =>
+							b
+								.setButtonText("Save and resume sync")
+								.setCta()
+								.onClick(async () => {
+									const lines = parseExcludePatterns(text);
+									if (lines === null) {
+										setDescError(s, tooLong);
+										return;
+									}
+									await this.save({ excludePatterns: lines });
+									this.refresh();
+								}),
+						);
+					}
 				},
 			},
 			{

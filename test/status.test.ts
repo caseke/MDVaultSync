@@ -23,6 +23,14 @@ test("every engine status has text", () => {
 	assert.equal(statusText({ state: "sign-in-required" }, ctx), "Sign-in required");
 });
 
+test("every state also shows the last successful sync time when there is one (R-UI-2, M7 review)", () => {
+	const ctx = { now: NOW, lastSyncAt: T1402, signedIn: true };
+	assert.equal(statusText({ state: "syncing", phase: "pull" }, ctx), "Syncing… (last synced 14:02)");
+	assert.equal(statusText({ state: "waiting-for-user" }, ctx), "Waiting for you: open MDVaultSync to review (last synced 14:02)");
+	assert.equal(statusText({ state: "error", code: "network" }, ctx), "Sync error (network) (last synced 14:02)");
+	assert.equal(statusText({ state: "sign-in-required" }, ctx), "Sign-in required (last synced 14:02)");
+});
+
 test("an idle engine while signed out says so", () => {
 	assert.equal(statusText({ state: "idle", lastSyncAt: null }, { now: NOW, lastSyncAt: T1402, signedIn: false }), "Signed out");
 	assert.equal(statusText({ state: "sign-in-required" }, { now: NOW, lastSyncAt: null, signedIn: false }), "Sign-in required");

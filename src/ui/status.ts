@@ -21,16 +21,18 @@ export function formatSyncTime(t: number, now: number): string {
 	return sameDay ? hm : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`;
 }
 
+/** R-UI-2 asks for the state and the last sync time: every state but idle appends the last successful sync. */
 export function statusText(s: EngineStatus, ctx: StatusContext): string {
+	const since = ctx.lastSyncAt === null ? "" : ` (last synced ${formatSyncTime(ctx.lastSyncAt, ctx.now)})`;
 	switch (s.state) {
 		case "syncing":
-			return "Syncing…";
+			return `Syncing…${since}`;
 		case "waiting-for-user":
-			return "Waiting for you: open MDVaultSync to review";
+			return `Waiting for you: open MDVaultSync to review${since}`;
 		case "error":
-			return `Sync error (${LOG_CODE_RE.test(s.code) ? s.code : "other"})`;
+			return `Sync error (${LOG_CODE_RE.test(s.code) ? s.code : "other"})${since}`;
 		case "sign-in-required":
-			return "Sign-in required";
+			return `Sign-in required${since}`;
 		case "idle": {
 			if (!ctx.signedIn) return "Signed out";
 			const t = s.lastSyncAt ?? ctx.lastSyncAt;

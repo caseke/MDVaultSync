@@ -2,7 +2,7 @@
 // resync, the delta merge, crash injection and resume, the transform seam, and two devices converging.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PROMPT_TIMEOUT_MS } from "../src/core/engine.ts";
+import { MAX_PENDING_HINTS, PROMPT_TIMEOUT_MS } from "../src/core/engine.ts";
 import type { DeltaPage, PlanOp, VaultPath } from "../src/core/ports.ts";
 import { AuthError } from "../src/remote/auth.ts";
 import { ResyncRequired } from "../src/remote/errors.ts";
@@ -616,4 +616,169 @@ test("echoes of our own local move and trash (renamed / deleted events) plan not
 	assert.ok(nothingToDo(r2), JSON.stringify(r2.counts));
 	assert.equal(remote.contentAt("new.md"), "o");
 	assert.equal(remote.contentAt("gone.md"), null);
+});
+
+// ---------- M7 security-review fixes ----------
+
+test("reset() during a run drops a queued rerun: no run starts after unload or sign-out", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote);
+	a.vault.write("x.md", "x");
+	await a.sync("startup");
+	let lists = 0;
+	const { gate, entered } = holdNextList(a);
+	const list = a.vault.list.bind(a.vault);
+	a.vault.list = () => {
+		lists++;
+		return list();
+	};
+	const p = a.sync("interval");
+	await entered;
+	void a.sync("command");
+	a.engine.reset();
+	gate.resolve();
+	await p;
+	assert.equal(lists, 1, "only the run that was already going listed the vault");
+	a.vault.write("y.md", "y");
+	await tasks();
+	assert.equal(remote.contentAt("y.md"), null);
+});
+
+test("a cancelled preview drops reruns from unattended triggers, but keeps one from a user action", async () => {
+	const remote = new FakeRemote();
+	const gate = deferred<boolean>();
+	let first = true;
+	const a = new Device(remote, {
+		confirmPlan: () => {
+			if (!first) return Promise.resolve(false);
+			first = false;
+			return gate.promise;
+		},
+	});
+	a.vault.write("x.md", "x");
+	const p = a.sync("startup");
+	for (let i = 0; i < 50 && a.plans.length === 0; i++) await tasks();
+	void a.sync("interval");
+	gate.resolve(false);
+	await p;
+	assert.equal(a.plans.length, 1, "Cancel isn't followed by the same preview from a queued timer run");
+
+	const gate2 = deferred<boolean>();
+	let again = true;
+	const b = new Device(remote, {
+		confirmPlan: () => {
+			if (!again) return Promise.resolve(false);
+			again = false;
+			return gate2.promise;
+		},
+	});
+	const q = b.sync("startup");
+	for (let i = 0; i < 50 && b.plans.length === 0; i++) await tasks();
+	void b.sync("preview");
+	gate2.resolve(false);
+	await q;
+	assert.equal(b.plans.length, 2, "a preview the user asked for during the run still shows");
+});
+
+test("'Sync now' and 'Preview sync' both pressed during a run: the rerun previews and still re-offers declined deletes", async () => {
+	const remote = new FakeRemote();
+	let answer = false;
+	const a = new Device(remote, { confirmDeletes: () => Promise.resolve(answer) });
+	for (const n of ["a", "b", "c", "d", "e"]) a.vault.write(`${n}.md`, n);
+	await a.sync("startup");
+	for (const n of ["a", "b", "c"]) a.vault.remove(`${n}.md`);
+	await a.sync("interval");
+	answer = true;
+	const plansBefore = a.plans.length;
+	const { gate, entered } = holdNextList(a);
+	const p = a.sync("interval");
+	await entered;
+	void a.sync("command");
+	void a.sync("preview");
+	gate.resolve();
+	const r = await p;
+	assert.equal(r.trigger, "preview");
+	assert.equal(a.plans.length, plansBefore + 1);
+	assert.equal(r.counts["remote-delete"], 3, "the re-offer survived");
+});
+
+test("local-change hints: repeats are dropped; past the cap the next run re-hashes everything instead of losing edits", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote);
+	a.vault.write("n.md", "x");
+	a.vault.write("m.md", "same size");
+	await a.sync("startup");
+	for (let i = 0; i < 1000; i++) a.engine.noteLocalChange({ kind: "dirty", path: "n.md" as VaultPath });
+	assert.equal(a.engine.pendingHintCount, 1, "a repeat of the last hint adds nothing");
+	for (let i = 0; i < MAX_PENDING_HINTS + 50; i++) a.engine.noteLocalChange({ kind: "dirty", path: `f${i}.md` as VaultPath });
+	assert.ok(a.engine.pendingHintCount <= MAX_PENDING_HINTS);
+	// An edit that keeps size and mtime (the worst case for the stat check) is still found: over the cap, the
+	// next run re-hashes every file.
+	const rec = a.store.state?.files["m.md" as VaultPath];
+	assert.ok(rec);
+	a.vault.write("m.md", "SAME SIZE");
+	const f = a.vault.files.get("m.md");
+	assert.ok(f);
+	f.mtime = rec.mtime;
+	const r = await a.sync("interval");
+	assert.equal(r.counts["upload-replace"], 1);
+	assert.equal(remote.contentAt("m.md"), "SAME SIZE");
+	// After an ok run the full re-hash ends.
+	a.vault.write("m.md", "SAME_SIZE");
+	const g = a.vault.files.get("m.md");
+	assert.ok(g);
+	g.mtime = a.store.state?.files["m.md" as VaultPath]?.mtime ?? 0;
+	const r2 = await a.sync("interval");
+	assert.equal(r2.counts["upload-replace"], 0, "back to the stat check (this edit is invisible without a hint)");
+});
+
+test("rename hints are kept past the cap (they protect records of files renamed to names OneDrive refuses)", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote);
+	await a.sync("startup");
+	for (let i = 0; i < MAX_PENDING_HINTS; i++) a.engine.noteLocalChange({ kind: "dirty", path: `f${i}.md` as VaultPath });
+	const before = a.engine.pendingHintCount;
+	a.engine.noteLocalChange({ kind: "renamed", from: "a.md" as VaultPath, to: "a:b.md" as VaultPath });
+	assert.equal(a.engine.pendingHintCount, before + 1);
+});
+
+test("a hint equal to one the running sync will clear is kept (an edit right after our download is never swallowed)", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote);
+	a.vault.write("n.md", "base");
+	await a.sync("startup");
+	a.engine.noteLocalChange({ kind: "dirty", path: "n.md" as VaultPath }); // e.g. the echo of an earlier download
+	remote.putFile("n.md", "newer remote");
+	const write = a.vault.writeAtomic.bind(a.vault);
+	a.vault.writeAtomic = async (p, d) => {
+		await write(p, d);
+		// The user's edit lands right after our write, before the run ends; its event repeats the last hint.
+		if (p === "n.md") a.engine.noteLocalChange({ kind: "dirty", path: "n.md" as VaultPath });
+	};
+	const r = await a.sync("interval");
+	assert.equal(r.result, "ok");
+	assert.equal(a.engine.pendingHintCount, 1, "the new hint survives the run's cleanup");
+});
+
+test("a sync requested after reset() while the old run is still settling starts a fresh run", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote);
+	await a.sync("startup");
+	let lists = 0;
+	const { gate, entered } = holdNextList(a);
+	const list = a.vault.list.bind(a.vault);
+	a.vault.list = () => {
+		lists++;
+		return list();
+	};
+	const old = a.sync("interval");
+	await entered;
+	a.engine.reset();
+	const fresh = a.sync("command");
+	assert.notEqual(fresh, old);
+	gate.resolve();
+	await old;
+	const r = await fresh;
+	assert.equal(r.trigger, "command");
+	assert.equal(lists, 2, "the old run and a new one");
 });

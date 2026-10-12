@@ -23,3 +23,19 @@ test("C0 and C1 controls, DEL and line/paragraph separators are escaped", () => 
 test("ordinary Unicode is untouched", () => {
 	for (const s of ["Notes/café.md", "日本語/メモ.md", "emoji 🎉.md", "a b/c-d_e (1).md", "e\u0301.md"]) assert.equal(displayPath(s), s);
 });
+
+test("invisible format characters are escaped too (M7 review): zero-width, soft hyphen, BOM, tags", () => {
+	for (const cp of [0x00ad, 0x180e, 0x200b, 0x200c, 0x200d, 0x2060, 0x2064, 0xfeff, 0xfff9, 0xfffb]) {
+		const hex = cp.toString(16).toUpperCase().padStart(4, "0");
+		assert.equal(displayPath(`a${String.fromCodePoint(cp)}b`), `a\\u{${hex}}b`, hex);
+	}
+	assert.equal(displayPath(`a${String.fromCodePoint(0xe0041)}b`), "a\\u{E0041}b", "tag characters, as one code point");
+	assert.equal(displayPath("Invoice​.md") === displayPath("Invoice.md"), false);
+});
+
+test("other blank and format characters are escaped (M7 re-review)", () => {
+	for (const cp of [0x206a, 0x206f, 0x034f, 0x115f, 0x1160, 0x3164, 0xffa0, 0xfe00, 0xfe0f, 0xe0100, 0xe01ef, 0x1d173, 0x1d17a]) {
+		const hex = cp.toString(16).toUpperCase().padStart(4, "0");
+		assert.equal(displayPath(`a${String.fromCodePoint(cp)}b`), `a\\u{${hex}}b`, hex);
+	}
+});
