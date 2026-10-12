@@ -697,7 +697,11 @@ Responsive during the run: not reported
 - **Final review at M3 close** (a17d4cd, `security-reviewer`, M3 `src/` diff 643cc29..a17d4cd plus the close commit): no high or medium findings. It confirmed that every transfer request passes `checkTransferUrl`, that the narrowed list accepts every observed host (and the test fakes' hosts), and that no token reaches a transfer host. Fixed, low: four stale doc lines (this line, the two open allowlist items below, manual-check step 4, and research.md O-API-2). Info, carried forward:
   - **M8:** `requestUrl` follows redirects from an allowlisted transfer host without re-checking the target (O-API-2). No token can go along, because the transport is bare. Download bytes are length-checked now and hash-checked in M6 (T-T4). Note it in the M8 hardening review.
   - **M6:** skip items over the size cap before `download()`; the length check runs after buffering (T-D6).
-  - **Optional for the owner:** the 0.3.6 allowlist was unit-tested but not run live. Narrowing can only refuse more, and the observed host is tested as accepted. One probe run on 0.3.6 on either device would confirm it.
+  - ~~**Optional for the owner:** the 0.3.6 allowlist was unit-tested but not run live.~~ **Confirmed live** (Ubuntu, 0.3.6, `startedAt` 2026-10-12T06:48:42Z):
+    - `errors: 0`, `largeFile.ok: true`, `bytesMatch: true`, `downloadHostTrusted: true`;
+    - upload 8.3 s and download 6.1 s via `my.microsoftpersonalcontent.com`;
+    - every other answer matches the 0.3.5 runs.
+    - `leftoverRemoved: true`: an earlier interrupted run had left `.mdvaultsync-probe` behind, and the probe removed it as designed. That exercised the leftover path live.
   - The iPad record shows only the fields that differ from Ubuntu, and responsiveness wasn't reported. Both are stated openly above.
 - When the upload URL is off the allowlist, the probe leaves that server-side upload session uncancelled (cancelling would mean contacting the unlisted host). OneDrive expires it [G-UP-9].
 - The probe leaves its test files in the OneDrive recycle bin (about 12 MiB, which counts toward quota [G-DEL-2]) until the user empties it.
