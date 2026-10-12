@@ -44,8 +44,13 @@ export interface FakeGraphOptions {
 	uploadHost?: string;
 	/** Pad each download URL's query with this many extra characters (long tempauth tokens). */
 	downloadUrlPad?: number;
-	/** Leave @microsoft.graph.downloadUrl out of responses whose $select asks for it. */
+	/**
+	 * Leave @microsoft.graph.downloadUrl out of any response to a $select request. Default true: that is what
+	 * OneDrive personal did in the 0.3.4 probe (the default response carries it) [G-DLD-1].
+	 */
 	omitDownloadUrlOnSelect?: boolean;
+	/** Leave @microsoft.graph.downloadUrl out of every item response. */
+	omitDownloadUrl?: boolean;
 }
 
 export function sha1Base64(b: Uint8Array): string {
@@ -94,7 +99,8 @@ export class FakeGraph implements HttpTransport {
 			rejectFileSize: opts.rejectFileSize ?? false,
 			uploadHost: opts.uploadHost ?? UPLOAD_HOST,
 			downloadUrlPad: opts.downloadUrlPad ?? 0,
-			omitDownloadUrlOnSelect: opts.omitDownloadUrlOnSelect ?? false,
+			omitDownloadUrlOnSelect: opts.omitDownloadUrlOnSelect ?? true,
+			omitDownloadUrl: opts.omitDownloadUrl ?? false,
 		};
 		this.nodes.set("ROOT", this.node("ROOT", "root", null, true));
 		this.nodes.set("APPS", this.node("APPS", "Apps", "ROOT", true));
@@ -273,7 +279,8 @@ export class FakeGraph implements HttpTransport {
 		if (m === "GET" && r) {
 			const parent = this.nodes.get(decodeURIComponent(r[1] as string));
 			const c = parent ? this.childByName(parent.id, decodeURIComponent(r[2] as string)) : undefined;
-			return c ? json(200, this.itemJson(c, { downloadUrl: true })) : err(404, "itemNotFound");
+			const omitUrl = this.opts.omitDownloadUrl || (this.opts.omitDownloadUrlOnSelect && u.searchParams.has("$select"));
+			return c ? json(200, this.itemJson(c, { downloadUrl: !omitUrl })) : err(404, "itemNotFound");
 		}
 		r = /^\/me\/drive\/items\/([^/:]+)\/content$/.exec(p);
 		if (m === "PUT" && r) {
@@ -292,7 +299,7 @@ export class FakeGraph implements HttpTransport {
 			const n = this.nodes.get(decodeURIComponent(r[1] as string));
 			if (!n) return err(404, "itemNotFound");
 			if (m === "GET") {
-				const omit = this.opts.omitDownloadUrlOnSelect && u.search.includes("downloadUrl");
+				const omit = this.opts.omitDownloadUrl || (this.opts.omitDownloadUrlOnSelect && u.searchParams.has("$select"));
 				return json(200, this.itemJson(n, { downloadUrl: !omit }));
 			}
 			const im = header(req, "if-match");

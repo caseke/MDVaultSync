@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-10-12
+
+### Fixed
+
+- Downloads couldn't start: personal OneDrive leaves the download link out of responses that request only specific fields, and the plugin requested exactly that. The plugin now reads the file's full details before a download, where the link is present. The capability probe found this.
+
 ## [0.3.4] - 2026-10-12
 
 ### Changed

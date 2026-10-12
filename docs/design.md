@@ -464,7 +464,7 @@ Order: every pull-side op first (`local-move`, `download`, `local-trash`, confli
 - This closes the gap between Scan and Execute for local edits. The remote side is covered by If-Match.
 
 **download:**
-1. `getItem` (fresh downloadUrl [G-DLD-2]). Then `RemoteContent.fetch`: download, check `quickXorHash(bytes) == R.quickXorHash` (null hash: see §5.4), and decode. On a mismatch, discard and record error `hash-mismatch`.
+1. Read the item for a fresh downloadUrl [G-DLD-2]. Use a plain `GET /items/{id}` with no `$select`: OneDrive personal omits the downloadUrl from `$select` responses (M3 probe) [G-DLD-1]. Then `RemoteContent.fetch`: download, check `quickXorHash(bytes) == R.quickXorHash` (null hash: see §5.4), and decode. On a mismatch, discard and record error `hash-mismatch`.
 2. Containment check (§8), then the pre-write check.
 3. Register the expected write `(path, localHash)` (§3), then `vault.writeAtomic`.
 4. Record B = {R.eTag, R.cTag, size and mtime from a stat taken right after the write, localHash, remoteHash}. If that stat's hash would differ from `localHash` (the user edited in the meantime), keep B's mtime at 0 so the next scan re-hashes. The edit is then never masked.

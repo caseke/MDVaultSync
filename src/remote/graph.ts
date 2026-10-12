@@ -45,8 +45,12 @@ export const CHILDREN_WALK_LINK = "mdvaultsync:children-walk";
 export const MAX_PAGES = 10_000;
 const MAX_WALK_FOLDERS = 100_000;
 const MAX_TAG = 512;
-/** `$select` for single-item reads; the download URL must be selected explicitly [G-DLD-1]. */
-const ITEM_SELECT = "id,name,eTag,cTag,size,file,folder,parentReference,lastModifiedDateTime,deleted,@microsoft.graph.downloadUrl";
+/**
+ * `$select` for metadata reads. It leaves out the download URL: OneDrive personal omits
+ * `@microsoft.graph.downloadUrl` from any `$select` response, despite the docs (0.3.4 probe, Ubuntu) [G-DLD-1].
+ * download() reads the item with no `$select` instead, where the URL is present.
+ */
+const ITEM_SELECT = "id,name,eTag,cTag,size,file,folder,parentReference,lastModifiedDateTime,deleted";
 const DRIVE_ROOT_PREFIX = "/drive/root:";
 /** Longest App Folder path accepted; the whole drive path is limited to 400 characters [G-NM-4]. */
 const MAX_PREFIX = 400;
@@ -297,7 +301,8 @@ export class GraphClient implements RemotePort {
 	 * item's size (design §8). Hash verification is RemoteContent's job (M6).
 	 */
 	async download(id: string): Promise<ArrayBuffer> {
-		const r = await this.getItemWithUrl(`${GRAPH_BASE}/me/drive/items/${idSegment(id)}?$select=${ITEM_SELECT}`);
+		// No $select: that is the only read that returns the download URL on OneDrive personal [G-DLD-1].
+		const r = await this.getItemWithUrl(`${GRAPH_BASE}/me/drive/items/${idSegment(id)}`);
 		if (!r) throw new GraphError(404, "itemNotFound");
 		if (r.item.isFolder || r.item.deleted) throw new InvalidResponse("not-a-file");
 		const downloadUrl = parseItemExtras(r.raw).downloadUrl;

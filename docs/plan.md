@@ -542,14 +542,37 @@ The upload host is `my.microsoftpersonalcontent.com`. WHOIS (2026-10-12) shows t
   - The probe reads the large file with and without `$select` and records URL presence, type, length and host (`largeFile.downloadDiag`).
   - `getItem` no longer parses the download URL at all, so URL problems affect only downloads.
 
-**Probe v4 on 0.3.4**, needed from Ubuntu: paste `largeFile`. The fix is chosen from what it measures: a URL over the cap → raise the cap to fit; missing under `$select` → read without it; an untrusted host → WHOIS check, then add it. Then the iPad run.
+**Probe v4 on 0.3.4, Ubuntu, 2026-10-12** (owner; only `largeFile` is new):
 ```
-Ubuntu (0.3.4): (paste here)
-iPad:           (paste here)
+"largeFile": {
+  "ok": false, "size": 12582912, "fragments": 2,
+  "createAttempts": [
+    { "variant": "conflictBehavior+fileSize", "status": 400, "code": "invalidRequest" },
+    { "variant": "conflictBehavior", "status": 200 }
+  ],
+  "uploadHost": "my.microsoftpersonalcontent.com", "uploadMs": 7141,
+  "downloadDiag": {
+    "select": { "status": 200, "urlPresent": false },
+    "plain":  { "status": 200, "urlPresent": true, "urlType": "string", "urlLength": 1087,
+                "host": "my.microsoftpersonalcontent.com" }
+  },
+  "downloadHost": "my.microsoftpersonalcontent.com", "downloadHostTrusted": true,
+  "stage": "download", "code": "InvalidResponse", "reason": "download-url-missing"
+}
+(durationMs 33793; every other field equals v3)
+```
+- **Cause found.** OneDrive personal omits `@microsoft.graph.downloadUrl` from any `$select` response, even though the get-content doc says to select it. The default response carries it (1087 characters, on `my.microsoftpersonalcontent.com`, already trusted) [G-DLD-1].
+- 0.3.5: `download()` reads the item with no `$select`, and `ITEM_SELECT` no longer asks for the URL. FakeGraph now behaves this way by default, so every download test uses the real server shape.
+- Upload took 7.1 s this run, 13.6 s in the previous one (Ubuntu).
+
+**Probe v4 on 0.3.5**, needed from Ubuntu, then the iPad. Pass: `largeFile.ok` and `bytesMatch` are `true`. On the iPad, also note whether Obsidian stayed responsive.
+```
+Ubuntu (0.3.5): (paste here)
+iPad   (0.3.5): (paste here)
 ```
 
 **Manual checks** (owner; use a throwaway test vault, never the real one)
-1. **Install the newest 0.3.x** (now 0.3.4). `git switch claude/eloquent-clarke-21deia && git pull`, then `git tag 0.3.4 && git push origin 0.3.4`. (0.3.0–0.3.3 ran probes v1–v3 on Ubuntu; see above.)
+1. **Install the newest 0.3.x** (now 0.3.5). `git switch claude/eloquent-clarke-21deia && git pull`, then `git tag 0.3.5 && git push origin 0.3.5`. (0.3.0–0.3.4 ran probes v1–v4 on Ubuntu; see above.)
    - Wait for the **Release** workflow to pass.
    - Open the draft release, check that it has the three assets and is marked pre-release, then publish it.
    - Ubuntu: `npm ci && npm run build`, then copy `main.js`, `manifest.json` and `styles.css` into the test vault's plugin folder (as in M2), or install through BRAT.

@@ -144,7 +144,8 @@ test("getItem: item, null on 404, GraphError otherwise; hostile ids refused loca
 	const n = fake.addFile("APPROOT", "a.md", enc("abc"));
 	const it = await g.getItem(n.id);
 	assert.equal(it?.size, 3);
-	assert.ok(last(fake.requests)?.url.includes("@microsoft.graph.downloadUrl"));
+	assert.ok(last(fake.requests)?.url.includes("$select="));
+	assert.ok(!last(fake.requests)?.url.includes("downloadUrl"), "personal OneDrive drops downloadUrl under $select [G-DLD-1]");
 	assert.equal(await g.getItem("NOPE"), null);
 	const before = fake.requests.length;
 	for (const id of ["../x", "a/b", ""]) await assert.rejects(g.getItem(id), RangeError);
@@ -403,7 +404,7 @@ test("download() failures carry a reason code, never data", async () => {
 		assert.ok(e instanceof InvalidResponse);
 		return e.reason;
 	};
-	const a = setupGraph({ omitDownloadUrlOnSelect: true });
+	const a = setupGraph({ omitDownloadUrl: true });
 	const n = a.fake.addFile("APPROOT", "a.bin", enc("abc"));
 	assert.equal(await reasonOf(a.g.download(n.id)), "download-url-missing");
 	const b = setupGraph();
@@ -429,4 +430,12 @@ test("getItem and getChildByName survive an overlong download URL; only download
 	assert.equal((await g.getItem(n.id))?.size, 3);
 	assert.equal((await g.getChildByName("APPROOT", "a.bin"))?.id, n.id);
 	await assert.rejects(g.download(n.id), (e: unknown) => e instanceof InvalidResponse && e.reason === "download-url-too-long");
+});
+
+test("download reads the item without $select, because OneDrive personal drops downloadUrl under $select (0.3.4 probe)", async () => {
+	const { g, fake } = setupGraph();
+	const n = fake.addFile("APPROOT", "a.bin", enc("hello"));
+	assert.deepEqual(new Uint8Array(await g.download(n.id)), enc("hello"));
+	const meta = fake.requests.filter((r) => r.url.startsWith(`${GRAPH}/me/drive/items/`));
+	assert.equal(last(meta)?.url, `${GRAPH}/me/drive/items/${encodeURIComponent(n.id)}`);
 });
