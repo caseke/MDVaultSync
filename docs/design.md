@@ -288,9 +288,13 @@ Each option is compared on the iPad (Obsidian for iOS) and on Ubuntu (Obsidian .
 **Sign-in, primary path:**
 1. Generate a `code_verifier` of 64 random characters from the RFC 7636 alphabet, using `crypto.getRandomValues`. Compute `code_challenge = base64url(SHA-256(verifier))` with `crypto.subtle` [I-AC-2], [O-SUB-4]. Generate `state` from 32 random bytes. Keep verifier and state in memory only, with a 10-minute expiry.
 2. Open `https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id=…&response_type=code&redirect_uri=obsidian%3A%2F%2Fmdvaultsync-auth&response_mode=query&scope=Files.ReadWrite.AppFolder%20offline_access&code_challenge=…&code_challenge_method=S256&state=…&prompt=select_account` in the system browser with `window.open` [I-BR-1].
-3. The protocol handler receives `{action:"mdvaultsync-auth", code, state}` or `{error, error_description}`. It accepts `mdvaultsync-auth/` too [I-RU-3].
-   - Reject if no sign-in is pending, if it has expired, or if `state` doesn't match (constant-time compare).
-   - Clear the pending state immediately so each state value is used once.
+3. The protocol handler receives `{action:"mdvaultsync-auth", code, state}` or `{error, error_description}`. It accepts `mdvaultsync-auth/` too [I-RU-3]. `AuthClient.handleCallback(params, via)` checks, in this order:
+   - Reject if no sign-in is pending. If it has expired, clear it and reject.
+   - Reject if the channel doesn't match the pending redirect: a protocol callback can't finish a paste-mode sign-in, and the reverse.
+   - Reject if `state` doesn't match (constant-time compare). A wrong state does **not** clear the pending sign-in, so a forged `obsidian://` link can't cancel the user's real sign-in; the attacker can't guess the 32-byte state anyway.
+   - Clear the pending state before any `await`, so each state value is used once even when two callbacks race.
+   - Only then look at `error` (surfaced as a sanitized code; `error_description` is never read) or `code`.
+   - `buildAuthorizeUrl` is async because `crypto.subtle.digest` is (M2).
 4. POST to the token endpoint with `application/x-www-form-urlencoded`: `client_id`, `grant_type=authorization_code`, `code`, `redirect_uri`, `code_verifier`, `scope`. Send no `Origin` header [I-AC-5].
 5. Validate the response shape: `access_token` (string), `refresh_token` (string), `expires_in` (number, 60–86,400), `token_type == "Bearer"`. Store the refresh token in TokenStore. Keep the access token in memory only.
 
@@ -303,11 +307,16 @@ Each option is compared on the iPad (Obsidian for iOS) and on Ubuntu (Obsidian .
 **Access tokens.** `AccessTokenProvider.getAccessToken()` returns the cached token if it has more than 5 minutes left. Otherwise it refreshes, single-flight: concurrent callers await the same promise.
 - After a refresh, the new refresh token *replaces* the stored one before the access token is returned [I-TL-3].
 - `invalid_grant` or `interaction_required` clears the token, sets the account state to "Sign-in required", and raises a notice. Sync stops; local state is kept.
+- Sign-out bumps an in-memory epoch. A refresh or code redemption that started under an older epoch discards its result (and clears the store if its write landed), so an in-flight refresh can't undo a sign-out (M2).
+
+**Testability (M2).** `PluginTokenStore` takes a structural `SecretStorageLike` and a data accessor, and `createRequestUrlTransport` takes the `requestUrl` function. `main.ts` passes the real Obsidian objects. Neither module imports `obsidian` at runtime, so both run under `node --test`.
 
 **TokenStore.**
-- `set` calls `app.secretStorage.setSecret("mdvaultsync-refresh-token", rt)` [O-API-4].
-  - If that throws, it writes `data.json.fallbackRefreshToken` with `await saveData` and sets `backend = "plugin-data"`. The settings tab then shows a standing warning (D-5).
-  - SecretStorage gives no signal when the OS can't encrypt. For example, Linux with no keyring may store the secret in plaintext without throwing [O-API-6]. So even with `backend = "secret-storage"`, settings shows a neutral note: "Stored in Obsidian secret storage. Encryption depends on your OS keyring."
+- `set` calls `app.secretStorage.setSecret("mdvaultsync-refresh-token", rt)` [O-API-4] on every write, then reads it back.
+  - If that throws or the read-back differs, it writes `data.json.fallbackRefreshToken` with `await saveData` and sets `backend = "plugin-data"`. The settings tab then shows a standing warning (D-5).
+  - When SecretStorage works again, the next `set` (the next refresh) moves the token back and deletes the fallback field.
+  - The initial `backend` is `plugin-data` when `data.json` holds a fallback token, otherwise `secret-storage`.
+  - SecretStorage gives no signal when the OS can't encrypt. For example, Linux with no keyring may store the secret in plaintext without throwing [O-API-6]. So even with `backend = "secret-storage"`, settings shows a neutral note: "Stored in Obsidian secret storage. Encryption depends on your device's keyring." (M2 wording; the obsidianmd sentence-case rule rejects "OS".)
   - M2 records what actually happens on Ubuntu with and without an unlocked keyring.
 - `clear` calls `setSecret(id, "")` (there is no delete method [O-API-4]) and removes the fallback field.
 - `get` treats `""` as null.
