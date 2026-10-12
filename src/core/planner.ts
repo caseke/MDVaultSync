@@ -385,7 +385,9 @@ export function plan(state: SyncState, local: readonly ScannedEntry[], remoteInd
 		if (exclusionReason(pc.copyPath, configDir, excludePatterns, false) || validatePath(pc.copyPath, pathPrefixLen, false)) return false;
 		if (fileBases.has(ck) || remoteFiles.has(ck) || localFolders.has(ck) || remoteFolders.has(ck) || blocked.has(ck)) return false;
 		const there = localFiles.get(ck);
-		return there === undefined || there.localHash === pc.localHash;
+		// `taken` also holds copy names chosen earlier in this run; only the copy itself may be at the path.
+		if (there === undefined) return !taken.has(ck);
+		return there.localHash === pc.localHash;
 	};
 	const conflict = (l: Local, r: Remote, noHistory: boolean) => {
 		let copyPath: VaultPath | undefined;

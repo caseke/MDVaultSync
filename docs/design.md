@@ -376,7 +376,7 @@ stateDiagram-v2
 
 ### 5.2 Pull (remote change detection)
 - Call `delta(state.deltaLink)`, starting with null on first sync. Collect pages until `deltaLink` [G-DL-2]. Validate every item (§8). Keep only the last occurrence per ID [G-DL-6].
-- Apply to `remoteIndex` in memory: upsert live items and delete those with `deleted`.
+- Apply to `remoteIndex` in memory: upsert live items and delete those with `deleted`. A deleted folder takes its descendants out of the index too, whether or not delta lists them (M5 security review): `buildRemoteTree` treats a live item whose parent is missing as *unresolved*, which blocks its record rather than deleting it, so a descendant left behind would freeze. (A tombstone kept in the index works too: items under it count as deleted.)
 - Save `remoteIndex` and the new `deltaLink` together in one `StateStore.save`. The delta token is therefore never ahead of the index. Applying changes to the vault happens later, driven by the diff between `remoteIndex` and `files`, so a crash after this save loses nothing.
 - **410 or a `resync*` code** [G-DL-4]: set `unionPending = true`, `deltaLink = null`, and clear `remoteIndex`. Save, then re-enumerate from null. `files` (the bases) is kept, so files changed on only one side still sync normally. Union mode only stops deletes (§5.4).
 - **Delta unsupported on approot** (M3 probe result, [G-DL-1]): `RemotePort.delta` is implemented as a breadth-first `listChildren` walk returning a synthetic page. Deletes are inferred by absence. This costs more, so the interval floor rises to 15 minutes.
@@ -445,7 +445,7 @@ For every key in the union of {local paths, `files` records, remote items}:
 - **Order.** Skips first, then every `local-move` and `remote-move`, then all other ops, each group sorted by `caseKey` of the target path. No write may run at a move's source or destination before the move (security review: a new remote item at a path vacated by a remote rename would otherwise be downloaded over the file about to move, with its unsynced edit). M6 must keep this: within a side, moves first; a move into a folder that doesn't exist yet creates it on demand.
 - **Collision losers.** A key that still holds a skipped local file (a case-collision loser) gets no transfer even after the tracked keeper moved away, so nothing lands on the skipped file.
 - **Pending conflicts** (crash resume, §5.5 step 1). The saved `copyPath` is reused only for the same pair (`localHash` and `remoteId` match), when it differs from the original under `caseKey`, passes the name and exclusion rules, and nothing but that copy is there. Otherwise a fresh name is chosen. The state parser also rejects a copy path equal to its original.
-- **Unplaceable remote items.** A live item whose parent chain doesn't reach the approot (missing parent, cycle) is in `RemoteTree.unresolvedIds`. Its base is blocked (`skip … outside-vault`), never trashed: only an item gone from the index is a remote delete.
+- **Unplaceable remote items.** A live item whose parent chain ends at a missing id or a cycle is in `RemoteTree.unresolvedIds`. Its base is blocked (`skip … outside-vault`), never trashed: only an item gone from the index, or under a tombstoned folder, is a remote delete.
 - **No approot id** (`state.appRootId === null`) plans in union mode, and `applyAppRoot` from null with records sets `unionPending`.
 - **`deleteCount`** counts file deletes only, so the guard measures the share of tracked files (R-GUARD-1).
 - **Declined deletes** match on `{localHash: null, eTag}` for a `remote-delete` and `{localHash, eTag: null}` for a `local-trash`, by own key only.
@@ -475,7 +475,7 @@ Rejected paths become `skip` ops with a reason and appear in the report. Skipped
 
 ### 5.5 Execute
 Order: every pull-side op first (`local-move`, `download`, `local-trash`, conflict handling), then every push-side op (`remote-move`, `upload-*`, `remote-delete`) [SPEC R-ORDER].
-- Within a side, folder creation runs first (sorted shallowest first), then file ops with concurrency 4, then folder deletes (deepest first).
+- Within a side, moves run first, one at a time and each to completion, in plan order (M5 security review: a write at a move's source or destination must never run before the move). A move into a parent folder that doesn't exist yet creates it. Then folder creation (sorted shallowest first), then file ops with concurrency 4, then folder deletes (deepest first).
 - After each op succeeds, the executor updates `files` and `folders` in memory. State is saved at most once per second, once at the end, and immediately before any destructive op (overwrite, trash, delete, conflict). This keeps iPad writes low. A crash repeats at most one second of idempotent work: re-running a completed download or upload finds equal hashes and adopts.
 
 **Pre-write check.** This runs before every op that overwrites, moves or trashes a *local* file: `download` onto an existing file, `local-trash`, `local-move`, and the conflict procedure.

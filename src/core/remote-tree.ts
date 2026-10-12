@@ -28,8 +28,9 @@ export interface RemoteTree {
 	/** Live children per folder id, skipped ones included (R-DEL-3). */
 	childCount: Map<string, number>;
 	/**
-	 * Live items whose parent chain doesn't reach the approot (a parent missing from the index, or a cycle). They
-	 * are not known to be deleted, so the planner must not treat their absence from the tree as a delete.
+	 * Live items whose parent chain doesn't reach the approot and ends at a missing id or a cycle. They are not known
+	 * to be deleted, so the planner must not treat their absence from the tree as a delete. Items under a deleted
+	 * (tombstoned) folder are not in this set: they are gone with the folder.
 	 */
 	unresolvedIds: Set<string>;
 }
@@ -109,6 +110,20 @@ export function buildRemoteTree(index: Readonly<Record<string, RemoteItem>>, app
 		}
 		level = next;
 	}
-	for (const it of live) if (!seen.has(it.id)) tree.unresolvedIds.add(it.id);
+	// A live item the walk didn't reach is "unresolved" only if its chain ends at a missing id or a cycle. Under a
+	// tombstoned ancestor it is gone with that folder (a real delete), so it stays out of the set (security review).
+	const underTombstone = (it: RemoteItem): boolean => {
+		const visited = new Set<string>();
+		let parentId = it.parentId;
+		while (parentId !== null && !visited.has(parentId)) {
+			visited.add(parentId);
+			const parent = index[parentId];
+			if (!parent || parentId === appRootId) return false;
+			if (parent.deleted) return true;
+			parentId = parent.parentId;
+		}
+		return false;
+	};
+	for (const it of live) if (!seen.has(it.id) && !underTombstone(it)) tree.unresolvedIds.add(it.id);
 	return tree;
 }

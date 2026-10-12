@@ -840,17 +840,17 @@ $ npm run lint
 $ npm run typecheck
 > tsc --noEmit                        (exit 0)
 $ npm test
-# tests 634
+# tests 636
 # suites 8
-# pass 634
+# pass 636
 # fail 0
 $ npm run build
 > tsc --noEmit && node esbuild.config.mjs production   (exit 0)
 $ node --test --experimental-test-coverage "test/**/*.test.ts" 2>&1 | grep -E "planner|state|remote-tree"
-#   planner.ts                    |  98.59 |    97.45 |   94.23 | 222-225 467-470
-#   remote-tree.ts                | 100.00 |    96.23 |  100.00 |
+#   planner.ts                    |  98.60 |    97.46 |   94.23 | 222-225 469-472
+#   remote-tree.ts                | 100.00 |    96.88 |  100.00 |
 #   state.ts                      |  98.90 |    94.59 |   97.62 | 245-246 325-326
-#   (report.ts 100.00 | 100.00 | 100.00; planner line coverage 98.59 % ≥ 95 %)
+#   (report.ts 100.00 | 100.00 | 100.00; planner line coverage 98.60 % ≥ 95 %)
 $ npm audit --audit-level=high
 3 moderate severity vulnerabilities   (exit 0; none high; lockfile unchanged)
 ```
@@ -876,13 +876,14 @@ $ npm audit --audit-level=high
 - Fixed, medium: a pending conflict's `copyPath` was reused unchecked; a stale or forged one could point the copy write at another note or at the original. It is now reused only for the same pair and only where nothing else lives; the parser rejects a copy path equal to its original.
 - Fixed, medium: a live remote item whose parent chain doesn't reach the approot was treated as deleted (`local-trash`). It is now `unresolved` and its base is blocked.
 - Fixed, low: a state with records but no `appRootId` saw an empty remote. It now plans in union mode, and `applyAppRoot` from null with records sets `unionPending`.
-- Fixed, low: the property test didn't cover moves (see the high finding).
+- Fixed, low: the property test didn't cover moves. It now generates remote moves and new items at vacated paths, checks move order (invariant (e)), and checks that no download or trash at a moved path loses local bytes found nowhere else.
 - Found by the extended property test while fixing the above: once a tracked case-collision keeper moved away, a new remote file at that key was downloaded onto the skipped loser. Keys that hold a skipped local file now get no transfers.
 - Carried to M6 (below): hashing name-skipped files in the scan, `__proto__`-safe state maps, eTag chaining after a move. Info for M7: list folder deletes in the guard modal; render report paths with `createEl` only.
-- Re-review of the fix diff: (pending)
+- Re-review of the fix diff (`security-reviewer`, two passes): the high, both mediums, the low and the property-test find are confirmed resolved. It found one regression from the unresolved-items fix, **fixed, medium**: a live child of a *tombstoned* folder was treated as unresolved (blocked forever) instead of deleted. `buildRemoteTree` now follows the parent chain: under a deleted ancestor the item is gone; only a chain ending at a missing id or a cycle is unresolved. Tests cover trash (normal) and restore (union). Also fixed, low: design §5.5 now states the move-first order for M6, and §5.2 requires the delta merge to drop a deleted folder's descendants. Fixed, info: a reused copy path is also checked against names chosen earlier in the run. Open, info (owner's call): unresolved bases are reported as `outside-vault`; a distinct `SkipReason` would need a `ports.ts` change.
 
 **Notes for M6 and later** (carry-ins from the build and the review):
-- **Order:** keep moves before every other op on their paths within a side, and create a missing parent folder on demand for a move or upload (a planned folder `upload-new` then adopts).
+- **Order** (design §5.5): within a side, run moves first, one at a time and each to completion, in plan order; create a missing parent folder on demand for a move or upload (a planned folder `upload-new` then adopts). Running a move concurrently with a write at its source brings back the M5 high finding.
+- **Delta merge** (design §5.2): when a folder arrives deleted, remove its descendants from `remoteIndex` too (or keep the tombstone). A live item whose parent is missing is treated as unresolved and its record is frozen, so a descendant left behind would never sync. Test it.
 - **eTag chaining:** an `upload-replace` (or any If-Match op) on an id that a `remote-move` in the same run just moved must use the eTag the move returned; the planned `ifMatch` is the base eTag.
 - **Folder moves:** a folder `remote-move` or `local-move` rewrites the paths of every record (`files`, `folders`) under it.
 - **Folder ops:** `local-trash` on a folder means `removeEmptyFolder`; `upload-new` / `download` on a folder path means create.
@@ -1109,7 +1110,7 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-AUTH-1…8 | M2 | ☑ (M2, 2026-10-12; R-AUTH-3 withdrawn. R-AUTH-7 token clear verified on Ubuntu; clearing real sync state is verified with the M6 StateStore) |
 | R-SCOPE-1…4 | M4, M5, M7 | ☐ (M4 part done 2026-10-12: configDir, hidden and user-glob exclusion (R-SCOPE-2); `remoteToVaultPath` returns the skip reason for hidden or excluded remote paths (R-SCOPE-4 rules). M5 part done 2026-10-12: size cap skips `too-large` (R-SCOPE-3), excluded or hidden remote items are skipped and reported, never downloaded (R-SCOPE-4)) |
 | R-TRIG-1…4 | M6 (lock), M7 | ☐ |
-| R-CD-1 | M3, M5 | ☑ (M3 2026-10-12: delta with paging to deltaLink, `items-id`; M5 2026-10-12: remote paths rebuilt from parentId chains, orphans and cycles never read as deletes) |
+| R-CD-1 | M3, M5 | ☐ (M3 part done 2026-10-12: delta with paging to deltaLink, `items-id`; M5 part done 2026-10-12: remote paths rebuilt from parentId chains; children of a deleted folder are deletes, orphans and cycles never are. Merging delta pages into `remoteIndex` is M6) |
 | R-CD-2 | M5, M7 | ☐ |
 | R-CD-3, R-CD-4 | M4, M5 | ☑ (M4 2026-10-12: QuickXorHash; M5 2026-10-12: FileRecord validated, change detection by hash → cTag → size/eTag, unchanged content never planned for transfer) |
 | R-ORDER | M6 | ☐ |

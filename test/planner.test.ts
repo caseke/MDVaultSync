@@ -382,6 +382,22 @@ test("a tracked file whose remote item can't be placed (missing parent) is not t
 	assert.deepEqual(lines(plan(s, local, rootIndex(), SETTINGS)), ["local-trash a.md"]);
 });
 
+test("a file under a remote folder deleted as one tombstone is trashed (normal) or restored (union)", () => {
+	const s = syncedState();
+	const folder = item("d1", APPROOT_ID, "D", { isFolder: true, quickXorHash: null, cTag: null });
+	const f = item("f1", "d1", "a.md");
+	s.files[vp("D/a.md")] = { path: vp("D/a.md"), remoteId: "f1", eTag: f.eTag, cTag: f.cTag, size: 5, mtime: 1, localHash: hashOf("f1"), remoteHash: hashOf("f1"), transformId: "identity" };
+	s.folders[vp("D")] = "d1";
+	const local = [
+		{ path: "D", isFolder: true, size: 0, mtime: 0, localHash: null, storedHash: null },
+		{ path: "D/a.md", isFolder: false, size: 5, mtime: 1, localHash: hashOf("f1"), storedHash: hashOf("f1") },
+	];
+	const index = rootIndex({ ...folder, deleted: true }, f);
+	assert.deepEqual(lines(plan(s, local, index, SETTINGS)), ["local-trash D/a.md"]);
+	s.unionPending = true;
+	assert.deepEqual(lines(plan(s, local, index, SETTINGS)), ["upload-new D", "upload-new D/a.md"]);
+});
+
 test("a state with records but no approot id plans a union merge, never deletes (review, T-T6)", async () => {
 	const w = world({ "a.md": "A" });
 	w.state.appRootId = null;

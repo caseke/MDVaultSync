@@ -165,6 +165,15 @@ function check(p: Plan, c: Case, label: string): void {
 	// Paths a move touches carry another file's history; (a) and (c) are checked on the others.
 	const moved = new Set<string>();
 	for (const [path, r] of c.remote) if (r.movedFrom) moved.add(caseKey(path)).add(caseKey(r.movedFrom));
+	// At moved paths, local bytes found nowhere else (no base, no remote copy anywhere) must not be lost either.
+	// A local-move before the op carries the bytes away (moves run first, invariant (e)).
+	const known = new Set<string>([...c.base.values(), ...[...c.remote.values()].map((r) => r.content)]);
+	const carried = new Set(p.ops.flatMap((o) => (o.kind === "local-move" ? [caseKey(o.from)] : [])));
+	for (const op of p.ops) {
+		if ((op.kind !== "download" && op.kind !== "local-trash") || !moved.has(caseKey(op.path)) || carried.has(caseKey(op.path))) continue;
+		const l = c.local.get(op.path);
+		assert.ok(l === undefined || known.has(l), `lost local bytes at a moved path\n${show()}`);
+	}
 	for (const op of p.ops) {
 		if (op.kind === "skip" || op.kind === "remote-move" || op.kind === "local-move") continue;
 		if (moved.has(caseKey(op.path))) continue;
