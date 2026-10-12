@@ -1,9 +1,15 @@
 import { Notice, Plugin, requestUrl } from "obsidian";
 import type { ObsidianProtocolData } from "obsidian";
-import type { StateStore } from "./core/ports.ts";
+import { RingLogger } from "./core/logger.ts";
+import type { Clock, StateStore } from "./core/ports.ts";
+import { Diagnostics } from "./platform/diagnostics.ts";
 import { createRequestUrlTransport } from "./platform/request-url-transport.ts";
 import { PluginTokenStore, TokenClearError } from "./platform/token-store.ts";
 import { AuthClient, AuthError } from "./remote/auth.ts";
+import type { DeltaForm } from "./remote/capabilities.ts";
+import { GraphClient } from "./remote/graph.ts";
+import { AuthorizingTransport } from "./remote/http.ts";
+import { RetryPolicy } from "./remote/retry.ts";
 import { isValidClientId, parseData, type PluginData } from "./settings.ts";
 import { AUTH_ERROR_MESSAGES, authErrorText } from "./ui/auth-messages.ts";
 import { MDVaultSyncSettingTab } from "./ui/settings-tab.ts";
@@ -16,6 +22,8 @@ export default class MDVaultSyncPlugin extends Plugin {
 	data!: PluginData;
 	tokenStore!: PluginTokenStore;
 	auth!: AuthClient;
+	logger!: RingLogger;
+	graph!: GraphClient;
 	private settingTab!: MDVaultSyncSettingTab;
 	private signInModal: SignInModal | null = null;
 	// M2 stub: sign-out clears sync state through this. M6 replaces it with the sync-state.json store.
@@ -32,12 +40,25 @@ export default class MDVaultSyncPlugin extends Plugin {
 			save: () => this.saveData(this.data),
 		});
 		const transport = createRequestUrlTransport((p) => requestUrl(p));
+		const clock: Clock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => window.setTimeout(r, ms)) };
 		this.auth = new AuthClient({
 			transport,
 			tokens: this.tokenStore,
-			clock: { now: () => Date.now(), sleep: (ms) => new Promise((r) => window.setTimeout(r, ms)) },
+			clock,
 			getClientId: () => this.data.clientId,
 		});
+		this.logger = new RingLogger({ now: () => Date.now() });
+		// Graph stack: requestUrl → Authorization for graph.microsoft.com only (401 → refresh once) → retry (design §6.1).
+		const graphTransport = new AuthorizingTransport(transport, this.auth);
+		const retry = new RetryPolicy({ clock, logger: this.logger });
+		const graphFor = (deltaForm?: DeltaForm) =>
+			new GraphClient({ transport: graphTransport, retry, clock, logger: this.logger, ...(deltaForm ? { deltaForm } : {}) });
+		this.graph = graphFor();
+		const diagnostics = new Diagnostics(
+			this.app,
+			() => ({ graph: this.graph, graphFor, clock, pluginVersion: this.manifest.version }),
+			() => this.auth.status === "signed-in",
+		);
 
 		this.settingTab = new MDVaultSyncSettingTab(this.app, this);
 		this.addSettingTab(this.settingTab);
@@ -64,6 +85,11 @@ export default class MDVaultSyncPlugin extends Plugin {
 			id: "sign-out",
 			name: "Sign out of OneDrive",
 			callback: () => void this.signOut(),
+		});
+		this.addCommand({
+			id: "run-diagnostics",
+			name: "Run OneDrive capability probe",
+			callback: () => void diagnostics.run(),
 		});
 	}
 

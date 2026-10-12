@@ -229,6 +229,15 @@ export class AuthClient implements AccessTokenProvider {
 	}
 
 	/** Cached access token, or a single-flight refresh (R-AUTH-6). */
+	/**
+	 * Graph answered 401 to `token`: drop it if it is still the cached one, so the next getAccessToken refreshes
+	 * (design §6.1). A refresh already in flight is left alone, and a token that has since been replaced is ignored,
+	 * so concurrent 401s cause one refresh.
+	 */
+	invalidateAccessToken(token: string): void {
+		if (this.access?.token === token) this.access = null;
+	}
+
 	getAccessToken(): Promise<string> {
 		if (this.access && this.access.expiresAt - this.clock.now() > this.access.marginMs) {
 			return Promise.resolve(this.access.token);
