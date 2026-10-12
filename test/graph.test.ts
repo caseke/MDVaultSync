@@ -5,6 +5,7 @@ import { GraphError, ResyncRequired, UntrustedUrl } from "../src/remote/errors.t
 import { InvalidResponse } from "../src/remote/validate.ts";
 import { DOWNLOAD_HOST, GRAPH, URL_SECRET } from "./fakes/fake-graph.ts";
 import { FakeHttp, bytes, jsonResponse } from "./fakes/fake-http.ts";
+import type { HttpTransport } from "../src/core/ports.ts";
 import { enc, graphOver, last, pattern, setupGraph } from "./graph-setup.ts";
 
 const isGraphError = (status: number, code?: string) => (e: unknown) =>
@@ -354,8 +355,8 @@ test("transfers use the transfer transport, Graph calls the authorizing one (T-I
 	const { fake, transport } = setupGraph();
 	const graphSide: string[] = [];
 	const transferSide: string[] = [];
-	const spy = (inner: typeof transport, log: string[]) => ({
-		send: (req: Parameters<typeof transport.send>[0]) => {
+	const spy = (inner: HttpTransport, log: string[]): HttpTransport => ({
+		send: (req) => {
 			log.push(new URL(req.url).hostname);
 			return inner.send(req);
 		},

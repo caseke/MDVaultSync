@@ -55,7 +55,7 @@ src/
   ui/        settings-tab.ts, plan-preview-modal.ts, confirm-deletes-modal.ts, report-view.ts, notices.ts
   platform/  obsidian-vault.ts, request-url-transport.ts, token-store.ts, plugin-state-store.ts, diagnostics.ts
   remote/    auth.ts, pkce.ts, http.ts (auth decorator), graph.ts, upload-session.ts, retry.ts,
-             graph-types.ts, validate.ts, errors.ts (GraphError, ResyncRequired), capabilities.ts
+             validate.ts, errors.ts (GraphError, ResyncRequired), capabilities.ts, probe.ts (diagnostics, M3)
   core/      ports.ts, engine.ts, planner.ts, executor.ts, remote-content.ts, upload-resume.ts,
              state.ts, remote-tree.ts, report.ts, paths.ts, exclude.ts, conflict-name.ts,
              quickxor.ts, transform.ts, logger.ts
@@ -380,6 +380,9 @@ stateDiagram-v2
 - Save `remoteIndex` and the new `deltaLink` together in one `StateStore.save`. The delta token is therefore never ahead of the index. Applying changes to the vault happens later, driven by the diff between `remoteIndex` and `files`, so a crash after this save loses nothing.
 - **410 or a `resync*` code** [G-DL-4]: set `unionPending = true`, `deltaLink = null`, and clear `remoteIndex`. Save, then re-enumerate from null. `files` (the bases) is kept, so files changed on only one side still sync normally. Union mode only stops deletes (§5.4).
 - **Delta unsupported on approot** (M3 probe result, [G-DL-1]): `RemotePort.delta` is implemented as a breadth-first `listChildren` walk returning a synthetic page. Deletes are inferred by absence. This costs more, so the interval floor rises to 15 minutes.
+  - **M3 implementation.** `GraphClient` takes a `deltaForm` (`capabilities.ts` `DELTA_FORM`): `approot-colon` (`/me/drive/special/approot:/:/delta`), `items-id` (`/me/drive/items/{approotId}/delta`) or `children-walk`. The walk returns the approot plus every descendant as one page whose `deltaLink` is the sentinel `CHILDREN_WALK_LINK` (`"mdvaultsync:children-walk"`); passing it back walks again.
+  - `GraphClient.deltaAll(link)` follows `nextLink` to the `deltaLink` (with a page cap) and returns items in server order, duplicates included. The engine keeps the last occurrence per ID. `RemotePort.delta` itself stays one page.
+  - A persisted `deltaLink` is untrusted (T-T6): it must be an `https://graph.microsoft.com/v1.0/` URL, or `delta` refuses it before any request.
 - **Rebuild remote paths** from `parentId` chains rooted at the approot ID [G-DL-6], [G-DL-7]. Drop items whose chain doesn't reach the approot.
 
 ### 5.3 Scan (local change detection)
@@ -512,13 +515,20 @@ After the run, a notice lists every conflict path (D-9). It stays up until click
 - **Non-retryable:** 400, 401 (one token refresh then retry once), 403, 404, 409, 412, 413, 416 and 507. These are surfaced to the caller as typed errors (`GraphError {status, code, innerCodes}`) [G-ERR-1].
 - **Whole-run budget:** if total backoff exceeds 10 minutes, abort the run with `partial` and keep progress.
 
+**M3 implementation notes.**
+- **401 refresh and retry.** This lives in `AuthorizingTransport` (`src/remote/http.ts`), below the retry policy. On a Graph 401 it calls `AuthClient.invalidateAccessToken(token)` and resends once with a fresh token; a second 401 goes back to the caller. `invalidateAccessToken` drops the cached token only if it is still the one that failed, so concurrent 401s cause one refresh. `ports.ts` is unchanged.
+- **What counts as a network error.** Only `NetworkError` (thrown by the requestUrl transport, defined in `src/remote/errors.ts`) is retried. Any other exception, such as an `AuthError` from the refresh, is rethrown at once (M3 review).
+- **Throttling.** Retries driven by Retry-After are bounded by the run budget, not by the 6-attempt cap. The shared pause covers every request that goes through the same `RetryPolicy`.
+- **Budget reset.** `RetryPolicy.resetBudget()` starts a new run. M6's engine calls it at the start of each sync; the diagnostics command calls it per probe.
+- **Transport split.** `GraphClient` uses two transports: the authorizing one for Graph API calls, and a bare `transferTransport` for download URLs and upload-session fragment, status and cancel requests. A tampered transfer URL therefore can't carry the token, even if it passed the allowlist.
+
 ### 6.2 Journal and resume
 - The persisted `SyncState` *is* the journal. Completed ops are reflected in `files`, `folders` and `remoteIndex`, so a fresh plan after a restart omits them.
 - `pendingLocal` survives restarts.
 - An interrupted run therefore resumes by running the full algorithm again. Pull is idempotent (same `deltaLink`), and the plan contains only what is left.
 
 ### 6.3 Upload sessions (files over 10 MiB, and replace-uploads if PUT ignores If-Match)
-- **Create** with `POST /items/{parentId}:/{name}:/createUploadSession` (new file) or `POST /items/{id}/createUploadSession` with `if-match` (replace). Body: `{"item":{"@microsoft.graph.conflictBehavior":"fail"|"replace"}}` [G-UP-5].
+- **Create** with `POST /items/{parentId}:/{name}:/createUploadSession` (new file) or `POST /items/{id}/createUploadSession` with `if-match` (replace). Body: `{"item":{"@microsoft.graph.conflictBehavior":"fail"|"replace","fileSize":<bytes>}}` [G-UP-5]. `fileSize` (M3) lets OneDrive personal fail early with 507 when quota is short. A replace session without If-Match is refused locally (R-CC-1).
 - **Persist** an `UploadSessionRecord` right after creation.
 - **Fragment size:** 10 MiB = 32 × 320 KiB (`FRAGMENT = 10 * 1024 * 1024`; assert `FRAGMENT % 327_680 === 0`) [G-UP-6]. The last fragment is the remainder.
 - **Send** fragments in order with `Content-Range` and **no Authorization header** [G-UP-7]. Read only that slice of the file. The Obsidian adapter API reads whole files, so on iPad memory use is the file size. This is one reason for the 100 MiB default cap.
@@ -554,18 +564,27 @@ Remote to vault (§8): the inverse rebuild, plus containment checks.
 
 ## 8. Untrusted input handling (`remote/validate.ts`)
 All Graph and token JSON passes through hand-written type guards before use. Unknown fields are ignored; missing or mistyped required fields throw `InvalidResponse`.
-- **Item fields:** `id` matches `/^[A-Za-z0-9!._-]{1,256}$/`; `name` is 1–255 characters with no `/`, `\` or NUL; `size` is a safe non-negative integer; `eTag` and `cTag` are strings of at most 512 characters; `quickXorHash` matches base64 of 28 characters.
+- **Item fields:**
+  - `id` matches `/^[A-Za-z0-9!._-]{1,256}$/` and is not made only of dots (M3 review: `..` in a URL path would climb out of `/items/`);
+  - `name` is 1–255 characters with no `/`, `\` or NUL, and is not `.` or `..` (M3);
+  - `size` is a safe non-negative integer;
+  - `eTag` and `cTag` are printable-ASCII strings of at most 512 characters, because they go back out as If-Match (M3 review);
+  - `quickXorHash` matches base64 of 28 characters.
+  - Deleted items may omit `size`, `cTag`, `eTag` and `name` [G-DL-5].
+  - The approot's decoded `pathPrefix` must have only valid name segments with no control characters, and be at most 400 characters long.
+  - Names and If-Match values we *send* get the same checks: the name rules above, and If-Match as printable ASCII of at most 512 characters.
 - **Response bodies:**
   - JSON responses over 32 MiB are rejected before parsing, which caps memory for a delta page.
   - Downloads whose byte length differs from `R.size` are rejected.
   - Items with size over the cap are skipped without downloading.
 - **Remote path to vault path:** NFC-normalize, then reject if any segment is `.`, `..` or empty, or contains `/`, `\` or NUL, or starts with `.`, or equals configDir. The path must not be absolute. The joined path must satisfy `normalizePath(joined) === joined`, and its `startsWith` check against the vault root must hold. Anything rejected is skipped as `outside-vault` or `hidden` and reported.
-- **downloadUrl / uploadUrl:** `new URL()` must succeed, the protocol must be `https:`, and the host must end with an allowlisted suffix: `.microsoft.com`, `.live.com`, `.sharepoint.com`, `.1drv.com`, `.onedrive.com` or `.livefilestore.com`. M3 refines this list from observed hosts. Otherwise refuse. This stops a tampered response from sending our bytes elsewhere.
+- **downloadUrl / uploadUrl:** `new URL()` must succeed, the protocol must be `https:`, there must be no userinfo or port, and the host must end with an allowlisted suffix: `.microsoft.com`, `.live.com`, `.sharepoint.com`, `.1drv.com`, `.onedrive.com` or `.livefilestore.com`. `graph.microsoft.com` itself is refused (M3 review). Otherwise refuse with `UntrustedUrl`, which carries no URL. This stops a tampered response from sending our bytes elsewhere. The M3 probe records the observed hosts (hostname only) so the list can be narrowed.
 - **Token response:** string types, `token_type` Bearer, and `expires_in` within range.
 - **Authorization header:** the auth decorator (`src/remote/http.ts`) adds `Authorization: Bearer …` only when the URL's origin is exactly `https://graph.microsoft.com`. Upload and download URLs never get it [G-UP-7], [G-DLD-1] (T-I4).
 
 ## 9. Logging (`core/logger.ts`)
 - **API shape:** `log.event(op: OpKind, fields: { count?: number; durationMs?: number; status?: number; code?: string; attempt?: number })`. No free-form string field exists. `code` must match `/^[A-Za-z0-9_.-]{1,64}$/`; anything else is replaced with `"other"`. The types themselves make it impossible to pass a path, token or content.
+- **Implementation (M3):** `RingLogger` in `src/core/logger.ts`. At runtime it copies only the known numeric fields (dropping non-finite values) and the filtered `code`, and drops events whose `op` isn't OpKind-shaped. Extra keys smuggled past the types are ignored. `GraphClient` logs `graph.request {status, durationMs}`, or `{code: <error name>}` when a request throws; `RetryPolicy` logs `retry.backoff {attempt, status | code: "network", durationMs}`.
 - **Destination:** an in-memory ring buffer of 500 entries, viewable and copyable from the diagnostics section in settings. `console.error` is used only for errors [O-GL-1]. A "Verbose logging" toggle mirrors events to `console.debug`.
 - **Test:** a unit test runs a full fake sync with sentinel strings in paths, contents and tokens, then asserts the serialized log contains none of them (M8).
 
@@ -574,7 +593,7 @@ All Graph and token JSON passes through hand-written type guards before use. Unk
   - **Account:** signed-in status, Sign in, Sign out, Client ID (required), and the token-storage line (a warning when `backend = "plugin-data"`, otherwise the neutral SecretStorage note from §4).
   - **Sync:** device name (default "iPad" or "Ubuntu" from `Platform`, editable), interval in minutes, maximum file size in MiB (default 100), exclude patterns (one per line), "Preview changes before every sync" (dry run), mass-delete threshold %.
   - **Last sync report:** time, result, counts, conflicts, skipped files with reasons, error codes.
-  - **Diagnostics:** "Run Graph capability probe" and "Copy log".
+  - **Diagnostics:** "Run Graph capability probe" and "Copy log". Since M3, the probe runs from the `run-diagnostics` command ("Run OneDrive capability probe"). The probe logic is `src/remote/probe.ts`, not `src/platform/diagnostics.ts`, because the R-ENG-4 lint rule allows RemotePort content calls only in `src/remote/**` and `remote-content.ts`, and so it can be unit tested. `platform/diagnostics.ts` only wires the command and `ui/diagnostics-modal.ts` shows the JSON. The settings button arrives with the rest of R-UI-1 in M7.
 - **Status bar** (desktop only): state and last sync time. Clicking it opens the report.
 - **Ribbon icon:** click to sync now. The tooltip shows state, which is the only always-visible state on iPad.
 - **PlanPreviewModal:** grouped lists (downloads, uploads, moves, deletes, conflicts, skips) with counts, and Run and Cancel buttons. Shown on first sync, on dry-run setting, and by the `sync-preview` command. The command never runs the sync unless Run is clicked.

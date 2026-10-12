@@ -110,6 +110,10 @@ test("rejects oversized or mistyped tags and timestamps", () => {
 	assert.throws(() => parseDriveItem(file({ eTag: 1 })), InvalidResponse);
 	assert.throws(() => parseDriveItem(file({ cTag: "c".repeat(513) })), InvalidResponse);
 	assert.throws(() => parseDriveItem(file({ cTag: 5 })), InvalidResponse);
+	for (const bad of ['"e"\r\nX-Evil: 1', "a\nb", "a\u0000b", "é"]) {
+		assert.throws(() => parseDriveItem(file({ eTag: bad })), InvalidResponse, JSON.stringify(bad));
+		assert.throws(() => parseDriveItem(file({ cTag: bad })), InvalidResponse, JSON.stringify(bad));
+	}
 	assert.throws(() => parseDriveItem(file({ lastModifiedDateTime: "t".repeat(65) })), InvalidResponse);
 	assert.throws(() => parseDriveItem(file({ lastModifiedDateTime: 5 })), InvalidResponse);
 	assert.equal(parseDriveItem(file({ eTag: "e".repeat(512) })).eTag.length, 512);

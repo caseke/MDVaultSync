@@ -353,7 +353,7 @@ Tests were written first and run red (6 files failing to load) before the implem
 ---
 
 ## M3: Graph client, retry, validation, capability probe
-**Status:** not started
+**Status:** awaiting-owner (session work done 2026-10-12). The probe has to run on the owner's Ubuntu and iPad; see **Manual checks**. M4 can start now: only its QuickXorHash vectors need the probe JSON. M6 needs the applied capabilities (`CAPABILITIES_PROBED = true`).
 
 **Goal.** A complete `RemotePort` over Graph. Settle every documentation gap from research.md §6 that can be tested against the live API.
 
@@ -388,10 +388,107 @@ npm run lint && npm run typecheck && npm test && npm run build
 node --test --experimental-test-coverage "test/**/*.test.ts" 2>&1 | grep -E "retry|validate|graph"
 ```
 
-**Verification output**
+**Verification output** (session container, Node v22.22.0, 2026-10-12, final M3 commit)
 ```
-(paste here, plus probe JSON from both devices)
+$ npm ci --ignore-scripts --no-fund      → exit 0; 3 moderate (unchanged, see M1 "Optional")
+$ npm run lint                           → exit 0, 0 errors, 2 warnings (settings-tab.ts, the M2 declarative-settings warnings)
+$ npm run typecheck                      → exit 0
+$ npm test
+# tests 289
+# suites 8
+# pass 289
+# fail 0
+$ npm run build                          → exit 0 (main.js 39317 bytes)
+$ npm audit --audit-level=high           → exit 0
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+$ node --test --experimental-test-coverage "test/**/*.test.ts"   (line % | branch % | funcs %)
+  retry.ts            100.00 | 96.67 | 100.00
+  validate.ts          99.31 | 98.13 | 100.00
+  graph.ts            100.00 | 95.07 | 100.00
+  upload-session.ts   100.00 | 97.62 | 100.00
+  errors.ts, logger.ts, http.ts  100.00 lines
+  probe.ts             96.72 lines
 ```
+The plan's grep line (`grep -E "retry|validate|graph"`) also matches test names, so the table rows above are taken from the coverage report itself.
+
+Tests were written first and run red (7 test files failing to load, 3 new tests failing) before the implementation. Each of these mutation spot checks, when applied (and then reverted), makes the suite fail:
+- no If-Match on the PUT replace;
+- Authorization sent to non-Graph hosts;
+- the global pause dropped;
+- a look-alike transfer host accepted;
+- `conflictBehavior=replace` on a new-file session;
+- after the review: the Graph host allowed as a transfer URL, every error retried, the download sent through the authorizing transport, and dot-only ids allowed.
+
+Probe JSON (owner, from **Run OneDrive capability probe** → Copy result):
+```
+Ubuntu: (paste here)
+iPad:   (paste here)
+```
+
+**Manual checks** (owner; use a throwaway test vault, never the real one)
+1. **Install 0.3.0.** `git fetch origin && git checkout claude/eloquent-clarke-21deia && git pull`, then `git tag 0.3.0 && git push origin 0.3.0`.
+   - Wait for the **Release** workflow to pass.
+   - Open the draft `0.3.0` release, check that it has the three assets and is marked pre-release, then publish it.
+   - Ubuntu: `npm ci && npm run build`, then copy `main.js`, `manifest.json` and `styles.css` into the test vault's plugin folder (as in M2), or install through BRAT.
+   - iPad: BRAT → **Check for updates to all beta plugins**, or add version `0.3.0`.
+2. **Run the probe on Ubuntu.** Sign in if needed. Open the command palette and run **MDVaultSync: Run OneDrive capability probe**.
+   - Expect a window that says it is running. After up to a minute it shows JSON. Select **Copy result** and paste it into the block above.
+   - Pass: `cleanup.ok` is `true`, `largeFile.bytesMatch` is `true`, and OneDrive web shows no `.mdvaultsync-probe` folder in `Apps/<your app name>` afterwards. The probe's items are in the OneDrive recycle bin; you can empty it.
+3. **Run the probe on the iPad**, the same way. Probe 8, the 12 MiB round trip, is the one the plan requires on the iPad (O-API-2, T-D6). Record whether Obsidian stayed responsive while it ran.
+4. **A follow-up session applies the results:**
+   - `src/remote/capabilities.ts`: `PUT_HONORS_IF_MATCH` from `putIfMatch.honored`; `DELTA_FORM` = the first form with `ok: true`, or `children-walk` if neither works (then the design §5.2 fallback applies and the M5 planner must not assume delta semantics); `NAME_MAX` from `nameLength.nameMax`; then `CAPABILITIES_PROBED = true`.
+   - research.md rows: G-AF-1 (`approot`), G-DL-1 and G-DL-8 (`delta`), G-UP-3 (`putIfMatch`), G-NM-5 (`caseInsensitive`), G-NM-6 (`nameLength`), G-AF-5 (`patchIfMatch`, `deleteIfMatch` and `delta`), G-QT-1 (`quota`), and O-API-2 (`largeFile`).
+   - Narrow `TRANSFER_HOST_SUFFIXES` to the observed `uploadHost` and `downloadHost` suffixes.
+   - Record the `hashVectors` for M4.
+
+**Tests added:**
+- `test/retry.test.ts`: Retry-After as seconds and as an HTTP date, the clamp, the global pause (with a manual clock), backoff, jitter, the 60 s cap, the 6-attempt cap, network errors, non-network errors not retried, every non-retryable status, the budget, and `resetBudget`.
+- `test/validate.test.ts`: hostile names, ids (dot-only included), sizes, tags (control characters included) and hashes; deleted-item leniency; the transfer-URL allowlist (Graph host, look-alikes, userinfo, port); delta, children, session, status and quota shapes; the 32 MiB cap; `checkName`.
+- `test/graph.test.ts`:
+  - `getAppRoot` and its `pathPrefix` checks;
+  - the three delta forms, paging, the page cap, duplicates, untrusted links, and 410 and `resync*` → `ResyncRequired`;
+  - `listChildren`, `getItem` and `getChildByName`;
+  - per-segment encoding of `#`, `%`, `?`, space, emoji, NFD and `'()`;
+  - `uploadNew`, `uploadReplace`, `move`, `delete` and `createFolder`: If-Match, `conflictBehavior=fail`, 409 and 412;
+  - `download`: no auth, length check, untrusted host, never GET Graph `/content`;
+  - quota, throttling and redaction in the log, and `sendRaw`;
+  - the transport split, and the If-Match header-injection guard.
+- `test/upload-session.test.ts`: fragment ranges (12 MiB = 10 + 2), `Content-Range`, 320 KiB alignment, new and replace sessions, If-Match, 202/201/404/416, cancel, and untrusted upload URLs.
+- `test/errors.test.ts`, `test/logger.test.ts`, `test/probe.test.ts`: full probe against the fake; no names, URLs or tokens in the JSON; unsupported forms; leftovers; a failing step still cleans up; approot failure; cleanup failure; a non-folder at the probe name.
+- `test/http.test.ts` and `test/auth.test.ts` additions: 401 → invalidate and resend once; `invalidateAccessToken`.
+- `test/fakes/fake-graph.ts` (HTTP-level OneDrive fake) and `test/graph-setup.ts`.
+
+**Deviations from this milestone's text** (recorded in design.md §2 layout, §5.2, §6.1, §6.3, §8, §9 and §10, and in commit messages):
+- **Probe location.** The probe logic is `src/remote/probe.ts`. `src/platform/diagnostics.ts` only registers the command, and `src/ui/diagnostics-modal.ts` shows the JSON. The R-ENG-4 lint rule allows `.uploadNew(`, `.putFragment(` and `.download(` calls only in `src/remote/**` and `remote-content.ts`, and this way the probe is unit tested.
+- **No `graph-types.ts`.** The guards in `validate.ts` read raw JSON as `unknown` directly, so a separate raw-types file would have been unused.
+- **401 handling.** "One refresh then retry once" lives in `AuthorizingTransport`, through a new `AuthClient.invalidateAccessToken(token)`. `ports.ts` is unchanged.
+- **Helpers outside RemotePort.** `GraphClient.deltaAll` (paging helper for M6) and the `CHILDREN_WALK_LINK` sentinel for the fallback. `GraphClient.sendRaw` sends Graph-only requests for the probe.
+- **Stricter validation than design §8.** Names `.` and `..` and dot-only ids are rejected. eTag, cTag and If-Match must be printable ASCII. The approot path is validated per segment.
+- **Probe 8** compares downloaded bytes with uploaded bytes, because QuickXorHash lands in M4. It records OneDrive's hashes of deterministic probe files (`hashVectors`) as M4 test vectors.
+- **Transport split.** Transfers use a bare `transferTransport` (security review).
+- **Version 0.3.0**, so the owner can tag a BRAT pre-release for the iPad probe (the M2 pattern).
+
+**Security review** (`security-reviewer` agent; base: the M2 close commit 643cc29, since `origin/main` isn't fetched in the container):
+- No high findings.
+- Fixed, medium:
+  - Transfer URLs on `graph.microsoft.com` passed the `.microsoft.com` allowlist and went through the authorizing transport, so a tampered `uploadUrl` or `downloadUrl` could make authorized, unconditional Graph calls. Now the Graph host is refused, and transfers use a transport with no auth decorator.
+  - RetryPolicy retried any exception, including `AuthError` from the refresh, and logged it as `network`. Now only `NetworkError` is retried.
+- Fixed, low:
+  - Dot-only ids could climb out of `/items/` in a URL.
+  - The decoded approot path was only partly checked.
+  - If-Match blocked only CR and LF.
+  - The retry budget was never reset (now reset per probe; M6 resets it per run).
+- Fixed, info: the probe no longer deletes a non-folder at `.mdvaultsync-probe`, and the probe header comment now says the JSON includes the App Folder name and parent path.
+- Re-review of fix commit 97b9dec: every finding above is confirmed resolved, with no high or medium findings.
+  - Fixed, low: eTag and cTag from Graph are now required to be printable ASCII at parse time, so no path (the probe, or state M6 reads back) can forward a CR/LF eTag into a header.
+
+**Optional for the owner** (not fixed, no security or requirement impact):
+- **For M6:** the `.microsoft.com` transfer suffix is still broad. No token can leak (Graph is refused, and transfers carry no auth), but bytes could go to another `*.microsoft.com` host. Narrow the list from the probe's `uploadHost` and `downloadHost` (step 4 above).
+- **For M6:** downloads are length-checked only after `requestUrl` has buffered the whole body. The executor must skip items over the size cap before calling `download` (D-12, T-D6).
+- **For M6:** `GraphClientOptions.transferTransport` falls back to `transport` when omitted, which only tests do. It is safe either way, because the Graph host is refused and `AuthorizingTransport` strips Authorization from non-Graph hosts. It could be made required.
+- The probe leaves its test files in the OneDrive recycle bin (about 12 MiB, which counts toward quota [G-DEL-2]) until the user empties it.
+- The command's display name is "Run OneDrive capability probe", not design §10's "Run Graph capability probe", because the obsidianmd sentence-case rule flags "Graph".
 
 ---
 
@@ -669,11 +766,11 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-AUTH-1…8 | M2 | ☑ (M2, 2026-10-12; R-AUTH-3 withdrawn. R-AUTH-7 token clear verified on Ubuntu; clearing real sync state is verified with the M6 StateStore) |
 | R-SCOPE-1…4 | M4, M5, M7 | ☐ |
 | R-TRIG-1…4 | M6 (lock), M7 | ☐ |
-| R-CD-1 | M3, M5 | ☐ |
+| R-CD-1 | M3, M5 | ☐ (M3 part done 2026-10-12: delta in three forms with paging to deltaLink; the form is chosen after the owner's probe) |
 | R-CD-2 | M5, M7 | ☐ |
 | R-CD-3, R-CD-4 | M4, M5 | ☐ |
 | R-ORDER | M6 | ☐ |
-| R-CC-1, R-CC-2 | M3, M6 | ☐ |
+| R-CC-1, R-CC-2 | M3, M6 | ☐ (M3 part done 2026-10-12: If-Match on replace, move, delete and replace sessions; conflictBehavior=fail on new files and folders; 412 → GraphError) |
 | R-CONF-1…4 | M4, M5, M6, M7 | ☐ |
 | R-DEL-1…3 | M5, M6 | ☐ |
 | R-MOVE-1 | M5, M6 | ☐ |
@@ -681,13 +778,13 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-GUARD-1 | M5, M7 | ☐ |
 | R-PATH-1…4 | M4, M6 | ☐ |
 | R-IO-1, R-IO-2 | M6 | ☐ |
-| R-NET-1 | M2, M3 | ☐ (M2 part done 2026-10-12: all HTTP through the requestUrl transport; M3 adds Graph) |
-| R-RES-1 | M3 | ☐ |
-| R-RES-2, R-RES-3 | M3, M6 | ☐ |
+| R-NET-1 | M2, M3 | ☑ (M2 and M3, 2026-10-12: auth and Graph go only through the requestUrl transport; lint and the CI script enforce it) |
+| R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested) |
+| R-RES-2, R-RES-3 | M3, M6 | ☐ (M3 part done 2026-10-12: 10 MiB upload-session primitives, status and 404 handling; persistence and resume are M6) |
 | R-UI-1…3 | M2, M7 | ☐ (M2 part done 2026-10-12: Account section) |
 | R-SEC-1, R-SEC-2 | M2 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 M2 part (SecretStorage observed on both devices, including a locked GNOME keyring) — README residual-risk text is owed in M9 |
-| R-SEC-3 | M3, M8 | ☐ |
-| R-SEC-4 | M3, M4 | ☐ |
+| R-SEC-3 | M3, M8 | ☐ (M3 part done 2026-10-12: typed redacting logger, unit tested; the sentinel test is M8) |
+| R-SEC-4 | M3, M4 | ☐ (M3 part done 2026-10-12: Graph JSON, ids, names, sizes, tags, hashes, links and transfer URLs validated; paths are M4) |
 | R-SEC-5 | M1, M9 | ☐ (M1 part done: lockfile, Dependabot, CodeQL, audit, SHA pins, and secret scanning and push protection verified 2026-10-12; release attestation is M9) |
 | R-SEC-6 | M1 | ☑ (M1, 2026-10-12) |
 | R-ENG-1…5 | M1 onward | ☐ |

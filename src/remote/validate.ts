@@ -100,6 +100,12 @@ function boundedString(v: unknown, max: number, allowEmpty = false): string {
 	if (typeof v !== "string" || v.length > max || (!allowEmpty && v.length === 0)) throw new InvalidResponse();
 	return v;
 }
+/** eTag and cTag go back out as If-Match headers, so they must be printable ASCII (M3 review). */
+function tag(v: unknown): string {
+	const s = boundedString(v, MAX_TAG);
+	if (!/^[\x20-\x7e]+$/.test(s)) throw new InvalidResponse();
+	return s;
+}
 function safeSize(v: unknown): number {
 	if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) throw new InvalidResponse();
 	return v;
@@ -152,8 +158,8 @@ export function parseDriveItem(raw: unknown): RemoteItem {
 		if (!nameOk(o["name"], NAME_LIMIT)) throw new InvalidResponse();
 		name = o["name"];
 	}
-	const eTag = deleted && o["eTag"] === undefined ? "" : boundedString(o["eTag"], MAX_TAG);
-	const cTag = o["cTag"] === undefined ? null : boundedString(o["cTag"], MAX_TAG);
+	const eTag = deleted && o["eTag"] === undefined ? "" : tag(o["eTag"]);
+	const cTag = o["cTag"] === undefined ? null : tag(o["cTag"]);
 	const size = deleted && o["size"] === undefined ? 0 : safeSize(o["size"]);
 	const lastModified = o["lastModifiedDateTime"] === undefined ? "" : boundedString(o["lastModifiedDateTime"], MAX_TIMESTAMP, true);
 	let quickXorHash: string | null = null;

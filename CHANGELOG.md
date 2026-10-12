@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-12
+
+Pre-release for the M3 capability probe on the iPad and Ubuntu. Nothing syncs yet.
+
+### Added
+
+- **Run OneDrive capability probe** command. It checks how your OneDrive's app folder behaves: delta queries, conditional updates, case-insensitive names, the name length limit, rename and delete, quota access, and a 12 MiB upload and download. It works in a hidden `.mdvaultsync-probe` folder inside the app folder, and deletes that folder afterwards (items go to the OneDrive recycle bin). The result is JSON you can copy. It contains statuses, counts, timings and server host names, and no file names from your vault, links or sign-in data.
+- Internal: the Microsoft Graph client (retries that honor `Retry-After`, upload sessions, conditional requests), validation of everything Graph returns, and a log that records only operation types, counts, durations, statuses and error codes.
+
 ## [0.2.2] - 2026-10-12
 
 ### Changed
