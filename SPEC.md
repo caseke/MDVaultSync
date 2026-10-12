@@ -118,7 +118,7 @@ Requirement keywords: **MUST** is required for v1. **SHOULD** is expected unless
   - the mass-delete threshold;
   - the last sync report;
   - diagnostics (capability probe, copy log).
-- **R-UI-2.** The status bar MUST show the last sync time and current state. Obsidian has no status bar on mobile [O-API-13], so on iPad the ribbon tooltip shows the same state.
+- **R-UI-2.** The status bar MUST show the last sync time and current state. Obsidian has no status bar on mobile [O-API-13], and a tooltip needs hover, which a touchscreen doesn't have [O-API-20]. So on mobile the ribbon icon MUST show the current state, and a "Show sync status" command MUST show the state and the last sync time. *Changed 2026-10-12 (M7 owner check 7: the iPad shows no ribbon tooltip); it said the ribbon tooltip carried the state on iPad.*
 - **R-UI-3.** Errors and conflicts MUST raise notices. A successful sync with no conflicts MUST NOT.
 
 ## 3. Security requirements

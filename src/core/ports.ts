@@ -139,7 +139,7 @@ export type PlanOp =
   | { kind: "local-move"; from: VaultPath; to: VaultPath }
   | { kind: "remote-delete"; id: string; ifMatch: string; path: VaultPath }
   | { kind: "local-trash"; path: VaultPath }
-  | { kind: "conflict"; path: VaultPath; id: string; copyPath: VaultPath }
+  | { kind: "conflict"; path: VaultPath; id: string; copyPath: VaultPath; noHistory?: true } // noHistory: no base (preview group, M7)
   | { kind: "adopt"; path: VaultPath; id: string }          // identical content both sides: record only
   | { kind: "forget"; path: VaultPath }                     // gone on both sides: drop record
   | { kind: "skip"; path: VaultPath; reason: SkipReason };
@@ -169,6 +169,8 @@ export interface SyncHooks {
   /** Resolve true to delete, false to skip deletes this run. */
   confirmDeletes(ops: PlanOp[]): Promise<boolean>;
   onStatus(s: EngineStatus): void;
+  /** After every run, reruns included (M7: notices; requestSync returns only the last run's report). */
+  onReport?(r: SyncReport): void;
 }
 export type EngineStatus =
   | { state: "idle"; lastSyncAt: number | null } | { state: "syncing"; phase: string }

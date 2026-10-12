@@ -9,6 +9,8 @@ import { FakeRemote } from "./fakes/fake-remote.ts";
 import { Device, UNIT, remoteFiles, vaultFiles } from "./fakes/device.ts";
 import { STAMP } from "./fakes/plan-fixtures.ts";
 import { withOverrides } from "./fakes/sync-fakes.ts";
+import { resumeUploads } from "../src/core/upload-resume.ts";
+import { classifyError } from "../src/remote/classify.ts";
 
 function lcg(n: number, seed: number): Uint8Array {
 	const b = new Uint8Array(n);
@@ -119,4 +121,35 @@ test("a replace interrupted mid-upload whose item then changed remotely is cance
 	assert.equal(dev.vault.contentAt("big.bin"), "another device committed");
 	assert.equal(remote.itemAt(copy)?.quickXorHash, quickXorHash(lcg(BIG, 6)));
 	assert.deepEqual(Object.keys(vaultFiles(dev.vault)).sort(), Object.keys(remoteFiles(remote)).sort());
+});
+
+test("after a reset (sign-out, unload) resume touches nothing: no status check, no fragment, record kept (M7 review)", async () => {
+	const remote = new FakeRemote();
+	const f = flaky(2);
+	const dev = await synced(remote, { "a.md": "a" }, f.wrap);
+	dev.vault.write("big.bin", lcg(BIG, 1));
+	await dev.sync("interval");
+	const state = dev.store.state;
+	assert.ok(state?.uploadSessions["big.bin" as VaultPath]);
+	const sent = f.stats.fragments;
+	let calls = 0;
+	const watched = withOverrides(remote as RemotePort, {
+		getUploadStatus: (u: string) => {
+			calls++;
+			return remote.getUploadStatus(u);
+		},
+	});
+	await resumeUploads({
+		state,
+		vault: dev.vault,
+		remote: watched,
+		content: {} as never, // never reached
+		classify: classifyError,
+		saver: {} as never,
+		transformId: "identity",
+		live: () => false,
+	});
+	assert.equal(calls, 0);
+	assert.equal(f.stats.fragments, sent);
+	assert.ok(state.uploadSessions["big.bin" as VaultPath], "kept for the next live run");
 });
