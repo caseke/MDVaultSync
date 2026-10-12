@@ -270,11 +270,11 @@ Each option is compared on the iPad (Obsidian for iOS) and on Ubuntu (Obsidian .
 | | Auth code + PKCE, `obsidian://` redirect | Device code flow |
 |---|---|---|
 | **iPad experience** | Tap Sign in. Safari opens, sign in, then "Open in Obsidian?" and tap Open. Back in the app, signed in. | Obsidian shows a code. Switch to Safari, open the verification URL, type the code, sign in, switch back, wait for polling. There's no one-tap deep link because `verification_uri_complete` isn't supported [I-DC-1]. |
-| **Ubuntu experience** | Click Sign in. The default browser opens, sign in, then the browser asks to open the `obsidian://` link, and Obsidian comes forward. This needs an `x-scheme-handler/obsidian` handler. That the .deb registers one is INFERRED from its desktop entry [O-DEB-1], and M2 checks it with `xdg-mime query default x-scheme-handler/obsidian`. The paste fallback covers its absence. | Same code-typing flow in the browser. It works without any scheme handler. |
+| **Ubuntu experience** | Click Sign in. The default browser opens, sign in, then the browser asks to open the `obsidian://` link, and Obsidian comes forward. This needs an `x-scheme-handler/obsidian` handler. That the .deb registers one is INFERRED from its desktop entry [O-DEB-1], and M2 checks it with `xdg-mime query default x-scheme-handler/obsidian`. M2 found the owner runs the Flatpak, which registers it [O-DEB-1]. | Same code-typing flow in the browser. It works without any scheme handler. |
 | **Registration** | "Mobile and desktop applications" platform with `obsidian://mdvaultsync-auth` (no query string [I-RU-2]). "Allow public client flows" stays off. | Requires "Allow public client flows = Yes" [I-DC-1]. |
 | **Refresh token lifetime** | About 90 days (not SPA) [I-TL-2] | About 90 days |
 | **Interception or phishing** | A stolen code can't be redeemed without the PKCE verifier [I-AC-2]. Login CSRF is blocked by single-use `state` (threat-model S1). The system browser shows the real Microsoft URL [I-BR-1]. | No redirect to intercept, but it is a known phishing pattern: an attacker starts a flow with our public client ID and persuades the user to enter the code on the real Microsoft page. Microsoft says it "recommends blocking device code flow wherever possible" [I-DC-1]. |
-| **Failure modes** | No scheme handler; Safari prompt dismissed; trailing-slash callback variant [I-RU-3]; `Origin` header on token redemption [I-AC-7]. All are tested in M2 and covered by the paste fallback and lenient callback parsing. | 15-minute expiry [I-DC-2]; polling while iOS suspends the app (sign-in may stall if the user stays in Safari too long); possible future Microsoft restrictions. |
+| **Failure modes** | No scheme handler; Safari prompt dismissed; trailing-slash callback variant [I-RU-3]; `Origin` header on token redemption [I-AC-7]. All are tested in M2. Lenient callback parsing covers the trailing slash; there is no fallback for a missing handler (R-AUTH-3 withdrawn). | 15-minute expiry [I-DC-2]; polling while iOS suspends the app (sign-in may stall if the user stays in Safari too long); possible future Microsoft restrictions. |
 | **Code required** | PKCE, protocol handler, callback validation, token exchange. | Polling loop (`authorization_pending`, `slow_down`, `expired_token`), code display UI. |
 
 **Recommendation: auth code + PKCE with the `obsidian://` redirect on both devices.** Owner accepted this as D-4.
@@ -283,14 +283,13 @@ Each option is compared on the iPad (Obsidian for iOS) and on Ubuntu (Obsidian .
 - It avoids the phishing-prone device code flow.
 - With the .deb install, one code path covers iPad and Ubuntu with no Node-only code, so `isDesktopOnly` can stay `false`.
 
-**Fallback.** The `nativeclient` paste fallback covers a missing scheme handler without enabling device code. Loopback (`http://127.0.0.1`) was also considered for desktop and rejected: it needs Node `http` (desktop-only, flagged by the `no-nodejs-modules` lint rule [O-ESL-2]) and isn't needed with the .deb install.
+**No fallback (M2).** The `nativeclient` paste fallback was withdrawn by the owner (R-AUTH-3): its page showed a phishing warning, and the primary flow works on Ubuntu (iPad re-run pending on 0.2.1; if it can't work there, R-AUTH-3 is reopened). Loopback (`http://127.0.0.1`) was also rejected: it needs Node `http` (desktop-only, flagged by the `no-nodejs-modules` lint rule [O-ESL-2]).
 
 **Sign-in, primary path:**
 1. Generate a `code_verifier` of 64 random characters from the RFC 7636 alphabet, using `crypto.getRandomValues`. Compute `code_challenge = base64url(SHA-256(verifier))` with `crypto.subtle` [I-AC-2], [O-SUB-4]. Generate `state` from 32 random bytes. Keep verifier and state in memory only, with a 10-minute expiry.
-2. Open `https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id=…&response_type=code&redirect_uri=obsidian%3A%2F%2Fmdvaultsync-auth&response_mode=query&scope=Files.ReadWrite.AppFolder%20offline_access&code_challenge=…&code_challenge_method=S256&state=…&prompt=select_account` in the system browser with `window.open` [I-BR-1].
-3. The protocol handler receives `{action:"mdvaultsync-auth", code, state}` or `{error, error_description}`. It accepts `mdvaultsync-auth/` too [I-RU-3]. `AuthClient.handleCallback(params, via)` checks, in this order:
+2. Show the URL `https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id=…&response_type=code&redirect_uri=obsidian%3A%2F%2Fmdvaultsync-auth&response_mode=query&scope=Files.ReadWrite.AppFolder%20offline_access&code_challenge=…&code_challenge_method=S256&state=…&prompt=select_account` as a link in a modal ("Open Microsoft sign-in"); tapping it opens the system browser [I-BR-1]. Not `window.open`: iOS only allows it during a tap, and building the URL awaits the digest, so it was silently blocked on the iPad (M2 check 2). Remotely Save uses the same link-in-a-modal pattern.
+3. The protocol handler receives `{action:"mdvaultsync-auth", code, state}` or `{error, error_description}`. It accepts `mdvaultsync-auth/` too [I-RU-3]. `AuthClient.handleCallback(params)` checks, in this order:
    - Reject if no sign-in is pending. If it has expired, clear it and reject.
-   - Reject if the channel doesn't match the pending redirect: a protocol callback can't finish a paste-mode sign-in, and the reverse.
    - Reject if `state` doesn't match (constant-time compare). A wrong state does **not** clear the pending sign-in, so a forged `obsidian://` link can't cancel the user's real sign-in; the attacker can't guess the 32-byte state anyway.
    - Clear the pending state before any `await`, so each state value is used once even when two callbacks race.
    - Only then look at `error` (surfaced as a sanitized code; `error_description` is never read) or `code`.
@@ -298,12 +297,6 @@ Each option is compared on the iPad (Obsidian for iOS) and on Ubuntu (Obsidian .
    - `buildAuthorizeUrl` refuses with `already-signed-in` while a refresh token is stored: signing in over a live grant could relink the vault to another account's App Folder without clearing sync state. A code redemption also bumps the epoch (below), so no older refresh can overwrite the new grant (M2 security review).
 4. POST to the token endpoint with `application/x-www-form-urlencoded`: `client_id`, `grant_type=authorization_code`, `code`, `redirect_uri`, `code_verifier`, `scope`. Send no `Origin` header [I-AC-5].
 5. Validate the response shape: `access_token` (string), `refresh_token` (string), `expires_in` (number, 60–86,400), `token_type == "Bearer"`. Store the refresh token in TokenStore. Keep the access token in memory only.
-
-**Fallback (paste URL).** The settings tab has a "Sign in another way" button.
-- It opens the same authorize URL with `redirect_uri=https://login.microsoftonline.com/common/oauth2/nativeclient` [I-RU-4].
-- The user pastes the final address-bar URL into a text field.
-- The plugin parses it with `new URL()`. It requires origin `https://login.microsoftonline.com` and path `/common/oauth2/nativeclient`, then extracts `code` and `state` and continues at step 3's checks.
-- M2 verifies this on both devices. If it fails with `/consumers`, M2 records the result in research.md and replaces this fallback before closing.
 
 **Access tokens.** `AccessTokenProvider.getAccessToken()` returns the cached token if it has more than 5 minutes left (or more than half its lifetime, if that is shorter, so a short-lived token doesn't rotate the refresh token on every call; M2). Otherwise it refreshes, single-flight: concurrent callers await the same promise.
 - After a refresh, the new refresh token *replaces* the stored one before the access token is returned [I-TL-3].
@@ -578,7 +571,7 @@ All Graph and token JSON passes through hand-written type guards before use. Unk
 
 ## 10. UI
 - **Settings tab.** Uses `Setting` and `setHeading()` [O-GL-2]; no `innerHTML` [O-GL-3]. Sections:
-  - **Account:** signed-in status, Sign in, Sign in another way, Sign out, Client ID (required), and the token-storage line (a warning when `backend = "plugin-data"`, otherwise the neutral SecretStorage note from §4).
+  - **Account:** signed-in status, Sign in, Sign out, Client ID (required), and the token-storage line (a warning when `backend = "plugin-data"`, otherwise the neutral SecretStorage note from §4).
   - **Sync:** device name (default "iPad" or "Ubuntu" from `Platform`, editable), interval in minutes, maximum file size in MiB (default 100), exclude patterns (one per line), "Preview changes before every sync" (dry run), mass-delete threshold %.
   - **Last sync report:** time, result, counts, conflicts, skipped files with reasons, error codes.
   - **Diagnostics:** "Run Graph capability probe" and "Copy log".

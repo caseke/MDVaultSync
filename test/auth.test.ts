@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
 	AuthClient,
 	AuthError,
-	REDIRECT_NATIVE,
 	REDIRECT_PROTOCOL,
 	SCOPE,
 	type AuthStatus,
@@ -48,8 +47,8 @@ function setup(clientId = CLIENT_ID) {
 	return { http, tokens, clock, auth, statuses };
 }
 
-async function startSignIn(auth: AuthClient, redirect: string = REDIRECT_PROTOCOL) {
-	const url = new URL(await auth.buildAuthorizeUrl(redirect as typeof REDIRECT_PROTOCOL));
+async function startSignIn(auth: AuthClient) {
+	const url = new URL(await auth.buildAuthorizeUrl());
 	return { url, state: url.searchParams.get("state") ?? "" };
 }
 
@@ -82,16 +81,10 @@ describe("authorize URL", () => {
 		assert.equal(p.get("client_secret"), null);
 	});
 
-	test("uses the nativeclient redirect for the paste fallback", async () => {
-		const { auth } = setup();
-		const { url } = await startSignIn(auth, REDIRECT_NATIVE);
-		assert.equal(url.searchParams.get("redirect_uri"), "https://login.microsoftonline.com/common/oauth2/nativeclient");
-	});
-
 	test("refuses a missing or malformed client ID", async () => {
 		for (const id of ["", "not-a-guid", `${CLIENT_ID}&scope=Files.ReadWrite.All`]) {
 			const { auth } = setup(id);
-			assert.equal(await codeOf(auth.buildAuthorizeUrl(REDIRECT_PROTOCOL)), "no-client-id");
+			assert.equal(await codeOf(auth.buildAuthorizeUrl()), "no-client-id");
 		}
 	});
 });
@@ -99,18 +92,18 @@ describe("authorize URL", () => {
 describe("callback checks", () => {
 	test("rejects a callback when no sign-in is pending", async () => {
 		const { auth, http } = setup();
-		assert.equal(await codeOf(auth.handleCallback({ code: "C", state: "S" }, "protocol")), "no-pending");
+		assert.equal(await codeOf(auth.handleCallback({ code: "C", state: "S" })), "no-pending");
 		assert.equal(http.requests.length, 0);
 	});
 
 	test("rejects a wrong state but keeps the real sign-in pending", async () => {
 		const { auth, http, tokens } = setup();
 		const { state } = await startSignIn(auth);
-		assert.equal(await codeOf(auth.handleCallback({ code: "EVIL", state: "x".repeat(43) }, "protocol")), "state-mismatch");
-		assert.equal(await codeOf(auth.handleCallback({ code: "EVIL" }, "protocol")), "state-mismatch");
+		assert.equal(await codeOf(auth.handleCallback({ code: "EVIL", state: "x".repeat(43) })), "state-mismatch");
+		assert.equal(await codeOf(auth.handleCallback({ code: "EVIL" })), "state-mismatch");
 		assert.equal(http.requests.length, 0);
 		http.enqueueJson(200, tokenBody());
-		await auth.handleCallback({ code: "GOOD", state }, "protocol");
+		await auth.handleCallback({ code: "GOOD", state });
 		assert.equal(formOf(http.requests[0]!).get("code"), "GOOD");
 		assert.equal(tokens.value, "RT1");
 	});
@@ -120,16 +113,16 @@ describe("callback checks", () => {
 			const { auth, clock } = setup();
 			const { state } = await startSignIn(auth);
 			clock.advance(10 * 60_000 + 1);
-			assert.equal(await codeOf(auth.handleCallback({ code: "C", state }, "protocol")), "expired");
+			assert.equal(await codeOf(auth.handleCallback({ code: "C", state })), "expired");
 			// Expiry consumes the pending sign-in.
-			assert.equal(await codeOf(auth.handleCallback({ code: "C", state }, "protocol")), "no-pending");
+			assert.equal(await codeOf(auth.handleCallback({ code: "C", state })), "no-pending");
 		}
 		{
 			const { auth, clock, http } = setup();
 			const { state } = await startSignIn(auth);
 			clock.advance(9 * 60_000 + 59_000);
 			http.enqueueJson(200, tokenBody());
-			await auth.handleCallback({ code: "C", state }, "protocol");
+			await auth.handleCallback({ code: "C", state });
 			assert.equal(auth.status, "signed-in");
 		}
 	});
@@ -138,8 +131,8 @@ describe("callback checks", () => {
 		const { auth, http } = setup();
 		const { state } = await startSignIn(auth);
 		http.enqueueJson(200, tokenBody());
-		await auth.handleCallback({ code: "C", state }, "protocol");
-		assert.equal(await codeOf(auth.handleCallback({ code: "C", state }, "protocol")), "no-pending");
+		await auth.handleCallback({ code: "C", state });
+		assert.equal(await codeOf(auth.handleCallback({ code: "C", state })), "no-pending");
 		assert.equal(http.requests.length, 1);
 	});
 
@@ -148,24 +141,11 @@ describe("callback checks", () => {
 		const { state } = await startSignIn(auth);
 		http.enqueueJson(200, tokenBody());
 		const results = await Promise.all([
-			codeOf(auth.handleCallback({ code: "C", state }, "protocol")),
-			codeOf(auth.handleCallback({ code: "C", state }, "protocol")),
+			codeOf(auth.handleCallback({ code: "C", state })),
+			codeOf(auth.handleCallback({ code: "C", state })),
 		]);
 		assert.deepEqual(results.sort(), ["no-pending", "resolved"]);
 		assert.equal(http.requests.length, 1);
-	});
-
-	test("a callback must arrive on the channel the sign-in started with", async () => {
-		{
-			const { auth } = setup();
-			const { state } = await startSignIn(auth, REDIRECT_NATIVE);
-			assert.equal(await codeOf(auth.handleCallback({ code: "C", state }, "protocol")), "redirect-mismatch");
-		}
-		{
-			const { auth } = setup();
-			const { state } = await startSignIn(auth, REDIRECT_PROTOCOL);
-			assert.equal(await codeOf(auth.handleCallback({ code: "C", state }, "paste")), "redirect-mismatch");
-		}
 	});
 
 	test("an error parameter is surfaced as a code, never with error_description", async () => {
@@ -177,7 +157,7 @@ describe("callback checks", () => {
 		);
 		let caught: unknown;
 		try {
-			await auth.handleCallback({ error: "access_denied", error_description: SENTINEL, state }, "protocol");
+			await auth.handleCallback({ error: "access_denied", error_description: SENTINEL, state });
 		} catch (e) {
 			caught = e;
 		}
@@ -191,13 +171,13 @@ describe("callback checks", () => {
 		assert.ok(!logged.join(" ").includes(SENTINEL));
 		assert.equal(http.requests.length, 0);
 		// The pending sign-in was consumed by the matching state.
-		assert.equal(await codeOf(auth.handleCallback({ code: "C", state }, "protocol")), "no-pending");
+		assert.equal(await codeOf(auth.handleCallback({ code: "C", state })), "no-pending");
 	});
 
 	test("a provider error code outside the allowed shape becomes 'other'", async () => {
 		const { auth } = setup();
 		const { state } = await startSignIn(auth);
-		const e = await auth.handleCallback({ error: "<script>alert(1)</script>", state }, "protocol").catch((x: unknown) => x);
+		const e = await auth.handleCallback({ error: "<script>alert(1)</script>", state }).catch((x: unknown) => x);
 		assert.ok(e instanceof AuthError);
 		assert.equal(e.providerCode, "other");
 	});
@@ -205,14 +185,14 @@ describe("callback checks", () => {
 	test("a matching state without a code is rejected", async () => {
 		const { auth } = setup();
 		const { state } = await startSignIn(auth);
-		assert.equal(await codeOf(auth.handleCallback({ state }, "protocol")), "missing-code");
+		assert.equal(await codeOf(auth.handleCallback({ state })), "missing-code");
 	});
 
 	test("starting a new sign-in replaces the old pending state", async () => {
 		const { auth } = setup();
 		const first = await startSignIn(auth);
 		await startSignIn(auth);
-		assert.equal(await codeOf(auth.handleCallback({ code: "C", state: first.state }, "protocol")), "state-mismatch");
+		assert.equal(await codeOf(auth.handleCallback({ code: "C", state: first.state })), "state-mismatch");
 	});
 });
 
@@ -221,7 +201,7 @@ describe("token redemption", () => {
 		const { auth, http, tokens, statuses } = setup();
 		const { url, state } = await startSignIn(auth);
 		http.enqueueJson(200, tokenBody());
-		await auth.handleCallback({ code: "CODE", state }, "protocol");
+		await auth.handleCallback({ code: "CODE", state });
 		const req = http.requests[0]!;
 		assert.equal(req.url, TOKEN_URL);
 		assert.equal(req.method, "POST");
@@ -247,18 +227,6 @@ describe("token redemption", () => {
 		assert.equal(http.requests.length, 1);
 	});
 
-	test("the paste fallback redeems with the nativeclient redirect", async () => {
-		const { auth, http } = setup();
-		const { state } = await startSignIn(auth, REDIRECT_NATIVE);
-		const params = auth.parsePastedUrl(
-			`https://login.microsoftonline.com/common/oauth2/nativeclient?code=PASTED&state=${state}`,
-		);
-		http.enqueueJson(200, tokenBody());
-		await auth.handleCallback(params, "paste");
-		assert.equal(formOf(http.requests[0]!).get("redirect_uri"), REDIRECT_NATIVE);
-		assert.equal(formOf(http.requests[0]!).get("code"), "PASTED");
-	});
-
 	const hostile: [string, () => ReturnType<typeof jsonResponse>][] = [
 		["access_token not a string", () => jsonResponse(200, tokenBody({ access_token: 42 }))],
 		["missing refresh_token", () => jsonResponse(200, tokenBody({ refresh_token: undefined }))],
@@ -276,7 +244,7 @@ describe("token redemption", () => {
 			const { auth, http, tokens } = setup();
 			const { state } = await startSignIn(auth);
 			http.enqueue(respond);
-			assert.equal(await codeOf(auth.handleCallback({ code: "C", state }, "protocol")), "invalid-response");
+			assert.equal(await codeOf(auth.handleCallback({ code: "C", state })), "invalid-response");
 			assert.equal(tokens.value, null);
 			assert.equal(auth.status, "signed-out");
 		});
@@ -286,7 +254,7 @@ describe("token redemption", () => {
 		const { auth, http, tokens } = setup();
 		const { state } = await startSignIn(auth);
 		http.enqueueJson(400, { error: "invalid_grant", error_description: "SENTINEL-DESC" });
-		const e = await auth.handleCallback({ code: "C", state }, "protocol").catch((x: unknown) => x);
+		const e = await auth.handleCallback({ code: "C", state }).catch((x: unknown) => x);
 		assert.ok(e instanceof AuthError);
 		assert.equal(e.code, "token-request-failed");
 		assert.equal(e.providerCode, "invalid_grant");
@@ -298,37 +266,8 @@ describe("token redemption", () => {
 		const { auth, http } = setup();
 		const { state } = await startSignIn(auth);
 		http.enqueueNetworkError();
-		assert.equal(await codeOf(auth.handleCallback({ code: "C", state }, "protocol")), "network");
+		assert.equal(await codeOf(auth.handleCallback({ code: "C", state })), "network");
 	});
-});
-
-describe("paste fallback URL", () => {
-	test("accepts exactly the nativeclient URL", () => {
-		const { auth } = setup();
-		const p = auth.parsePastedUrl("  https://login.microsoftonline.com/common/oauth2/nativeclient?code=A&state=B  ");
-		assert.equal(p["code"], "A");
-		assert.equal(p["state"], "B");
-	});
-
-	const bad = [
-		"https://evil.com/common/oauth2/nativeclient?code=A&state=B",
-		"http://login.microsoftonline.com/common/oauth2/nativeclient?code=A&state=B",
-		"https://login.microsoftonline.com/consumers/oauth2/nativeclient?code=A&state=B",
-		"https://login.microsoftonline.com/common/oauth2/nativeclient/x?code=A&state=B",
-		"https://login.microsoftonline.com.evil.com/common/oauth2/nativeclient?code=A&state=B",
-		"https://login.microsoftonline.com:8443/common/oauth2/nativeclient?code=A&state=B",
-		"https://user@login.microsoftonline.com/common/oauth2/nativeclient?code=A&state=B",
-		"obsidian://mdvaultsync-auth?code=A&state=B",
-		"javascript:alert(1)",
-		"not a url",
-		"",
-	];
-	for (const u of bad) {
-		test(`rejects ${JSON.stringify(u)}`, async () => {
-			const { auth } = setup();
-			assert.equal(await codeOf(Promise.resolve().then(() => auth.parsePastedUrl(u))), "bad-paste-url");
-		});
-	}
 });
 
 async function signedIn() {
@@ -458,7 +397,7 @@ describe("sign-out", () => {
 		const { state } = await startSignIn(auth);
 		const hold = deferred<ReturnType<typeof jsonResponse>>();
 		http.enqueue(() => hold.promise);
-		const pending = auth.handleCallback({ code: "C", state }, "protocol");
+		const pending = auth.handleCallback({ code: "C", state });
 		await auth.signOut();
 		hold.resolve(jsonResponse(200, tokenBody()));
 		assert.equal(await codeOf(pending), "signed-out");
@@ -469,7 +408,7 @@ describe("sign-out", () => {
 		const { auth } = setup();
 		const { state } = await startSignIn(auth);
 		await auth.signOut();
-		assert.equal(await codeOf(auth.handleCallback({ code: "C", state }, "protocol")), "no-pending");
+		assert.equal(await codeOf(auth.handleCallback({ code: "C", state })), "no-pending");
 	});
 });
 
@@ -484,7 +423,7 @@ test("initial status reflects the stored token", () => {
 describe("security review fixes", () => {
 	test("refuses to start a sign-in while already signed in", async () => {
 		const { auth } = await signedIn();
-		assert.equal(await codeOf(auth.buildAuthorizeUrl(REDIRECT_PROTOCOL)), "already-signed-in");
+		assert.equal(await codeOf(auth.buildAuthorizeUrl()), "already-signed-in");
 	});
 
 	test("a redemption invalidates an older in-flight refresh", async () => {
@@ -493,7 +432,7 @@ describe("security review fixes", () => {
 		http.enqueue(() => hold.promise);
 		const oldRefresh = auth.getAccessToken();
 		http.enqueueJson(200, tokenBody({ access_token: "AT-NEW", refresh_token: "RT-NEW" }));
-		await auth.redeemCode("C", "v".repeat(43), REDIRECT_PROTOCOL);
+		await auth.redeemCode("C", "v".repeat(43));
 		hold.resolve(jsonResponse(200, tokenBody({ access_token: "AT-OLD", refresh_token: "RT-OLD" })));
 		assert.equal(await codeOf(oldRefresh), "signed-out");
 		assert.equal(tokens.value, "RT-NEW");
@@ -506,7 +445,7 @@ describe("security review fixes", () => {
 		http.enqueue(() => hold.promise);
 		const oldRefresh = auth.getAccessToken();
 		http.enqueueJson(200, tokenBody({ access_token: "AT-NEW", refresh_token: "RT-NEW" }));
-		await auth.redeemCode("C", "v".repeat(43), REDIRECT_PROTOCOL);
+		await auth.redeemCode("C", "v".repeat(43));
 		hold.resolve(jsonResponse(400, { error: "invalid_grant" }));
 		assert.equal(await codeOf(oldRefresh), "signed-out");
 		assert.equal(tokens.value, "RT-NEW");
@@ -553,7 +492,7 @@ test("a failed undo after sign-out during redemption is surfaced and status is h
 		await realSet(rt);
 	};
 	http.enqueueJson(200, tokenBody());
-	const pending = auth.handleCallback({ code: "C", state }, "protocol");
+	const pending = auth.handleCallback({ code: "C", state });
 	await new Promise((r) => setImmediate(r));
 	await auth.signOut();
 	tokens.clear = () => Promise.reject(new Error("keyring write failed"));

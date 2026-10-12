@@ -4,3 +4,25 @@
 .mdvaultsync-warning {
 	color: var(--text-error);
 }
+
+/* Sign-in modal: the authorize link, styled as a primary button (it must stay a real link; see sign-in-modal.ts). */
+.mdvaultsync-signin-actions {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: var(--size-4-4);
+}
+
+.mdvaultsync-signin-link {
+	display: inline-block;
+	padding: var(--size-4-2) var(--size-4-4);
+	border-radius: var(--button-radius);
+	background-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+	font-weight: var(--font-semibold);
+	text-decoration: none;
+}
+
+.mdvaultsync-signin-link:hover {
+	background-color: var(--interactive-accent-hover);
+	color: var(--text-on-accent);
+}

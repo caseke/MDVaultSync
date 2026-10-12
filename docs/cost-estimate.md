@@ -23,7 +23,7 @@ Fact IDs refer to [research.md](research.md). "SUMMARY" means the fact came from
 | 13 | **BRAT plugin** | $0 | No | Open source community plugin. A GitHub token is optional for public repos [O-BRAT-1]. | [O-BRAT-1] |
 | 14 | **Obsidian Community directory submission** (later) | $0 | No | Needs a free Obsidian account linked to GitHub [O-SUB-5]. | [O-SUB-5] |
 | 15 | **Apple developer account** | Not needed | — | The plugin runs inside the Obsidian app; nothing is signed for iOS. | — |
-| 16 | **Domain or hosting** | Not needed | — | No redirect page is hosted (D-4). The fallback uses Microsoft's own `nativeclient` page. | [I-RU-4] |
+| 16 | **Domain or hosting** | Not needed | — | No redirect page is hosted (D-4); the only redirect is `obsidian://mdvaultsync-auth`. | [I-RU-4] |
 
 ## How to keep row 1 at $0
 1. Sign up at https://azure.microsoft.com/free with the personal Microsoft account. Enter the card and phone when asked.

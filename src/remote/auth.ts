@@ -11,9 +11,6 @@ export const AUTHORITY = "https://login.microsoftonline.com/consumers/oauth2/v2.
 export const TOKEN_URL = `${AUTHORITY}/token`;
 /** Primary redirect, registered without a query string [I-RU-2]. */
 export const REDIRECT_PROTOCOL = "obsidian://mdvaultsync-auth";
-/** Paste fallback redirect (R-AUTH-3) [I-RU-4]. */
-export const REDIRECT_NATIVE = "https://login.microsoftonline.com/common/oauth2/nativeclient";
-export type Redirect = typeof REDIRECT_PROTOCOL | typeof REDIRECT_NATIVE;
 
 /** A pending sign-in expires after 10 minutes (R-SEC-1). */
 export const PENDING_TTL_MS = 10 * 60_000;
@@ -25,11 +22,9 @@ export const AUTH_ERROR_CODES = [
 	"already-signed-in",
 	"no-pending",
 	"expired",
-	"redirect-mismatch",
 	"state-mismatch",
 	"provider-error",
 	"missing-code",
-	"bad-paste-url",
 	"invalid-response",
 	"token-request-failed",
 	"network",
@@ -62,7 +57,6 @@ export interface AuthClientOptions {
 interface PendingSignIn {
 	verifier: string;
 	state: string;
-	redirect: Redirect;
 	createdAt: number;
 }
 
@@ -107,7 +101,7 @@ export class AuthClient implements AccessTokenProvider {
 	 * Starts a sign-in and returns the URL to open in the system browser [I-BR-1]. Async because the S256
 	 * digest is. Replaces any earlier pending sign-in.
 	 */
-	async buildAuthorizeUrl(redirect: Redirect): Promise<string> {
+	async buildAuthorizeUrl(): Promise<string> {
 		const clientId = this.requireClientId();
 		// Signing in again over a live grant could relink the vault to another account; sign out first.
 		if (this.status === "signed-in") throw new AuthError("already-signed-in");
@@ -116,11 +110,11 @@ export class AuthClient implements AccessTokenProvider {
 		const state = createState();
 		const challenge = await challengeFromVerifier(verifier);
 		if (epoch !== this.epoch) throw new AuthError("signed-out");
-		this.pending = { verifier, state, redirect, createdAt: this.clock.now() };
+		this.pending = { verifier, state, createdAt: this.clock.now() };
 		const params: [string, string][] = [
 			["client_id", clientId],
 			["response_type", "code"],
-			["redirect_uri", redirect],
+			["redirect_uri", REDIRECT_PROTOCOL],
 			// The code must arrive in the query: Obsidian may drop the fragment [O-API-3].
 			["response_mode", "query"],
 			["scope", SCOPE],
@@ -133,18 +127,14 @@ export class AuthClient implements AccessTokenProvider {
 	}
 
 	/**
-	 * Validates a callback and redeems its code (design §4 step 3, T-S1). `via` is the channel it arrived on;
-	 * it must match the redirect the pending sign-in used.
+	 * Validates an obsidian://mdvaultsync-auth callback and redeems its code (design §4 step 3, T-S1).
 	 */
-	async handleCallback(params: Readonly<Record<string, string>>, via: "protocol" | "paste"): Promise<void> {
+	async handleCallback(params: Readonly<Record<string, string>>): Promise<void> {
 		const p = this.pending;
 		if (!p) throw new AuthError("no-pending");
 		if (this.clock.now() - p.createdAt > PENDING_TTL_MS) {
 			this.pending = null;
 			throw new AuthError("expired");
-		}
-		if (p.redirect !== (via === "protocol" ? REDIRECT_PROTOCOL : REDIRECT_NATIVE)) {
-			throw new AuthError("redirect-mismatch");
 		}
 		const state = params["state"];
 		// A wrong state leaves the pending sign-in alone: a forged callback can't cancel the real one.
@@ -154,32 +144,11 @@ export class AuthClient implements AccessTokenProvider {
 		if (params["error"] !== undefined) throw new AuthError("provider-error", sanitizeErrorCode(params["error"]));
 		const code = params["code"];
 		if (typeof code !== "string" || code.length === 0 || code.length > 8192) throw new AuthError("missing-code");
-		await this.redeemCode(code, p.verifier, p.redirect);
-	}
-
-	/** Extracts the query of a pasted nativeclient URL. Anything else is refused (T-S4). */
-	parsePastedUrl(input: string): Record<string, string> {
-		let u: URL;
-		try {
-			u = new URL(input.trim());
-		} catch {
-			throw new AuthError("bad-paste-url");
-		}
-		const native = new URL(REDIRECT_NATIVE);
-		if (
-			u.protocol !== "https:" ||
-			u.origin !== native.origin ||
-			u.pathname !== native.pathname ||
-			u.username !== "" ||
-			u.password !== ""
-		) {
-			throw new AuthError("bad-paste-url");
-		}
-		return Object.fromEntries(u.searchParams);
+		await this.redeemCode(code, p.verifier);
 	}
 
 	/** Exchanges an authorization code for tokens (design §4 steps 4–5). */
-	async redeemCode(code: string, verifier: string, redirect: Redirect): Promise<void> {
+	async redeemCode(code: string, verifier: string): Promise<void> {
 		// A new grant supersedes any refresh still in flight for an older one.
 		const epoch = ++this.epoch;
 		this.refreshing = null;
@@ -189,7 +158,7 @@ export class AuthClient implements AccessTokenProvider {
 			client_id: clientId,
 			grant_type: "authorization_code",
 			code,
-			redirect_uri: redirect,
+			redirect_uri: REDIRECT_PROTOCOL,
 			code_verifier: verifier,
 			scope: SCOPE,
 		});

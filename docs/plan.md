@@ -194,12 +194,13 @@ CI on GitHub: the `CI` workflow passed on Node 22.x and 24.x (run 38186164011 at
 
 **Files and interfaces**
 - `src/remote/pkce.ts`: verifier, challenge and state generation (WebCrypto only).
-- `src/remote/auth.ts`: `AuthClient` with `buildAuthorizeUrl(redirect)`, `handleCallback(params)`, `parsePastedUrl(url)` and `redeemCode()`. It implements `AccessTokenProvider` (single-flight refresh, rotation).
+- `src/remote/auth.ts`: `AuthClient` with `buildAuthorizeUrl()`, `handleCallback(params)` and `redeemCode()`. It implements `AccessTokenProvider` (single-flight refresh, rotation).
 - `src/remote/http.ts`: an `HttpTransport` decorator that adds `Authorization` only for `https://graph.microsoft.com/` (T-I4).
 - `src/platform/request-url-transport.ts`: `HttpTransport` over `requestUrl` with `throw: false`. Converts the body to ArrayBuffer and lower-cases header names.
 - `src/platform/token-store.ts`: `TokenStore` over SecretStorage, with the `data.json` fallback and the `backend` field (D-5; design §4).
 - `src/main.ts`: protocol handler `mdvaultsync-auth` (also accepting a trailing slash); commands `sign-in` and `sign-out`. Sign-out calls a `StateStore` stub here; M6 swaps in the real store.
-- `src/ui/settings-tab.ts`: the Account section only (status, Client ID, Sign in, Sign in another way plus paste box, Sign out, and the token-storage line: a warning for `plugin-data`, a neutral note for `secret-storage`).
+- `src/ui/sign-in-modal.ts` (added in 0.2.1): shows the authorize URL as a link the user taps, because iOS blocks `window.open` after an await.
+- `src/ui/settings-tab.ts`: the Account section only (status, Client ID, Sign in, Sign out, and the token-storage line: a warning for `plugin-data`, a neutral note for `secret-storage`).
 - Tests: `test/pkce.test.ts`, `test/auth.test.ts`, `test/http.test.ts`, `test/fakes/fake-http.ts`.
 
 **Acceptance criteria**
@@ -208,11 +209,11 @@ CI on GitHub: the `CI` workflow passed on Node 22.x and 24.x (run 38186164011 at
 - **Scope** is exactly `Files.ReadWrite.AppFolder offline_access` (unit test) (T-E2).
 - **Refresh:** concurrent `getAccessToken()` calls make one refresh request. The rotated refresh token replaces the stored one before the access token is returned. `invalid_grant` clears the token and sets "sign-in required".
 - **Authorization header** never goes to a non-Graph host (unit test).
-- **Paste fallback** rejects any origin or path other than `https://login.microsoftonline.com/common/oauth2/nativeclient`.
+- ~~**Paste fallback**~~ withdrawn 2026-10-12 (owner decision, SPEC R-AUTH-3).
 - **Manual checks** (owner, recorded below):
   1. Ubuntu: Sign in → browser → consent → Obsidian comes forward → "Signed in". Record whether the callback had a trailing slash [I-RU-3].
   2. iPad: same flow through Safari's "Open in Obsidian?" prompt.
-  3. One device: "Sign in another way" works end to end. If `nativeclient` doesn't work with `/consumers`, record the result in research.md [I-RU-4] and replace the fallback before closing the milestone.
+  3. ~~"Sign in another way"~~ withdrawn with R-AUTH-3.
   4. Token redemption succeeds, which proves `requestUrl` sends no breaking `Origin` header [I-AC-7]. Record it.
   5. Quit and relaunch Obsidian on both devices: still signed in. Record `TokenStore.backend` [O-API-6].
   5a. Ubuntu: run `xdg-mime query default x-scheme-handler/obsidian` and record the output [O-DEB-1]. Then, with GNOME Keyring locked or absent (for example a fresh user session with no keyring daemon), sign in. Record whether `setSecret` threw, and whether Obsidian showed a "secret storage provider" warning. Update research.md O-API-6 with the observed behavior.
@@ -238,33 +239,34 @@ git tag 0.2.0 && git push origin 0.2.0        # triggers .github/workflows/relea
 - Optional: `gh release download 0.2.0 -R caseke/MDVaultSync -p main.js && gh attestation verify main.js -R caseke/MDVaultSync`.
 - **On the iPad,** in the test vault: BRAT → **Add a beta plugin for testing** → `caseke/MDVaultSync` → version `0.2.0` (or latest) → **Add plugin**, then enable MDVaultSync under Community plugins.
 
-For a later build, bump the version in a session (`npm version 0.2.1 --no-git-tag-version`), then tag and publish it the same way. A tag that doesn't equal `manifest.json`'s version fails the workflow.
+For a later build, bump the version in a session (`npm version 0.2.2 --no-git-tag-version`), then tag and publish it the same way. **0.2.1** carries the iPad sign-in fix: tag `0.2.1` the same way, publish it, and in BRAT on the iPad choose **Check for updates to all beta plugins** (or re-add with version `0.2.1`). A tag that doesn't equal `manifest.json`'s version fails the workflow.
 
 In **Settings → MDVaultSync**, paste the client ID from entra-setup.md.
 
-1. **Ubuntu sign-in.** Select **Sign in**. The browser opens Microsoft's page. Sign in and consent, then allow the browser to open the `obsidian://` link. Pass: Obsidian comes forward, the notice says "Signed in to OneDrive.", and **Status** reads "Signed in to OneDrive.". For the trailing slash: before allowing the link, copy it from the browser prompt or history, and record whether it starts with `obsidian://mdvaultsync-auth/?` or `obsidian://mdvaultsync-auth?`.
-2. **iPad sign-in.** Same flow. Safari asks "Open in Obsidian?"; tap **Open**.
-3. **Paste fallback** (one device). Sign out first. Select **Sign in another way**. After sign-in, Microsoft shows a blank `nativeclient` page. Copy the whole address bar, paste it into **Paste the address**, then select **Finish sign-in**. If Microsoft shows an error instead (for example `AADSTS50011` about the redirect URI), record the exact code here and in research.md I-RU-4. The milestone can't close until the fallback is replaced.
-4. **Origin header.** Checks 1–3 succeeding means token redemption worked, so `requestUrl` sent no breaking `Origin` [I-AC-7]. If redemption fails, the notice ends with a code; `invalid_request` with AADSTS9002326 means `Origin` was sent. Record which.
+1. **Ubuntu sign-in.** Select **Sign in**. A small window opens; select **Open Microsoft sign-in** (since 0.2.1). Your default browser opens Microsoft's page; **pass requires** the default browser, not an Obsidian tab (Obsidian's Web viewer core plugin can open external links in-app; turn its "open external links" option off if it does) (T-S3). Sign in and consent, then allow the browser to open the `obsidian://` link. Pass: Obsidian comes forward, the notice says "Signed in to OneDrive.", and **Status** reads "Signed in to OneDrive.". For the trailing slash: before allowing the link, copy it from the browser prompt or history, and record whether it starts with `obsidian://mdvaultsync-auth/?` or `obsidian://mdvaultsync-auth?`.
+2. **iPad sign-in** (0.2.1 or later). Tap **Sign in**, then **Open Microsoft sign-in** in the window that opens. Safari (or Obsidian's in-app browser) shows Microsoft's page. After consent it asks "Open in Obsidian?"; tap **Open**. **Pass requires** the Microsoft page to open in Safari (or a Safari tab sheet with Safari's address bar and Done button), not inside an Obsidian pane or tab (T-S3, RFC 8252). Record which. If it opens inside Obsidian, or never returns to Obsidian, it fails: record what you saw.
+3. ~~Paste fallback~~ withdrawn (R-AUTH-3). Also remove the `nativeclient` redirect URI from your app registration if you added it (entra-setup.md step 3).
+4. **Origin header.** Checks 1 and 2 succeeding means token redemption worked, so `requestUrl` sent no breaking `Origin` [I-AC-7]. If redemption fails, the notice ends with a code; `invalid_request` with AADSTS9002326 means `Origin` was sent. Record which.
 5. **Restart.** Quit and relaunch Obsidian on both devices. Pass: **Status** still says signed in. Record **Token storage**: the neutral note means `secret-storage`, and the red warning means `plugin-data`.
    5a. On Ubuntu, run `xdg-mime query default x-scheme-handler/obsidian` and record the output. Then sign out. Lock the keyring (Seahorse → right-click **Login** → **Lock**), or log in to a fresh user session that has no keyring daemon. Sign in again. Record which **Token storage** line appears, and whether Obsidian showed a "secret storage provider" warning. Update research.md O-API-6.
 6. **Sign out.** Select **Sign out**. Pass: **Status** reads "Signed out.", and the notice shows the app-access link. In the developer console (Ctrl+Shift+I on Ubuntu), run `app.secretStorage.getSecret("mdvaultsync-refresh-token")`. It must return `""` or `null`. Also check that `data.json` in the plugin folder has no `fallbackRefreshToken`.
 7. Open https://account.microsoft.com/privacy/app-access. Pass: MDVaultSync (your app registration's name) is listed. Update research.md C-MSA-1.
-8. Tick the verification box in entra-setup.md after correcting any portal wording.
+8. **entra-setup.md accuracy.** The guide was written from Microsoft's documentation before you used the portal. While you followed it, did every button, page and setting name match what you saw (for example "Authentication (Preview)", "Personal accounts only", "Enable Live SDK support", "App instance property lock")? Answer "all matched", or list each difference (what the guide said, what the portal showed). The session then fixes the guide and ticks its verification box.
 9. Confirm that check 1 ran with **Enable Live SDK support = No**, and record the result in research.md I-REG-7.
 
 Manual check results (owner):
 ```
-1 Ubuntu sign-in:        (pass/fail; trailing slash: yes/no)
-2 iPad sign-in:          
-3 Paste fallback:        (device; pass/fail; error code if any)
-4 Origin header:         
-5 Restart, backend:      Ubuntu=…  iPad=…
-5a xdg-mime / keyring:   
-6 Sign-out:              
-7 App-access page:       
-8 entra-setup verified:  
-9 Live SDK = No:         
+1 Ubuntu sign-in:        pass (0.2.0, window.open path; trailing slash not visible in the UI) — re-run on 0.2.1 (modal link)
+2 iPad sign-in:          FAIL on 0.2.0: tapping Sign in did nothing (window.open blocked after await; fixed in 0.2.1) — re-run on 0.2.1
+3 Paste fallback:        withdrawn by owner (nativeclient page showed a phishing warning); R-AUTH-3 withdrawn
+4 Origin header:         Electron/Ubuntu: no breaking Origin (check 1 passed). iOS: pending check 2
+5 Restart, backend:      Ubuntu = still signed in, secret-storage.  iPad = pending check 2
+5a xdg-mime / keyring:   md.obsidian.Obsidian.desktop (Flatpak); unlocked keyring: no warning. Locked/absent keyring: pending
+6 Sign-out:              pass (Ubuntu): getSecret → null, no fallbackRefreshToken in data.json
+7 App-access page:       pass: app listed
+8 entra-setup verified:  pending owner answer (see check 8)
+9 Live SDK = No:         pass
+(all results from the owner, 2026-10-12)
 ```
 
 **Verification output** (session container, Node v22.22.0, 2026-10-12, final M2 commit)
@@ -286,15 +288,22 @@ Tests were written first and run red (6 files failing to load) before the implem
 
 **Tests added:**
 - `test/pkce.test.ts`: the RFC 7636 vector, the verifier alphabet and length, and the state format.
-- `test/auth.test.ts`: authorize URL and exact scope; every callback rejection; error_description absent from errors and console; token POST shape (no Origin, no Authorization, no secret); hostile token JSON; paste-URL allow/deny list; single-flight refresh; rotation order; invalid_grant and interaction_required; sign-out and redemption races.
+- `test/auth.test.ts`: authorize URL and exact scope; every callback rejection; error_description absent from errors and console; token POST shape (no Origin, no Authorization, no secret); hostile token JSON; single-flight refresh; rotation order; invalid_grant and interaction_required; sign-out and redemption races.
 - `test/http.test.ts`: Authorization only for `https://graph.microsoft.com`; stripped for 10 look-alike and transfer hosts.
 - `test/token-store.test.ts`: SecretStorage, the fallback, migration back, and clear verification.
 - `test/request-url-transport.test.ts`, `test/settings.test.ts`, `test/auth-messages.test.ts`.
 - `test/fakes/fake-http.ts` (FakeHttp, FakeClock).
 
 **Deviations from this milestone's text** (recorded in design.md §4 and in commit messages):
-- `buildAuthorizeUrl` is async, because the S256 digest is. `handleCallback(params, via)` takes the arrival channel, and a callback must arrive on the channel its sign-in started with.
+- `buildAuthorizeUrl` is async, because the S256 digest is. Because of that, `window.open` after it was blocked on iOS (check 2). Since 0.2.1 the URL is shown as a link in `src/ui/sign-in-modal.ts`, the pattern Remotely Save uses. Until the fallback was withdrawn, `handleCallback` also took the arrival channel; it now takes only the params.
 - A wrong `state` does not clear the pending sign-in, so a forged link can't cancel a real one. Expiry and a matching state do clear it.
+- **Paste fallback withdrawn** (owner, 2026-10-12, after check 3 showed a phishing warning): SPEC R-AUTH-3 withdrawn, D-4 and R-UI-1 updated, threat-model T-S4 n/a, design §4 and entra-setup.md updated; `REDIRECT_NATIVE`, `parsePastedUrl`, the paste UI and their tests removed.
+  - Review of the 0.2.1 change (`security-reviewer`): no high findings.
+    - Fixed, medium: T-S3 rested on an unverified "system browser" claim. Checks 1 and 2 now pass only if the page opens in the system browser (or a Safari tab sheet), not an Obsidian pane.
+    - Fixed, medium: SPEC R-AUTH-3 and design §4 overstated that the primary flow worked on both devices. They now say iPad is pending, and R-AUTH-3 reopens if the iPad can't work.
+    - Fixed, low: a forged or stale `obsidian://` link (`no-pending`, `state-mismatch`) no longer closes the real sign-in modal.
+    - Fixed, low: `onunload` closes the modal.
+    - Fixed, low: stale doc lines in design.md, plan.md (M2 file list), cost-estimate.md and research.md I-RU-4.
 - `requestUrl` and SecretStorage are injected, so `request-url-transport.ts` and `token-store.ts` are unit tested. Extra supporting files: `src/settings.ts` (data.json shape and GUID check) and `src/ui/auth-messages.ts` (the error-code → message table, tested for completeness).
 - The token store also falls back when SecretStorage accepts a write but reads back a different value (SPEC D-5 updated).
 - Lint has 3 warnings in `settings-tab.ts`: `display()` is deprecated since 1.13 in favor of declarative settings. Declarative settings need 1.13.0 [O-API-18], and `minAppVersion` is 1.11.4 (R-ENV-3), so they can't be used yet. M7 must decide whether to raise `minAppVersion` or accept these warnings. The M7 criterion "no warnings from obsidianmd rules" conflicts with R-ENV-3 until then.

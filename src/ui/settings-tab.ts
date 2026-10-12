@@ -2,7 +2,7 @@
 import { PluginSettingTab, Setting } from "obsidian";
 import type { App } from "obsidian";
 import type MDVaultSyncPlugin from "../main.ts";
-import { REDIRECT_NATIVE, REDIRECT_PROTOCOL, type AuthStatus } from "../remote/auth.ts";
+import type { AuthStatus } from "../remote/auth.ts";
 import { isValidClientId } from "../settings.ts";
 
 const STATUS_TEXT: Record<AuthStatus, string> = {
@@ -13,7 +13,6 @@ const STATUS_TEXT: Record<AuthStatus, string> = {
 
 export class MDVaultSyncSettingTab extends PluginSettingTab {
 	private readonly plugin: MDVaultSyncPlugin;
-	private pasteOpen = false;
 	private shown = false;
 
 	constructor(app: App, plugin: MDVaultSyncPlugin) {
@@ -28,7 +27,6 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 
 	override hide(): void {
 		this.shown = false;
-		this.pasteOpen = false;
 		super.hide();
 	}
 
@@ -39,7 +37,6 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 		const auth = this.plugin.auth;
 		const status = auth.status;
 		const signedIn = status === "signed-in";
-		if (signedIn) this.pasteOpen = false;
 
 		new Setting(containerEl).setName("Account").setHeading();
 
@@ -84,20 +81,8 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 					b
 						.setButtonText("Sign in")
 						.setCta()
-						.onClick(() => void this.plugin.startSignIn(REDIRECT_PROTOCOL)),
+						.onClick(() => void this.plugin.startSignIn()),
 				);
-			new Setting(containerEl)
-				.setName("Sign in another way")
-				.setDesc("Use this if the browser can't return to Obsidian. You paste the final address back here.")
-				.addButton((b) =>
-					b.setButtonText("Sign in another way").onClick(async () => {
-						if (await this.plugin.startSignIn(REDIRECT_NATIVE)) {
-							this.pasteOpen = true;
-							this.display();
-						}
-					}),
-				);
-			if (this.pasteOpen) this.renderPasteBox(containerEl);
 		}
 
 		const storage = new Setting(containerEl).setName("Token storage");
@@ -111,26 +96,5 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 		} else {
 			storage.setDesc("Stored in Obsidian secret storage. Encryption depends on your device's keyring.");
 		}
-	}
-
-	private renderPasteBox(containerEl: HTMLElement): void {
-		let pasted = "";
-		new Setting(containerEl)
-			.setName("Paste the address")
-			.setDesc(
-				"After you sign in, the browser shows a blank page. Copy the whole address from the address bar " +
-					"and paste it here.",
-			)
-			.addTextArea((ta) =>
-				ta.setPlaceholder("Paste the full address here").onChange((v) => {
-					pasted = v;
-				}),
-			)
-			.addButton((b) =>
-				b
-					.setButtonText("Finish sign-in")
-					.setCta()
-					.onClick(() => void this.plugin.finishPastedSignIn(pasted)),
-			);
 	}
 }

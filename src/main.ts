@@ -3,10 +3,11 @@ import type { ObsidianProtocolData } from "obsidian";
 import type { StateStore } from "./core/ports.ts";
 import { createRequestUrlTransport } from "./platform/request-url-transport.ts";
 import { PluginTokenStore, TokenClearError } from "./platform/token-store.ts";
-import { AuthClient, AuthError, REDIRECT_PROTOCOL, type Redirect } from "./remote/auth.ts";
+import { AuthClient, AuthError } from "./remote/auth.ts";
 import { isValidClientId, parseData, type PluginData } from "./settings.ts";
 import { AUTH_ERROR_MESSAGES, authErrorText } from "./ui/auth-messages.ts";
 import { MDVaultSyncSettingTab } from "./ui/settings-tab.ts";
+import { SignInModal } from "./ui/sign-in-modal.ts";
 
 /** Where a personal account removes an app's access [C-MSA-1]. */
 const APP_ACCESS_URL = "https://account.microsoft.com/privacy/app-access";
@@ -16,6 +17,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 	tokenStore!: PluginTokenStore;
 	auth!: AuthClient;
 	private settingTab!: MDVaultSyncSettingTab;
+	private signInModal: SignInModal | null = null;
 	// M2 stub: sign-out clears sync state through this. M6 replaces it with the sync-state.json store.
 	private readonly stateStore: StateStore = {
 		load: () => Promise.resolve(null),
@@ -48,7 +50,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 
 		// The redirect may come back with a trailing slash [I-RU-3].
 		const onCallback = (params: ObsidianProtocolData) => {
-			void this.completeSignIn(() => this.auth.handleCallback(params, "protocol"));
+			void this.completeSignIn(() => this.auth.handleCallback(params));
 		};
 		this.registerObsidianProtocolHandler("mdvaultsync-auth", onCallback);
 		this.registerObsidianProtocolHandler("mdvaultsync-auth/", onCallback);
@@ -56,7 +58,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 		this.addCommand({
 			id: "sign-in",
 			name: "Sign in to OneDrive",
-			callback: () => void this.startSignIn(REDIRECT_PROTOCOL),
+			callback: () => void this.startSignIn(),
 		});
 		this.addCommand({
 			id: "sign-out",
@@ -66,27 +68,28 @@ export default class MDVaultSyncPlugin extends Plugin {
 	}
 
 	override onunload(): void {
-		// Handlers, commands and listeners are released through register* above.
+		// Handlers, commands and listeners are released through register* above. A live sign-in link would
+		// outlive its callback handler, so close it.
+		this.closeSignInModal();
 	}
 
-	/** Opens the authorize URL in the system browser [I-BR-1]. Returns false if it couldn't start. */
-	async startSignIn(redirect: Redirect): Promise<boolean> {
+	/**
+	 * Starts a sign-in and shows the authorize URL as a link the user taps; the link opens the system browser
+	 * [I-BR-1]. No window.open: iOS blocks it after the await (see SignInModal).
+	 */
+	async startSignIn(): Promise<void> {
 		if (!isValidClientId(this.data.clientId)) {
 			new Notice(AUTH_ERROR_MESSAGES["no-client-id"]);
-			return false;
+			return;
 		}
 		try {
-			const url = await this.auth.buildAuthorizeUrl(redirect);
-			window.open(url);
-			return true;
+			const url = await this.auth.buildAuthorizeUrl();
+			this.closeSignInModal();
+			this.signInModal = new SignInModal(this.app, url);
+			this.signInModal.open();
 		} catch (e) {
 			this.reportAuthError(e);
-			return false;
 		}
-	}
-
-	async finishPastedSignIn(pasted: string): Promise<void> {
-		await this.completeSignIn(() => this.auth.handleCallback(this.auth.parsePastedUrl(pasted), "paste"));
 	}
 
 	/** Clears tokens and sync state; local files stay (R-AUTH-7). */
@@ -130,11 +133,20 @@ export default class MDVaultSyncPlugin extends Plugin {
 	private async completeSignIn(run: () => Promise<void>): Promise<void> {
 		try {
 			await run();
+			this.closeSignInModal();
 			new Notice("Signed in to OneDrive.");
 		} catch (e) {
+			// A forged or stale link (no-pending, state-mismatch) must not close the user's real sign-in link (T-S1).
+			const forged = e instanceof AuthError && (e.code === "no-pending" || e.code === "state-mismatch");
+			if (!forged) this.closeSignInModal();
 			this.reportAuthError(e);
 		}
 		this.settingTab.refresh();
+	}
+
+	private closeSignInModal(): void {
+		this.signInModal?.close();
+		this.signInModal = null;
 	}
 
 	/** Shows a notice and logs the code only, never URLs, params or token data (T-I3). */
