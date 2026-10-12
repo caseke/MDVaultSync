@@ -702,6 +702,7 @@ Responsive during the run: not reported
     - upload 8.3 s and download 6.1 s via `my.microsoftpersonalcontent.com`;
     - every other answer matches the 0.3.5 runs.
     - `leftoverRemoved: true`: an earlier interrupted run had left `.mdvaultsync-probe` behind, and the probe removed it as designed. That exercised the leftover path live.
+    - **iPad, 0.3.6** (`startedAt` 2026-10-12T06:51:28Z): also `errors: 0`, `largeFile.ok: true`, `bytesMatch: true`, `downloadHostTrusted: true`, with upload 8.0 s and download 3.5 s via `my.microsoftpersonalcontent.com`; every other answer matches. The narrowed allowlist is confirmed on both devices.
   - The iPad record shows only the fields that differ from Ubuntu, and responsiveness wasn't reported. Both are stated openly above.
 - When the upload URL is off the allowlist, the probe leaves that server-side upload session uncancelled (cancelling would mean contacting the unlisted host). OneDrive expires it [G-UP-9].
 - The probe leaves its test files in the OneDrive recycle bin (about 12 MiB, which counts toward quota [G-DEL-2]) until the user empties it.
