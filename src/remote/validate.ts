@@ -13,9 +13,13 @@ export interface TokenResponse {
 }
 
 export class InvalidResponse extends Error {
-	constructor() {
+	/** A fixed identifier for what failed (for example "download-url-missing"); never data from the response. */
+	readonly reason: string;
+
+	constructor(reason = "") {
 		super("invalid-response");
 		this.name = "InvalidResponse";
+		this.reason = reason;
 	}
 }
 
@@ -207,9 +211,15 @@ export function parseItemExtras(raw: unknown): { downloadUrl: string | null; par
 	const parent = optObj(o["parentReference"]);
 	const path = parent ? parent["path"] : undefined;
 	return {
-		downloadUrl: dl === undefined ? null : boundedString(dl, MAX_TRANSFER_URL),
+		downloadUrl: dl === undefined ? null : downloadUrlField(dl),
 		parentPath: path === undefined ? null : boundedString(path, MAX_PARENT_PATH),
 	};
+}
+
+function downloadUrlField(v: unknown): string {
+	if (typeof v !== "string" || v.length === 0) throw new InvalidResponse("download-url-invalid");
+	if (v.length > MAX_TRANSFER_URL) throw new InvalidResponse("download-url-too-long");
+	return v;
 }
 
 /**

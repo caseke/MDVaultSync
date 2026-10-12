@@ -42,6 +42,10 @@ export interface FakeGraphOptions {
 	rejectFileSize?: boolean;
 	/** Hand out upload URLs on this origin instead of api.onedrive.com. */
 	uploadHost?: string;
+	/** Pad each download URL's query with this many extra characters (long tempauth tokens). */
+	downloadUrlPad?: number;
+	/** Leave @microsoft.graph.downloadUrl out of responses whose $select asks for it. */
+	omitDownloadUrlOnSelect?: boolean;
 }
 
 export function sha1Base64(b: Uint8Array): string {
@@ -89,6 +93,8 @@ export class FakeGraph implements HttpTransport {
 			downloadHost: opts.downloadHost ?? DOWNLOAD_HOST,
 			rejectFileSize: opts.rejectFileSize ?? false,
 			uploadHost: opts.uploadHost ?? UPLOAD_HOST,
+			downloadUrlPad: opts.downloadUrlPad ?? 0,
+			omitDownloadUrlOnSelect: opts.omitDownloadUrlOnSelect ?? false,
 		};
 		this.nodes.set("ROOT", this.node("ROOT", "root", null, true));
 		this.nodes.set("APPS", this.node("APPS", "Apps", "ROOT", true));
@@ -166,7 +172,10 @@ export class FakeGraph implements HttpTransport {
 		else {
 			o["cTag"] = `"c:{${n.id}},${n.contentVersion}"`;
 			o["file"] = { mimeType: "application/octet-stream", ...(opts.hashes === false ? {} : { hashes: { quickXorHash: sha1Base64(n.content) } }) };
-			if (opts.downloadUrl) o["@microsoft.graph.downloadUrl"] = `${this.opts.downloadHost}/dl/${n.id}?tempauth=${URL_SECRET}`;
+			if (opts.downloadUrl) {
+				const pad = this.opts.downloadUrlPad ? `&pad=${"p".repeat(this.opts.downloadUrlPad)}` : "";
+				o["@microsoft.graph.downloadUrl"] = `${this.opts.downloadHost}/dl/${n.id}?tempauth=${URL_SECRET}${pad}`;
+			}
 		}
 		return o;
 	}
@@ -282,7 +291,10 @@ export class FakeGraph implements HttpTransport {
 		if (r) {
 			const n = this.nodes.get(decodeURIComponent(r[1] as string));
 			if (!n) return err(404, "itemNotFound");
-			if (m === "GET") return json(200, this.itemJson(n, { downloadUrl: true }));
+			if (m === "GET") {
+				const omit = this.opts.omitDownloadUrlOnSelect && u.search.includes("downloadUrl");
+				return json(200, this.itemJson(n, { downloadUrl: !omit }));
+			}
 			const im = header(req, "if-match");
 			if (im !== undefined && im !== this.eTag(n)) return err(412, "resourceModified", "entityTagDoesNotMatch");
 			if (m === "PATCH") {

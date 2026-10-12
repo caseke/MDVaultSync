@@ -396,3 +396,31 @@ test("getItem works when the download host is unlisted; only download() refuses 
 	await assert.rejects(g.download(n.id), UntrustedUrl);
 	assert.ok(!fake.requests.some((r) => r.url.startsWith("https://cdn.unlisted.example")));
 });
+
+test("download() failures carry a reason code, never data", async () => {
+	const reasonOf = async (p: Promise<unknown>) => {
+		const e = await p.catch((x: unknown) => x);
+		assert.ok(e instanceof InvalidResponse);
+		return e.reason;
+	};
+	const a = setupGraph({ omitDownloadUrlOnSelect: true });
+	const n = a.fake.addFile("APPROOT", "a.bin", enc("abc"));
+	assert.equal(await reasonOf(a.g.download(n.id)), "download-url-missing");
+	const b = setupGraph();
+	const dir = b.fake.addFolder("APPROOT", "dir");
+	assert.equal(await reasonOf(b.g.download(dir.id)), "not-a-file");
+	const m = b.fake.addFile("APPROOT", "m.bin", enc("12345"));
+	b.fake.intercept = (req) => (req.url.startsWith(DOWNLOAD_HOST) ? { status: 200, headers: {}, body: bytes("1234") } : null);
+	assert.equal(await reasonOf(b.g.download(m.id)), "download-length-mismatch");
+	const c = setupGraph({ downloadUrlPad: 9000 });
+	const l = c.fake.addFile("APPROOT", "l.bin", enc("x"));
+	assert.equal(await reasonOf(c.g.download(l.id)), "download-url-too-long");
+});
+
+test("getItem and getChildByName survive an overlong download URL; only download() refuses it", async () => {
+	const { g, fake } = setupGraph({ downloadUrlPad: 9000 });
+	const n = fake.addFile("APPROOT", "a.bin", enc("abc"));
+	assert.equal((await g.getItem(n.id))?.size, 3);
+	assert.equal((await g.getChildByName("APPROOT", "a.bin"))?.id, n.id);
+	await assert.rejects(g.download(n.id), (e: unknown) => e instanceof InvalidResponse && e.reason === "download-url-too-long");
+});

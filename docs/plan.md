@@ -520,14 +520,36 @@ What v2 settled, applied in 0.3.2 (`capabilities.ts`, pinned by `test/capabiliti
 ```
 The upload host is `my.microsoftpersonalcontent.com`. WHOIS (2026-10-12) shows the domain belongs to Microsoft Corporation (registrar MarkMonitor, created 2020-06-18). 0.3.3 adds `.microsoftpersonalcontent.com` to `TRANSFER_HOST_SUFFIXES` [G-UP-11]. The download host is still unobserved, because v3 stopped at `create`.
 
-**Probe on 0.3.3**, needed from Ubuntu, then the iPad. Pass: `largeFile.ok` and `bytesMatch` are `true`, and `downloadHostTrusted` is `true`. If the download host comes back untrusted, it gets the same WHOIS check and is added.
+**Probe v3 on 0.3.3, Ubuntu, 2026-10-12** (owner; only `largeFile` and the new vector differ from v2):
 ```
-Ubuntu (0.3.3): (paste here)
-iPad   (0.3.3): (paste here)
+"largeFile": {
+  "ok": false, "size": 12582912, "fragments": 2,
+  "createAttempts": [
+    { "variant": "conflictBehavior+fileSize", "status": 400, "code": "invalidRequest" },
+    { "variant": "conflictBehavior", "status": 200 }
+  ],
+  "uploadHost": "my.microsoftpersonalcontent.com", "uploadMs": 13625,
+  "stage": "download", "code": "InvalidResponse"
+}
+"hashVectors" adds: { "file": "large.bin", "size": 12582912, "generator": "probeBytes(12582912, seed)",
+                      "seed": 1296324179, "quickXorHash": "ZxozysDdwfh/G5yk00nGRvIqEAI=" }
+(durationMs 42290)
+```
+- **The upload works.** 12 MiB went up in two fragments (10 + 2 MiB) to `my.microsoftpersonalcontent.com` in 13.6 s on Ubuntu Electron (O-API-2). OneDrive's hash of `large.bin` is a fourth M4 vector.
+- **The download step failed before any download request.** `downloadHost` would have been recorded first, and it wasn't. So either the download URL was longer than the 8192-character cap or wasn't a string, or it was missing from the response. v3 couldn't tell which: `InvalidResponse` carried no reason.
+- 0.3.4 (probe v4):
+  - `InvalidResponse` now carries a fixed reason code (`download-url-missing`, `download-url-too-long`, `download-url-invalid`, `not-a-file`, `download-length-mismatch`).
+  - The probe reads the large file with and without `$select` and records URL presence, type, length and host (`largeFile.downloadDiag`).
+  - `getItem` no longer parses the download URL at all, so URL problems affect only downloads.
+
+**Probe v4 on 0.3.4**, needed from Ubuntu: paste `largeFile`. The fix is chosen from what it measures: a URL over the cap → raise the cap to fit; missing under `$select` → read without it; an untrusted host → WHOIS check, then add it. Then the iPad run.
+```
+Ubuntu (0.3.4): (paste here)
+iPad:           (paste here)
 ```
 
 **Manual checks** (owner; use a throwaway test vault, never the real one)
-1. **Install the newest 0.3.x** (now 0.3.3). `git switch claude/eloquent-clarke-21deia && git pull`, then `git tag 0.3.3 && git push origin 0.3.3`. (0.3.0, 0.3.1 and 0.3.2 ran probes v1–v3 on Ubuntu; see above.)
+1. **Install the newest 0.3.x** (now 0.3.4). `git switch claude/eloquent-clarke-21deia && git pull`, then `git tag 0.3.4 && git push origin 0.3.4`. (0.3.0–0.3.3 ran probes v1–v3 on Ubuntu; see above.)
    - Wait for the **Release** workflow to pass.
    - Open the draft release, check that it has the three assets and is marked pre-release, then publish it.
    - Ubuntu: `npm ci && npm run build`, then copy `main.js`, `manifest.json` and `styles.css` into the test vault's plugin folder (as in M2), or install through BRAT.

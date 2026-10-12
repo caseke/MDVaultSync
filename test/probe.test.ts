@@ -32,7 +32,9 @@ test("full probe against an OneDrive-like fake records every result and cleans u
 	const { fake, deps } = setup({ quotaReadable: false });
 	fake.addFile("APPROOT", "Secret Diary.md", enc("private words"));
 	const r = await runProbe(deps);
-	assert.equal(r.probeVersion, 3);
+	assert.equal(r.probeVersion, 4);
+	assert.deepEqual(r.largeFile.downloadDiag?.select, { status: 200, urlPresent: true, urlType: "string", urlLength: r.largeFile.downloadDiag?.select.urlLength, host: "public.dm.files.1drv.com" });
+	assert.equal(r.largeFile.downloadDiag?.plain.urlPresent, true);
 	assert.equal(r.platform, "test");
 	assert.deepEqual(r.approot, { ok: true, parentPath: "/drive/root:/Apps", name: "MDVaultSync", pathPrefixLength: 16 });
 	for (const form of ["approot-colon", "items-id"] as const) {
@@ -227,4 +229,28 @@ test("the upload host observed on 0.3.2 (my.microsoftpersonalcontent.com) comple
 	assert.ok(fake.requests.some((q) => q.url.startsWith("https://my.microsoftpersonalcontent.com/")));
 	assert.deepEqual(fake.authLeaks, []);
 	assert.equal(r.errors, 0);
+});
+
+test("a download URL over the length cap is measured, not printed, and the reason is recorded", async () => {
+	const { fake, deps } = setup({ downloadUrlPad: 9000 });
+	const r = await runProbe(deps);
+	const sel = r.largeFile.downloadDiag?.select;
+	assert.equal(sel?.urlPresent, true);
+	assert.ok((sel?.urlLength ?? 0) > 9000);
+	assert.equal(sel?.host, "public.dm.files.1drv.com");
+	assert.equal(r.largeFile.stage, "download");
+	assert.equal(r.largeFile.code, "InvalidResponse");
+	assert.equal(r.largeFile.reason, "download-url-too-long");
+	const s = JSON.stringify(r);
+	assert.ok(!s.includes(URL_SECRET) && !s.includes("ppppp"));
+	assert.ok(!fake.requests.some((q) => q.url.startsWith("https://public.dm.files.1drv.com")));
+});
+
+test("a download URL missing under $select but present without it is told apart", async () => {
+	const { deps } = setup({ omitDownloadUrlOnSelect: true });
+	const r = await runProbe(deps);
+	assert.equal(r.largeFile.downloadDiag?.select.urlPresent, false);
+	assert.equal(r.largeFile.downloadDiag?.select.status, 200);
+	assert.equal(r.largeFile.downloadDiag?.plain.urlPresent, true);
+	assert.equal(r.largeFile.reason, "download-url-missing");
 });

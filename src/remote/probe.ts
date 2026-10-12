@@ -7,7 +7,7 @@ import type { DeltaForm } from "./capabilities.ts";
 import { GraphError, UntrustedUrl, sanitizeGraphCode, toGraphError } from "./errors.ts";
 import { GRAPH_BASE, encodeSegment, type GraphClient } from "./graph.ts";
 import { fragmentRanges } from "./upload-session.ts";
-import { MAX_JSON_BODY, checkTransferUrl, parseItemExtras, parseJsonObject, parseUploadSession } from "./validate.ts";
+import { InvalidResponse, MAX_JSON_BODY, checkTransferUrl, parseJsonObject, parseUploadSession } from "./validate.ts";
 
 export const PROBE_DIR = ".mdvaultsync-probe";
 export const LARGE_SIZE = 12 * 1024 * 1024;
@@ -28,6 +28,8 @@ export interface ProbeDeps {
 export interface Outcome {
 	status?: number;
 	code?: string;
+	/** InvalidResponse's fixed reason code, when it has one (probe v4). */
+	reason?: string;
 	/** Sanitized Graph inner error codes, when the server sent any (probe v2). */
 	innerCodes?: string[];
 }
@@ -53,7 +55,7 @@ export interface HashVector {
 	quickXorHash: string | null;
 }
 export interface ProbeResult {
-	probeVersion: 3;
+	probeVersion: 4;
 	platform: string;
 	pluginVersion: string;
 	startedAt: string;
@@ -80,6 +82,8 @@ export interface ProbeResult {
 		downloadHost?: string;
 		/** Whether downloadHost passes the transfer allowlist (probe v3). */
 		downloadHostTrusted?: boolean;
+		/** The large file read with and without $select, to see where the download URL comes from (probe v4). */
+		downloadDiag?: { select: UrlDiag; plain: UrlDiag };
 		/** The step that failed, when ok is false. */
 		stage?: "create" | "fragment" | "download" | "compare";
 		createAttempts?: CreateAttempt[];
@@ -113,7 +117,17 @@ function text(s: string): ArrayBuffer {
 /** Status and sanitized code of a failure; never the message (T-I3). */
 function outcomeOf(e: unknown): Outcome {
 	if (e instanceof GraphError) return { status: e.status, code: e.code, ...(e.innerCodes.length ? { innerCodes: [...e.innerCodes] } : {}) };
-	return { code: sanitizeGraphCode(e instanceof Error ? e.name : "unknown") };
+	const reason = e instanceof InvalidResponse && e.reason ? { reason: sanitizeGraphCode(e.reason) } : {};
+	return { code: sanitizeGraphCode(e instanceof Error ? e.name : "unknown"), ...reason };
+}
+
+/** What one item read said about the download URL: presence, type, length and hostname only (probe v4). */
+export interface UrlDiag {
+	status: number;
+	urlPresent?: boolean;
+	urlType?: string;
+	urlLength?: number;
+	host?: string;
 }
 
 /** Hostname only: paths and queries carry the URL's credentials (T-I3). */
@@ -163,7 +177,7 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 
 	const notRun: DeltaResult = { ok: false, code: "not-run" };
 	const result: ProbeResult = {
-		probeVersion: 3,
+		probeVersion: 4,
 		platform: deps.platform,
 		pluginVersion: deps.pluginVersion,
 		startedAt: new Date(t0).toISOString(),
@@ -346,9 +360,23 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 			result.largeFile.uploadMs = clock.now() - tUp;
 			result.hashVectors.push({ file: "large.bin", size: LARGE_SIZE, generator: `probeBytes(${LARGE_SIZE}, seed)`, seed: LARGE_SEED, quickXorHash: done.quickXorHash });
 			stage = "download";
-			const meta = await graph.sendRaw({ url: `${item(done.id)}?$select=id,@microsoft.graph.downloadUrl`, method: "GET" });
-			if (meta.status !== 200) throw toGraphError(meta);
-			const dl = parseItemExtras(parseJsonObject(meta.body, MAX_JSON_BODY)).downloadUrl;
+			// Read the raw field directly, so a long or odd URL is measured rather than aborting the diagnosis.
+			const diag = async (url: string): Promise<{ d: UrlDiag; dl: string | null }> => {
+				const res = await graph.sendRaw({ url, method: "GET" });
+				if (res.status !== 200) return { d: { status: res.status }, dl: null };
+				const v = parseJsonObject(res.body, MAX_JSON_BODY)["@microsoft.graph.downloadUrl"];
+				if (v === undefined) return { d: { status: res.status, urlPresent: false }, dl: null };
+				const d: UrlDiag = { status: res.status, urlPresent: true, urlType: typeof v };
+				if (typeof v === "string") {
+					d.urlLength = v.length;
+					d.host = hostOf(v);
+				}
+				return { d, dl: typeof v === "string" ? v : null };
+			};
+			const sel = await diag(`${item(done.id)}?$select=id,@microsoft.graph.downloadUrl`);
+			const plain = await diag(item(done.id));
+			result.largeFile.downloadDiag = { select: sel.d, plain: plain.d };
+			const dl = sel.dl ?? plain.dl;
 			if (dl) {
 				result.largeFile.downloadHost = hostOf(dl);
 				result.largeFile.downloadHostTrusted = trusted(dl);

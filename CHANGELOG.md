@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-10-12
+
+### Changed
+
+- The probe output is now version 4. It explains why a download couldn't start: whether OneDrive's download link was missing, too long, or on an untrusted server. It records the link's length and server name, never the link itself.
+
+### Fixed
+
+- Reading a file's details no longer fails when its download link is unusual (too long, or malformed). Only the download itself is refused, with a specific reason.
+
 ## [0.3.3] - 2026-10-12
 
 ### Fixed

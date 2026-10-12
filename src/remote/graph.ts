@@ -239,13 +239,16 @@ export class GraphClient implements RemotePort {
 		return items;
 	}
 
-	/** The item with a fresh download URL [G-DLD-2], or null on 404. */
-	private async getItemWithUrl(url: string): Promise<{ item: RemoteItem; downloadUrl: string | null } | null> {
+	/**
+	 * The item and its raw JSON (which carries a fresh download URL [G-DLD-2]), or null on 404. The download URL is
+	 * parsed only by download(), so a URL problem can't break ordinary item reads.
+	 */
+	private async getItemWithUrl(url: string): Promise<{ item: RemoteItem; raw: unknown } | null> {
 		const res = await this.send({ url, method: "GET" });
 		if (res.status === 404) return null;
 		if (res.status !== 200) throw toGraphError(res);
 		const raw = json(res);
-		return { item: parseDriveItem(raw), downloadUrl: parseItemExtras(raw).downloadUrl };
+		return { item: parseDriveItem(raw), raw };
 	}
 
 	async getItem(id: string): Promise<RemoteItem | null> {
@@ -296,10 +299,12 @@ export class GraphClient implements RemotePort {
 	async download(id: string): Promise<ArrayBuffer> {
 		const r = await this.getItemWithUrl(`${GRAPH_BASE}/me/drive/items/${idSegment(id)}?$select=${ITEM_SELECT}`);
 		if (!r) throw new GraphError(404, "itemNotFound");
-		if (r.item.isFolder || r.item.deleted || r.downloadUrl === null) throw new InvalidResponse();
-		const res = await this.send({ url: checkTransferUrl(r.downloadUrl), method: "GET" }, this.transferTransport);
+		if (r.item.isFolder || r.item.deleted) throw new InvalidResponse("not-a-file");
+		const downloadUrl = parseItemExtras(r.raw).downloadUrl;
+		if (downloadUrl === null) throw new InvalidResponse("download-url-missing");
+		const res = await this.send({ url: checkTransferUrl(downloadUrl), method: "GET" }, this.transferTransport);
 		if (res.status !== 200) throw toGraphError(res);
-		if (res.body.byteLength !== r.item.size) throw new InvalidResponse();
+		if (res.body.byteLength !== r.item.size) throw new InvalidResponse("download-length-mismatch");
 		return res.body;
 	}
 
