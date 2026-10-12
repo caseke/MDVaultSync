@@ -80,6 +80,9 @@ export const TRANSFER_HOST_SUFFIXES: readonly string[] = [
 	".1drv.com",
 	".onedrive.com",
 	".livefilestore.com",
+	// OneDrive personal's upload sessions: observed as my.microsoftpersonalcontent.com (M3 probe v3, Ubuntu,
+	// 2026-10-12). WHOIS: registrant Microsoft Corporation, registrar MarkMonitor (checked 2026-10-12) [G-UP-11].
+	".microsoftpersonalcontent.com",
 ];
 /** Longest name we send: capabilities.ts NAME_MAX, one source so they can't drift [G-NM-6]. */
 export const NAME_LIMIT = NAME_MAX;

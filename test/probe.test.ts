@@ -216,3 +216,15 @@ test("an unlisted download host is reported by hostname and not contacted", asyn
 	assert.equal(r.largeFile.code, "UntrustedUrl");
 	assert.ok(!fake.requests.some((q) => q.url.startsWith("https://cdn.unlisted.example")));
 });
+
+test("the observed upload host (my.microsoftpersonalcontent.com) completes the round trip without the token (0.3.2 Ubuntu result)", async () => {
+	const { fake, deps } = setup({ rejectFileSize: true, uploadHost: "https://my.microsoftpersonalcontent.com" });
+	const r = await runProbe(deps);
+	assert.equal(r.largeFile.ok, true);
+	assert.equal(r.largeFile.bytesMatch, true);
+	assert.equal(r.largeFile.uploadHost, "my.microsoftpersonalcontent.com");
+	assert.equal(r.largeFile.rejectedUploadHost, undefined);
+	assert.ok(fake.requests.some((q) => q.url.startsWith("https://my.microsoftpersonalcontent.com/")));
+	assert.deepEqual(fake.authLeaks, []);
+	assert.equal(r.errors, 0);
+});

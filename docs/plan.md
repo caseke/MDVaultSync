@@ -505,14 +505,29 @@ What v2 settled, applied in 0.3.2 (`capabilities.ts`, pinned by `test/capabiliti
 - 0.3.2 also stops `getItem` from failing on an unlisted download host. The host is now checked only in `download()`.
 - `CAPABILITIES_PROBED` stays `false` until the upload host is allowlisted and the round trip passes on the iPad.
 
-**Probe v3 (0.3.2)**, needed from Ubuntu first: `largeFile.rejectedUploadHost` (and `downloadHost` / `downloadHostTrusted`). The next session adds the observed suffixes to `TRANSFER_HOST_SUFFIXES` (0.3.3). Then run it on Ubuntu and the iPad for the full round trip.
+**Probe v3 (0.3.2), Ubuntu, 2026-10-12** (owner; only `largeFile` differs from v2):
 ```
-Ubuntu v3: (paste here)
-iPad:      (paste here)
+"largeFile": {
+  "ok": false, "size": 12582912, "fragments": 2,
+  "createAttempts": [
+    { "variant": "conflictBehavior+fileSize", "status": 400, "code": "invalidRequest" },
+    { "variant": "conflictBehavior", "status": 200, "rejectedHost": "my.microsoftpersonalcontent.com" }
+  ],
+  "rejectedUploadHost": "my.microsoftpersonalcontent.com",
+  "stage": "create", "code": "UntrustedUrl"
+}
+(durationMs 19885; every other field equals v2)
+```
+The upload host is `my.microsoftpersonalcontent.com`. WHOIS (2026-10-12) shows the domain belongs to Microsoft Corporation (registrar MarkMonitor, created 2020-06-18). 0.3.3 adds `.microsoftpersonalcontent.com` to `TRANSFER_HOST_SUFFIXES` [G-UP-11]. The download host is still unobserved, because v3 stopped at `create`.
+
+**Probe on 0.3.3**, needed from Ubuntu, then the iPad. Pass: `largeFile.ok` and `bytesMatch` are `true`, and `downloadHostTrusted` is `true`. If the download host comes back untrusted, it gets the same WHOIS check and is added.
+```
+Ubuntu (0.3.3): (paste here)
+iPad   (0.3.3): (paste here)
 ```
 
 **Manual checks** (owner; use a throwaway test vault, never the real one)
-1. **Install the newest 0.3.x** (now 0.3.2). `git switch claude/eloquent-clarke-21deia && git pull`, then `git tag 0.3.2 && git push origin 0.3.2`. (0.3.0 ran probe v1 and 0.3.1 ran probe v2 on Ubuntu; see above.)
+1. **Install the newest 0.3.x** (now 0.3.3). `git switch claude/eloquent-clarke-21deia && git pull`, then `git tag 0.3.3 && git push origin 0.3.3`. (0.3.0, 0.3.1 and 0.3.2 ran probes v1–v3 on Ubuntu; see above.)
    - Wait for the **Release** workflow to pass.
    - Open the draft release, check that it has the three assets and is marked pre-release, then publish it.
    - Ubuntu: `npm ci && npm run build`, then copy `main.js`, `manifest.json` and `styles.css` into the test vault's plugin folder (as in M2), or install through BRAT.

@@ -150,7 +150,15 @@ test("parseItemExtras returns the raw download URL (checked at use, in download(
 });
 
 test("transfer URL allowlist (design §8, T-T5)", () => {
-	assert.deepEqual([...TRANSFER_HOST_SUFFIXES], [".microsoft.com", ".live.com", ".sharepoint.com", ".1drv.com", ".onedrive.com", ".livefilestore.com"]);
+	assert.deepEqual([...TRANSFER_HOST_SUFFIXES], [
+		".microsoft.com",
+		".live.com",
+		".sharepoint.com",
+		".1drv.com",
+		".onedrive.com",
+		".livefilestore.com",
+		".microsoftpersonalcontent.com",
+	]);
 	for (const u of [
 		"https://api.onedrive.com/up/1",
 		"https://public.dm.files.1drv.com/y",
@@ -158,6 +166,7 @@ test("transfer URL allowlist (design §8, T-T5)", () => {
 		"https://t.sharepoint.com/a",
 		"https://my.microsoft.com/a",
 		"https://b.live.com/c",
+		"https://my.microsoftpersonalcontent.com/personal/abc/_api/v2.0/drive/items/X/uploadSession?guid=1",
 	]) assert.equal(checkTransferUrl(u), u);
 	for (const u of [
 		"http://api.onedrive.com/up/1",
@@ -172,6 +181,10 @@ test("transfer URL allowlist (design §8, T-T5)", () => {
 		"javascript:alert(1)",
 		"https://api.onedrive.com./x",
 		"https://graph.microsoft.com/v1.0/me/drive/items/X",
+		"https://microsoftpersonalcontent.com/x",
+		"https://microsoftpersonalcontent.com.evil.net/x",
+		"https://evilmicrosoftpersonalcontent.com/x",
+		"https://my.microsoftpersonalcontent.com:444/x",
 		"https://GRAPH.microsoft.com/v1.0/me/drive/items/X/content",
 		7,
 		null,

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-12
+
+### Fixed
+
+- Large uploads (over 10 MiB) were refused because OneDrive personal sends them to `my.microsoftpersonalcontent.com`, a Microsoft server that wasn't on the plugin's trusted list. The probe found it, and a domain-ownership check confirmed it belongs to Microsoft, so it is now trusted. Uploads to it never carry your sign-in token.
+
 ## [0.3.2] - 2026-10-12
 
 ### Changed
