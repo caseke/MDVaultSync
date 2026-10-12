@@ -180,13 +180,15 @@ CI on GitHub: the `CI` workflow passed on Node 22.x and 24.x (run 38186164011 at
 - Open, info: the README token-storage residual risk is M9 scope. The action SHAs were resolved from the upstream tags in this session.
 
 **Optional for the owner** (not fixed, no security or requirement impact):
+- **For M6:** after "Sign-in required", the user can sign in with a *different* account (`prompt=select_account`) over the kept sync state. The `already-signed-in` guard doesn't cover that case. Harmless while `StateStore` is a stub. M6 should store the drive or account identity in `SyncState` and clear state (or refuse) when a redemption brings a different one.
+- If the token clear on `invalid_grant` fails (SecretStorage writes broken), "sign-in required" is in memory only. After a restart the dead token reads as signed in until the next refresh fails again. Within one session the dead grant is never re-sent. Persisting a flag in `data.json` would close this. It needs SecretStorage writes to fail, so it is left open.
 - `npm audit` reports 3 **moderate** advisories: `moment` (GHSA-4p3w-j4w9-5jqw), pulled in by the `obsidian` type package (ours is 1.13.1; eslint-plugin-obsidianmd pins its own 1.12.3). `obsidian` is external to the bundle and `moment` never ships. It clears when both move to `obsidian` ≥ 1.14. Dependabot will propose it.
 - `test/hook.test.ts` covers only the hook's fast paths. The lint-failure path is covered by the Verify block, because it runs a full `tsc`.
 
 ---
 
 ## M2: Authentication
-**Status:** not started. **Owner prerequisite:** complete [entra-setup.md](entra-setup.md) and have the client ID ready.
+**Status:** awaiting-owner (session work verified 2026-10-12; manual checks 1–9 pending). **Owner prerequisite:** complete [entra-setup.md](entra-setup.md) and have the client ID ready.
 
 **Goal.** Sign in, stay signed in across restarts, refresh, and sign out on both devices (design §4).
 
@@ -224,10 +226,89 @@ CI on GitHub: the `CI` workflow passed on Node 22.x and 24.x (run 38186164011 at
 npm run lint && npm run typecheck && npm test && npm run build
 ```
 
-**Verification output**
+**How to run the manual checks** (owner; use a throwaway test vault, never the real one)
+
+Build and install on Ubuntu, as in M1: `git checkout claude/focused-shannon-aybk5p && npm ci && npm run build`, then copy `main.js`, `manifest.json` and `styles.css` into `<test vault>/.obsidian/plugins/mdvaultsync/`. On the iPad, install through BRAT (`caseke/MDVaultSync`, branch build) or copy the same three files into the test vault's plugin folder with the Files app. In **Settings → MDVaultSync**, paste the client ID from entra-setup.md.
+
+1. **Ubuntu sign-in.** Select **Sign in**. The browser opens Microsoft's page. Sign in and consent, then allow the browser to open the `obsidian://` link. Pass: Obsidian comes forward, the notice says "Signed in to OneDrive.", and **Status** reads "Signed in to OneDrive.". For the trailing slash: before allowing the link, copy it from the browser prompt or history, and record whether it starts with `obsidian://mdvaultsync-auth/?` or `obsidian://mdvaultsync-auth?`.
+2. **iPad sign-in.** Same flow. Safari asks "Open in Obsidian?"; tap **Open**.
+3. **Paste fallback** (one device). Sign out first. Select **Sign in another way**. After sign-in, Microsoft shows a blank `nativeclient` page. Copy the whole address bar, paste it into **Paste the address**, then select **Finish sign-in**. If Microsoft shows an error instead (for example `AADSTS50011` about the redirect URI), record the exact code here and in research.md I-RU-4. The milestone can't close until the fallback is replaced.
+4. **Origin header.** Checks 1–3 succeeding means token redemption worked, so `requestUrl` sent no breaking `Origin` [I-AC-7]. If redemption fails, the notice ends with a code; `invalid_request` with AADSTS9002326 means `Origin` was sent. Record which.
+5. **Restart.** Quit and relaunch Obsidian on both devices. Pass: **Status** still says signed in. Record **Token storage**: the neutral note means `secret-storage`, and the red warning means `plugin-data`.
+   5a. On Ubuntu, run `xdg-mime query default x-scheme-handler/obsidian` and record the output. Then sign out. Lock the keyring (Seahorse → right-click **Login** → **Lock**), or log in to a fresh user session that has no keyring daemon. Sign in again. Record which **Token storage** line appears, and whether Obsidian showed a "secret storage provider" warning. Update research.md O-API-6.
+6. **Sign out.** Select **Sign out**. Pass: **Status** reads "Signed out.", and the notice shows the app-access link. In the developer console (Ctrl+Shift+I on Ubuntu), run `app.secretStorage.getSecret("mdvaultsync-refresh-token")`. It must return `""` or `null`. Also check that `data.json` in the plugin folder has no `fallbackRefreshToken`.
+7. Open https://account.microsoft.com/privacy/app-access. Pass: MDVaultSync (your app registration's name) is listed. Update research.md C-MSA-1.
+8. Tick the verification box in entra-setup.md after correcting any portal wording.
+9. Confirm that check 1 ran with **Enable Live SDK support = No**, and record the result in research.md I-REG-7.
+
+Manual check results (owner):
 ```
-(paste here, plus manual check results 1–8)
+1 Ubuntu sign-in:        (pass/fail; trailing slash: yes/no)
+2 iPad sign-in:          
+3 Paste fallback:        (device; pass/fail; error code if any)
+4 Origin header:         
+5 Restart, backend:      Ubuntu=…  iPad=…
+5a xdg-mime / keyring:   
+6 Sign-out:              
+7 App-access page:       
+8 entra-setup verified:  
+9 Live SDK = No:         
 ```
+
+**Verification output** (session container, Node v22.22.0, 2026-10-12, final M2 commit)
+```
+$ npm ci --ignore-scripts --no-fund      → 3 moderate (unchanged from M1, see M1 "Optional")
+$ npm run lint                           → exit 0, 0 errors, 3 warnings (see Deviations)
+$ npm run typecheck                      → exit 0
+$ npm test
+# tests 121
+# suites 7
+# pass 121
+# fail 0
+$ npm run build                          → exit 0 (main.js 15750 bytes)
+$ npm audit --audit-level=high           → exit 0
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+```
+Tests were written first and run red (6 files failing to load) before the implementation. Mutation spot checks, each reverted, make the suite fail: clearing the pending sign-in on a wrong state, removing single-flight, a hostname-prefix origin check, not stripping caller `Authorization`, no expiry, and removing both epoch guards.
+
+**Tests added:**
+- `test/pkce.test.ts`: the RFC 7636 vector, the verifier alphabet and length, and the state format.
+- `test/auth.test.ts`: authorize URL and exact scope; every callback rejection; error_description absent from errors and console; token POST shape (no Origin, no Authorization, no secret); hostile token JSON; paste-URL allow/deny list; single-flight refresh; rotation order; invalid_grant and interaction_required; sign-out and redemption races.
+- `test/http.test.ts`: Authorization only for `https://graph.microsoft.com`; stripped for 10 look-alike and transfer hosts.
+- `test/token-store.test.ts`: SecretStorage, the fallback, migration back, and clear verification.
+- `test/request-url-transport.test.ts`, `test/settings.test.ts`, `test/auth-messages.test.ts`.
+- `test/fakes/fake-http.ts` (FakeHttp, FakeClock).
+
+**Deviations from this milestone's text** (recorded in design.md §4 and in commit messages):
+- `buildAuthorizeUrl` is async, because the S256 digest is. `handleCallback(params, via)` takes the arrival channel, and a callback must arrive on the channel its sign-in started with.
+- A wrong `state` does not clear the pending sign-in, so a forged link can't cancel a real one. Expiry and a matching state do clear it.
+- `requestUrl` and SecretStorage are injected, so `request-url-transport.ts` and `token-store.ts` are unit tested. Extra supporting files: `src/settings.ts` (data.json shape and GUID check) and `src/ui/auth-messages.ts` (the error-code → message table, tested for completeness).
+- The token store also falls back when SecretStorage accepts a write but reads back a different value (SPEC D-5 updated).
+- Lint has 3 warnings in `settings-tab.ts`: `display()` is deprecated since 1.13 in favor of declarative settings. Declarative settings need 1.13.0 [O-API-18], and `minAppVersion` is 1.11.4 (R-ENV-3), so they can't be used yet. M7 must decide whether to raise `minAppVersion` or accept these warnings. The M7 criterion "no warnings from obsidianmd rules" conflicts with R-ENV-3 until then.
+- The neutral storage note says "your device's keyring", not "your OS keyring", because the obsidianmd sentence-case rule rejects "OS".
+
+**Security review** (`security-reviewer` agent; base: the M1 merge commit 6fcb471, since `origin/main` isn't fetched in the container):
+- No high findings.
+- Fixed, medium: `TokenStore.clear()` ignored a failed overwrite, so sign-out could report success while the token stayed readable. It now verifies and throws `TokenClearError`, and sign-out shows "Sign-out is incomplete".
+- Fixed, medium: the `sign-in` command worked while already signed in. That could relink the vault to another account without clearing state, and an older in-flight refresh could overwrite the new grant. Sign-in is now refused with `already-signed-in`, and redemption bumps the epoch.
+- Fixed, low: sign-out now catches and reports failures (code-only logging) and always refreshes the tab.
+- Fixed, low: short-lived tokens rotated the refresh token on every call. The margin is now capped at half the lifetime.
+- Fixed, low: `isGraphUrl` threw a `TypeError` that carries the URL. It now throws a URL-free `InvalidUrl`.
+- Fixed, low (documented): the read-back fallback is recorded in SPEC D-5.
+- Re-review of fix commit b0cee50: all of the above confirmed resolved, no new high or medium findings.
+  - Fixed, low: if a sign-out landed while a sign-in was writing its token and the undo then failed, the failure went unreported. It is now surfaced with a notice and an honest status. Tested.
+  - Fixed, info: a sync-state clear failure no longer shows the token-failure text.
+  - Open, low (M6): see the first item under Optional.
+  - Open, low: see the second item under Optional.
+
+**Optional for the owner** (not fixed, no security or requirement impact):
+- **For M6:** after "Sign-in required", the user can sign in with a *different* account (`prompt=select_account`) over the kept sync state. The `already-signed-in` guard doesn't cover that case. Harmless while `StateStore` is a stub. M6 should store the drive or account identity in `SyncState` and clear state (or refuse) when a redemption brings a different one.
+- If the token clear on `invalid_grant` fails (SecretStorage writes broken), "sign-in required" is in memory only. After a restart the dead token reads as signed in until the next refresh fails again. Within one session the dead grant is never re-sent. Persisting a flag in `data.json` would close this. It needs SecretStorage writes to fail, so it is left open.
+- `AuthClient.redeemCode` is public, as this milestone's interface lists it. It could be made private and reached only through `handleCallback`. Other plugins share the JS realm, so this isn't a security boundary (T-I1).
+- A web page can open `obsidian://mdvaultsync-auth?…` repeatedly. Each forged link shows a "Sign-in link ignored" notice: harmless spam. These notices could be suppressed for `no-pending` and `state-mismatch`.
+- M3 must check that `requestUrl` doesn't carry `Authorization` across a Graph redirect to a CDN host (O-API-2), or never follow Graph redirects with auth.
+- The README's token-storage residual-risk note is M9 scope. Tokens are stored for real from this milestone on.
 
 ---
 
@@ -545,7 +626,7 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | Requirement | Milestone | Done |
 |---|---|---|
 | R-ENV-1…4 | M1, M2 | ☐ |
-| R-AUTH-1…8 | M2 | ☐ |
+| R-AUTH-1…8 | M2 | ☐ (session part verified 2026-10-12: unit tests for R-AUTH-1, 3, 4, 5, 6, 8; R-AUTH-2 and R-AUTH-7 need manual checks 1–6) |
 | R-SCOPE-1…4 | M4, M5, M7 | ☐ |
 | R-TRIG-1…4 | M6 (lock), M7 | ☐ |
 | R-CD-1 | M3, M5 | ☐ |
@@ -564,7 +645,7 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-RES-1 | M3 | ☐ |
 | R-RES-2, R-RES-3 | M3, M6 | ☐ |
 | R-UI-1…3 | M2, M7 | ☐ |
-| R-SEC-1, R-SEC-2 | M2 | ☐ |
+| R-SEC-1, R-SEC-2 | M2 | ☐ (R-SEC-1 unit tested 2026-10-12; R-SEC-2 needs check 5a and the M9 README note) |
 | R-SEC-3 | M3, M8 | ☐ |
 | R-SEC-4 | M3, M4 | ☐ |
 | R-SEC-5 | M1, M9 | ☐ (M1 part done: lockfile, Dependabot, CodeQL, audit, SHA pins, and secret scanning and push protection verified 2026-10-12; release attestation is M9) |

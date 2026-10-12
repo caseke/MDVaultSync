@@ -542,3 +542,23 @@ test("invalid_grant still reports sign-in-required when the token clear fails", 
 	assert.equal(await codeOf(auth.getAccessToken()), "sign-in-required");
 	assert.equal(http.requests.length, 1);
 });
+
+test("a failed undo after sign-out during redemption is surfaced and status is honest", async () => {
+	const { auth, http, tokens, statuses } = setup();
+	const { state } = await startSignIn(auth);
+	const hold = deferred<void>();
+	const realSet = tokens.set.bind(tokens);
+	tokens.set = async (rt) => {
+		await hold.promise;
+		await realSet(rt);
+	};
+	http.enqueueJson(200, tokenBody());
+	const pending = auth.handleCallback({ code: "C", state }, "protocol");
+	await new Promise((r) => setImmediate(r));
+	await auth.signOut();
+	tokens.clear = () => Promise.reject(new Error("keyring write failed"));
+	hold.resolve();
+	await assert.rejects(pending, (e: unknown) => e instanceof Error && e.message === "keyring write failed");
+	assert.equal(auth.status, "signed-in");
+	assert.equal(statuses[statuses.length - 1], "signed-in");
+});

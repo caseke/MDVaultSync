@@ -268,8 +268,12 @@ export class AuthClient implements AccessTokenProvider {
 		if (tok.refreshToken === null) return;
 		await this.tokens.set(tok.refreshToken);
 		if (epoch !== this.epoch) {
-			// Signed out while the write was in flight: undo it.
-			await this.tokens.clear().catch(() => undefined);
+			// Signed out while the write was in flight: undo it. If the undo fails, let status show the truth.
+			try {
+				await this.tokens.clear();
+			} finally {
+				this.notify();
+			}
 			throw new AuthError("signed-out");
 		}
 	}

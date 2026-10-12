@@ -2,7 +2,7 @@ import { Notice, Plugin, requestUrl } from "obsidian";
 import type { ObsidianProtocolData } from "obsidian";
 import type { StateStore } from "./core/ports.ts";
 import { createRequestUrlTransport } from "./platform/request-url-transport.ts";
-import { PluginTokenStore } from "./platform/token-store.ts";
+import { PluginTokenStore, TokenClearError } from "./platform/token-store.ts";
 import { AuthClient, AuthError, REDIRECT_PROTOCOL, type Redirect } from "./remote/auth.ts";
 import { isValidClientId, parseData, type PluginData } from "./settings.ts";
 import { AUTH_ERROR_MESSAGES, authErrorText } from "./ui/auth-messages.ts";
@@ -91,27 +91,32 @@ export default class MDVaultSyncPlugin extends Plugin {
 
 	/** Clears tokens and sync state; local files stay (R-AUTH-7). */
 	async signOut(): Promise<void> {
-		let tokensCleared = true;
+		let tokenCleared = true;
+		let stateCleared = true;
 		try {
 			await this.auth.signOut();
 		} catch (e) {
-			tokensCleared = false;
+			tokenCleared = false;
 			console.error(`MDVaultSync: sign-out could not clear the token (${e instanceof Error ? e.name : "unknown"})`);
 		}
 		try {
 			// Sync state is cleared even if the token wasn't: a later sync then runs in union mode, which never deletes.
 			await this.stateStore.clear();
 		} catch (e) {
-			tokensCleared = false;
+			stateCleared = false;
 			console.error(`MDVaultSync: sign-out could not clear sync state (${e instanceof Error ? e.name : "unknown"})`);
 		}
 		this.settingTab.refresh();
-		if (!tokensCleared) {
+		if (!tokenCleared) {
 			new Notice(
 				"Sign-out is incomplete: the stored sign-in couldn't be removed. Try again, or remove this app's access at " +
 					`${APP_ACCESS_URL}.`,
 				0,
 			);
+			return;
+		}
+		if (!stateCleared) {
+			new Notice("Signed out, but the sync state couldn't be cleared. Sign out again before you sign in.", 0);
 			return;
 		}
 		const msg = createFragment((f) => {
@@ -137,6 +142,11 @@ export default class MDVaultSyncPlugin extends Plugin {
 		if (e instanceof AuthError) {
 			console.error(`MDVaultSync: sign-in error ${e.code}${e.providerCode ? ` (${e.providerCode})` : ""}`);
 			new Notice(authErrorText(e.code, e.providerCode));
+			return;
+		}
+		if (e instanceof TokenClearError) {
+			console.error("MDVaultSync: sign-in error token-clear-failed");
+			new Notice("You signed out during sign-in, but the new sign-in couldn't be removed. Sign out again.", 0);
 			return;
 		}
 		console.error(`MDVaultSync: unexpected sign-in error ${e instanceof Error ? e.name : "unknown"}`);
