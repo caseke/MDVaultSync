@@ -5,7 +5,7 @@ import { GraphError, UntrustedUrl } from "../src/remote/errors.ts";
 import { InvalidResponse } from "../src/remote/validate.ts";
 import { URL_SECRET, UPLOAD_HOST } from "./fakes/fake-graph.ts";
 import { FakeHttp, jsonResponse } from "./fakes/fake-http.ts";
-import { graphOver, last, pattern, setupGraph } from "./graph-setup.ts";
+import { graphOver, last, pattern, setupGraph, originOf } from "./graph-setup.ts";
 
 const MiB = 1024 * 1024;
 
@@ -31,7 +31,8 @@ test("new-file session: conflictBehavior=fail in the body (no fileSize), 10 + 2 
 	const { g, fake } = setupGraph();
 	const data = pattern(12 * MiB);
 	const s = await g.createUploadSession({ kind: "new", parentId: "APPROOT", name: "big.bin" }, null, data.byteLength);
-	assert.ok(s.uploadUrl.startsWith(`${UPLOAD_HOST}/up/`));
+	assert.equal(originOf(s.uploadUrl), UPLOAD_HOST);
+	assert.match(new URL(s.uploadUrl).pathname, /^\/up\//);
 	const createReq = last(fake.requests);
 	assert.equal(createReq?.method, "POST");
 	assert.ok(createReq?.url.endsWith("/me/drive/items/APPROOT:/big.bin:/createUploadSession"));
@@ -46,7 +47,7 @@ test("new-file session: conflictBehavior=fail in the body (no fileSize), 10 + 2 
 	assert.equal(item?.name, "big.bin");
 	assert.equal(item?.size, 12 * MiB);
 	assert.deepEqual(fake.authLeaks, []);
-	const uploads = fake.requests.filter((r) => r.url.startsWith(UPLOAD_HOST));
+	const uploads = fake.requests.filter((r) => originOf(r.url) === UPLOAD_HOST);
 	assert.equal(uploads.length, 3);
 	for (const r of uploads) assert.ok(!Object.keys(r.headers ?? {}).some((k) => k.toLowerCase() === "authorization"));
 });

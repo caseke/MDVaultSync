@@ -4,7 +4,7 @@ import { LARGE_SIZE, PROBE_DIR, probeBytes, runProbe, type ProbeDeps } from "../
 import type { DeltaForm } from "../src/remote/capabilities.ts";
 import { FakeGraph, URL_SECRET, UPLOAD_HOST, type FakeGraphOptions, sha1Base64 } from "./fakes/fake-graph.ts";
 import { jsonResponse } from "./fakes/fake-http.ts";
-import { TOKEN, enc, graphOver } from "./graph-setup.ts";
+import { TOKEN, enc, graphOver, originOf } from "./graph-setup.ts";
 import { AuthorizingTransport } from "../src/remote/http.ts";
 
 function setup(opts: FakeGraphOptions = {}) {
@@ -120,7 +120,7 @@ test("a leftover probe folder from an earlier run is removed first", async () =>
 test("a failing step is recorded and cleanup still runs", async () => {
 	const { fake, deps } = setup();
 	fake.intercept = (req) =>
-		req.url.startsWith(UPLOAD_HOST) && req.method === "PUT" ? jsonResponse(507, { error: { code: "quotaLimitReached" } }) : null;
+		originOf(req.url) === UPLOAD_HOST && req.method === "PUT" ? jsonResponse(507, { error: { code: "quotaLimitReached" } }) : null;
 	const r = await runProbe(deps);
 	assert.deepEqual(
 		{ ok: r.largeFile.ok, status: r.largeFile.status, code: r.largeFile.code, stage: r.largeFile.stage },
@@ -204,7 +204,7 @@ test("an upload URL on an unlisted host is reported by hostname and never contac
 		{ variant: "conflictBehavior+fileSize", status: 400, code: "invalidRequest", innerCodes: ["invalidArgument"] },
 		{ variant: "conflictBehavior", status: 200, rejectedHost: "upload.unlisted.example" },
 	]);
-	assert.equal(fake.requests.filter((q) => q.url.startsWith("https://upload.unlisted.example")).length, 0);
+	assert.equal(fake.requests.filter((q) => originOf(q.url) === "https://upload.unlisted.example").length, 0);
 	assert.ok(!JSON.stringify(r).includes(URL_SECRET));
 	assert.deepEqual(r.cleanup, { ok: true });
 });
@@ -216,7 +216,7 @@ test("an unlisted download host is reported by hostname and not contacted", asyn
 	assert.equal(r.largeFile.downloadHostTrusted, false);
 	assert.equal(r.largeFile.stage, "download");
 	assert.equal(r.largeFile.code, "UntrustedUrl");
-	assert.ok(!fake.requests.some((q) => q.url.startsWith("https://cdn.unlisted.example")));
+	assert.ok(!fake.requests.some((q) => originOf(q.url) === "https://cdn.unlisted.example"));
 });
 
 test("the upload host observed on 0.3.2 (my.microsoftpersonalcontent.com) completes the round trip without the token", async () => {
@@ -226,7 +226,7 @@ test("the upload host observed on 0.3.2 (my.microsoftpersonalcontent.com) comple
 	assert.equal(r.largeFile.bytesMatch, true);
 	assert.equal(r.largeFile.uploadHost, "my.microsoftpersonalcontent.com");
 	assert.equal(r.largeFile.rejectedUploadHost, undefined);
-	assert.ok(fake.requests.some((q) => q.url.startsWith("https://my.microsoftpersonalcontent.com/")));
+	assert.ok(fake.requests.some((q) => originOf(q.url) === "https://my.microsoftpersonalcontent.com"));
 	assert.deepEqual(fake.authLeaks, []);
 	assert.equal(r.errors, 0);
 });
@@ -243,7 +243,7 @@ test("a download URL over the length cap is measured, not printed, and the reaso
 	assert.equal(r.largeFile.reason, "download-url-too-long");
 	const s = JSON.stringify(r);
 	assert.ok(!s.includes(URL_SECRET) && !s.includes("ppppp"));
-	assert.ok(!fake.requests.some((q) => q.url.startsWith("https://public.dm.files.1drv.com")));
+	assert.ok(!fake.requests.some((q) => originOf(q.url) === "https://public.dm.files.1drv.com"));
 });
 
 test("the real server shape (downloadUrl dropped under $select) is diagnosed and the round trip still passes", async () => {

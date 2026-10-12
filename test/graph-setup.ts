@@ -36,3 +36,8 @@ export const enc = (s: string) => new TextEncoder().encode(s);
 export function last<T>(a: readonly T[]): T | undefined {
 	return a[a.length - 1];
 }
+
+/** Origin of a URL, for "which server did this go to" assertions. Compare origins, never string prefixes. */
+export function originOf(url: string): string {
+	return new URL(url).origin;
+}

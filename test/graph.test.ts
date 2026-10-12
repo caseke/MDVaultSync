@@ -6,7 +6,7 @@ import { InvalidResponse } from "../src/remote/validate.ts";
 import { DOWNLOAD_HOST, GRAPH, URL_SECRET } from "./fakes/fake-graph.ts";
 import { FakeHttp, bytes, jsonResponse } from "./fakes/fake-http.ts";
 import type { HttpTransport } from "../src/core/ports.ts";
-import { enc, graphOver, last, pattern, setupGraph } from "./graph-setup.ts";
+import { enc, graphOver, last, pattern, setupGraph, originOf } from "./graph-setup.ts";
 
 const isGraphError = (status: number, code?: string) => (e: unknown) =>
 	e instanceof GraphError && e.status === status && (code === undefined || e.code === code);
@@ -271,7 +271,8 @@ test("download: fresh downloadUrl, no Authorization to the download host, exact 
 	const got = await g.download(n.id);
 	assert.deepEqual(new Uint8Array(got), content);
 	const dl = last(fake.requests);
-	assert.ok(dl?.url.startsWith(DOWNLOAD_HOST));
+	assert.ok(dl);
+	assert.equal(originOf(dl.url), DOWNLOAD_HOST);
 	assert.equal(dl?.method, "GET");
 	assert.deepEqual(fake.authLeaks, []);
 	assert.ok(!fake.requests.some((r) => r.url.includes("/content") && r.method === "GET"), "never GET Graph /content (302 with auth)");
@@ -280,7 +281,7 @@ test("download: fresh downloadUrl, no Authorization to the download host, exact 
 test("download rejects a length that differs from the item size", async () => {
 	const { g, fake } = setupGraph();
 	const n = fake.addFile("APPROOT", "a.bin", enc("12345"));
-	fake.intercept = (req) => (req.url.startsWith(DOWNLOAD_HOST) ? { status: 200, headers: {}, body: bytes("1234") } : null);
+	fake.intercept = (req) => (originOf(req.url) === DOWNLOAD_HOST ? { status: 200, headers: {}, body: bytes("1234") } : null);
 	await assert.rejects(g.download(n.id), InvalidResponse);
 });
 
@@ -288,7 +289,7 @@ test("download refuses an untrusted download host without contacting it", async 
 	const { g, fake } = setupGraph({ downloadHost: "https://cdn.evil.example" });
 	const n = fake.addFile("APPROOT", "a.bin", enc("x"));
 	await assert.rejects(g.download(n.id), UntrustedUrl);
-	assert.ok(!fake.requests.some((r) => r.url.startsWith("https://cdn.evil.example")));
+	assert.ok(!fake.requests.some((r) => originOf(r.url) === "https://cdn.evil.example"));
 });
 
 test("download: missing item → 404, folder or no URL → InvalidResponse, transfer error → GraphError", async () => {
@@ -297,7 +298,7 @@ test("download: missing item → 404, folder or no URL → InvalidResponse, tran
 	const f = fake.addFolder("APPROOT", "dir");
 	await assert.rejects(g.download(f.id), InvalidResponse);
 	const n = fake.addFile("APPROOT", "a.bin", enc("x"));
-	fake.intercept = (req) => (req.url.startsWith(DOWNLOAD_HOST) ? jsonResponse(403, { error: { code: "accessDenied" } }) : null);
+	fake.intercept = (req) => (originOf(req.url) === DOWNLOAD_HOST ? jsonResponse(403, { error: { code: "accessDenied" } }) : null);
 	await assert.rejects(g.download(n.id), isGraphError(403));
 	const http = new FakeHttp();
 	const o = graphOver(http);
@@ -395,7 +396,7 @@ test("getItem works when the download host is unlisted; only download() refuses 
 	assert.equal((await g.getItem(n.id))?.size, 3);
 	assert.equal((await g.getChildByName("APPROOT", "a.bin"))?.id, n.id);
 	await assert.rejects(g.download(n.id), UntrustedUrl);
-	assert.ok(!fake.requests.some((r) => r.url.startsWith("https://cdn.unlisted.example")));
+	assert.ok(!fake.requests.some((r) => originOf(r.url) === "https://cdn.unlisted.example"));
 });
 
 test("download() failures carry a reason code, never data", async () => {
@@ -411,7 +412,7 @@ test("download() failures carry a reason code, never data", async () => {
 	const dir = b.fake.addFolder("APPROOT", "dir");
 	assert.equal(await reasonOf(b.g.download(dir.id)), "not-a-file");
 	const m = b.fake.addFile("APPROOT", "m.bin", enc("12345"));
-	b.fake.intercept = (req) => (req.url.startsWith(DOWNLOAD_HOST) ? { status: 200, headers: {}, body: bytes("1234") } : null);
+	b.fake.intercept = (req) => (originOf(req.url) === DOWNLOAD_HOST ? { status: 200, headers: {}, body: bytes("1234") } : null);
 	assert.equal(await reasonOf(b.g.download(m.id)), "download-length-mismatch");
 	const http = new FakeHttp();
 	const o = graphOver(http);
@@ -439,7 +440,8 @@ test("download reads the item without $select, because OneDrive personal drops d
 	const meta = fake.requests.filter((r) => r.url.startsWith(`${GRAPH}/me/drive/items/`));
 	assert.equal(last(meta)?.url, `${GRAPH}/me/drive/items/${encodeURIComponent(n.id)}`);
 	const dl = last(fake.requests);
-	assert.ok(dl?.url.startsWith(DOWNLOAD_HOST));
+	assert.ok(dl);
+	assert.equal(originOf(dl.url), DOWNLOAD_HOST);
 	assert.ok(!Object.keys(dl?.headers ?? {}).some((k) => k.toLowerCase() === "authorization"));
 	assert.deepEqual(fake.authLeaks, []);
 });
