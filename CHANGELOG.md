@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-10-12
+
+Milestone 3 complete: the OneDrive connection is built and checked on both devices.
+
+### Changed
+
+- The plugin trusts fewer servers for file transfers: only OneDrive personal's content servers (`*.microsoftpersonalcontent.com`, `*.1drv.com`, `*.onedrive.com`, `*.livefilestore.com`). It no longer trusts all of `*.sharepoint.com`, `*.microsoft.com` or `*.live.com`.
+- The settings learned from the probe are now final for both devices.
+
+## [0.3.5] - 2026-10-12
+
+### Fixed
+
+- Downloads couldn't start: personal OneDrive leaves the download link out of responses that request only specific fields, and the plugin requested exactly that. The plugin now reads the file's full details before a download, where the link is present. The capability probe found this.
+
+## [0.3.4] - 2026-10-12
+
+### Changed
+
+- The probe output is now version 4. It explains why a download couldn't start: whether OneDrive's download link was missing, too long, or on an untrusted server. It records the link's length and server name, never the link itself.
+
+### Fixed
+
+- Reading a file's details no longer fails when its download link is unusual (too long, or malformed). Only the download itself is refused, with a specific reason.
+
+## [0.3.3] - 2026-10-12
+
+### Fixed
+
+- Large uploads (over 10 MiB) were refused because OneDrive personal sends them to `my.microsoftpersonalcontent.com`, a Microsoft server that wasn't on the plugin's trusted list. The probe found it, and a domain-ownership check confirmed it belongs to Microsoft, so it is now trusted. Uploads to it never carry your sign-in token.
+
+## [0.3.2] - 2026-10-12
+
+### Changed
+
+- Settings learned from the capability probe are now built in: conditional plain uploads for small files, and the delta form that works on personal OneDrive.
+- The probe output is now version 3. When OneDrive hands back an upload or download address on a server the plugin doesn't trust yet, the probe reports that server's name (never the full address) and sends nothing to it.
+
+### Fixed
+
+- Reading a file's details no longer fails when OneDrive's download server isn't on the trusted list. Only the download itself is refused.
+
+## [0.3.1] - 2026-10-12
+
+### Fixed
+
+- The capability probe's delta check failed on any app folder holding a file name longer than 255 characters. OneDrive allows such names. The same check would have stopped sync entirely once sync exists. Long names from OneDrive are now accepted; whether to sync one is decided per file later.
+- The probe's 12 MiB upload failed with "invalid request" when starting the upload session. The plugin no longer sends the optional file-size field. The probe now tries several request forms and reports which one OneDrive accepts.
+
+### Changed
+
+- The probe output is now version 2. It runs the delta check first, adds a 300-character name test, and records error sub-codes and which step of the large-file test failed.
+
+## [0.3.0] - 2026-10-12
+
+Pre-release for the M3 capability probe on the iPad and Ubuntu. Nothing syncs yet.
+
+### Added
+
+- **Run OneDrive capability probe** command. It checks how your OneDrive's app folder behaves: delta queries, conditional updates, case-insensitive names, the name length limit, rename and delete, quota access, and a 12 MiB upload and download. It works in a hidden `.mdvaultsync-probe` folder inside the app folder, and deletes that folder afterwards (items go to the OneDrive recycle bin). The result is JSON you can copy. It contains statuses, counts, timings and server host names, and no file names from your vault, links or sign-in data.
+- Internal: the Microsoft Graph client (retries that honor `Retry-After`, upload sessions, conditional requests), validation of everything Graph returns, and a log that records only operation types, counts, durations, statuses and error codes.
+
 ## [0.2.2] - 2026-10-12
 
 ### Changed

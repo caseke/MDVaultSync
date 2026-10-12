@@ -1,7 +1,7 @@
 {
 	"id": "mdvaultsync",
 	"name": "MDVaultSync",
-	"version": "0.2.2",
+	"version": "0.3.6",
 	"minAppVersion": "1.11.4",
 	"description": "Sync this vault across your devices through a private app folder in your personal OneDrive.",
 	"author": "caseke",

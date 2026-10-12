@@ -26,3 +26,11 @@
 	background-color: var(--interactive-accent-hover);
 	color: var(--text-on-accent);
 }
+
+/* Diagnostics modal: probe JSON, selectable so it can be copied by hand if the clipboard is unavailable. */
+.mdvaultsync-diagnostics-json {
+	max-height: 50vh;
+	overflow: auto;
+	user-select: text;
+	font-size: var(--font-ui-smaller);
+}

@@ -316,6 +316,19 @@ describe("refresh", () => {
 		assert.equal(formOf(http.requests[1]!).get("refresh_token"), "RT2");
 	});
 
+	test("invalidateAccessToken drops the matching cached token, so the next call refreshes (Graph 401)", async () => {
+		const { auth, http } = await signedIn();
+		http.enqueueJson(200, tokenBody({ access_token: "AT2", refresh_token: "RT2" }));
+		assert.equal(await auth.getAccessToken(), "AT2");
+		auth.invalidateAccessToken("AT-OTHER");
+		assert.equal(await auth.getAccessToken(), "AT2", "a token that isn't the cached one changes nothing");
+		assert.equal(http.requests.length, 1);
+		auth.invalidateAccessToken("AT2");
+		http.enqueueJson(200, tokenBody({ access_token: "AT3", refresh_token: "RT3" }));
+		assert.equal(await auth.getAccessToken(), "AT3");
+		assert.equal(http.requests.length, 2);
+	});
+
 	test("a refresh without a new refresh token keeps the stored one", async () => {
 		const { auth, http, tokens } = await signedIn();
 		http.enqueueJson(200, tokenBody({ access_token: "AT2", refresh_token: undefined }));

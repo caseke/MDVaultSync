@@ -353,7 +353,7 @@ Tests were written first and run red (6 files failing to load) before the implem
 ---
 
 ## M3: Graph client, retry, validation, capability probe
-**Status:** not started
+**Status:** done (2026-10-12). The probe passed with `errors: 0` on Ubuntu and on the iPad (0.3.5). The results are applied in `capabilities.ts` (`CAPABILITIES_PROBED = true`), research.md and design.md, and the transfer-host allowlist is narrowed (0.3.6).
 
 **Goal.** A complete `RemotePort` over Graph. Settle every documentation gap from research.md §6 that can be tested against the live API.
 
@@ -388,10 +388,325 @@ npm run lint && npm run typecheck && npm test && npm run build
 node --test --experimental-test-coverage "test/**/*.test.ts" 2>&1 | grep -E "retry|validate|graph"
 ```
 
-**Verification output**
+**Verification output** (session container, Node v22.22.0, 2026-10-12, M3 close commit, 0.3.6)
 ```
-(paste here, plus probe JSON from both devices)
+$ npm ci --ignore-scripts --no-fund      → exit 0; added 339 packages; 3 moderate (unchanged, see M1 "Optional")
+$ npm run lint                           → exit 0, 0 errors, 2 warnings (settings-tab.ts, the M2 declarative-settings warnings)
+$ npm run typecheck                      → exit 0
+$ npm test
+# tests 306
+# suites 8
+# pass 306
+# fail 0
+$ npm run build                          → exit 0 (main.js 41073 bytes)
+$ npm audit --audit-level=high           → exit 0
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+$ node --test --experimental-test-coverage "test/**/*.test.ts"   (line % | branch % | funcs %)
+  retry.ts            100.00 | 96.67 | 100.00
+  validate.ts          99.38 | 98.20 | 100.00
+  graph.ts            100.00 | 95.00 | 100.00
+  upload-session.ts   100.00 | 97.62 | 100.00
+  errors.ts, logger.ts, http.ts, capabilities.ts  100.00 lines
+  probe.ts             96.37 lines
 ```
+The first session-close run (289 tests, before the probe rounds) is in the commit history. 0.3.1–0.3.6 each ran the same gate before their commits.
+The plan's grep line (`grep -E "retry|validate|graph"`) also matches test names, so the table rows above are taken from the coverage report itself.
+
+Tests were written first and run red (7 test files failing to load, 3 new tests failing) before the implementation. Each of these mutation spot checks, when applied (and then reverted), makes the suite fail:
+- no If-Match on the PUT replace;
+- Authorization sent to non-Graph hosts;
+- the global pause dropped;
+- a look-alike transfer host accepted;
+- `conflictBehavior=replace` on a new-file session;
+- after the review: the Graph host allowed as a transfer URL, every error retried, the download sent through the authorizing transport, and dot-only ids allowed.
+
+Probe JSON (owner, from **Run OneDrive capability probe** → Copy result):
+
+**Probe v1 (0.3.0), Ubuntu, 2026-10-12** (owner; whitespace compacted):
+```
+{
+  "probeVersion": 1, "platform": "linux", "pluginVersion": "0.3.0",
+  "startedAt": "2026-10-12T04:51:36.567Z", "durationMs": 24912,
+  "approot": { "ok": true, "parentPath": "/drive/root:/Apps", "name": "MDVaultSync", "pathPrefixLength": 16 },
+  "leftoverRemoved": false,
+  "delta": {
+    "approot-colon": { "ok": false, "code": "InvalidResponse" },
+    "items-id": { "ok": false, "code": "InvalidResponse" }
+  },
+  "putIfMatch": { "honored": true, "staleStatus": 412, "staleCode": "notAllowed" },
+  "caseInsensitive": { "confirmed": true, "status": 409, "code": "nameAlreadyExists" },
+  "nameLength": { "len255": { "status": 201 }, "len256": { "status": 201 }, "nameMax": null },
+  "patchIfMatch": { "currentStatus": 200, "staleStatus": 412 },
+  "deleteIfMatch": { "staleStatus": 412, "currentStatus": 204 },
+  "quota": { "readable": true },
+  "largeFile": { "ok": false, "size": 12582912, "fragments": 2, "status": 400, "code": "invalidRequest" },
+  "hashVectors": [
+    { "file": "probe.md", "size": 18, "generator": "utf8:\"MDVaultSync probe\\n\"", "quickXorHash": "DCznRcJQBzbQYQp5YsMYQAAHObw=" },
+    { "file": "empty.bin", "size": 0, "generator": "empty", "quickXorHash": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=" },
+    { "file": "seq.bin", "size": 1000, "generator": "probeBytes(1000, seed)", "seed": 7, "quickXorHash": "RW+Rh6PcZW2m++mFuOGq5DBJwQk=" }
+  ],
+  "cleanup": { "ok": true }, "errors": 1
+}
+```
+
+What v1 settled (server behavior, the same from any device; recorded in research.md):
+- PUT honors a stale If-Match: 412 [G-UP-3]. The error code is `notAllowed`, so M6 must branch on status 412, not on the code.
+- Names are case-insensitive: 409 `nameAlreadyExists` [G-NM-5].
+- The name limit is above 255: 256 was accepted [G-NM-6].
+- PATCH and DELETE honor If-Match under the AppFolder scope [G-AF-5].
+- Quota is readable [G-QT-1].
+- The App Folder is `/Apps/MDVaultSync` [G-AF-1].
+- Hash vectors for M4 were recorded. The empty file hashes to `AAAAAAAAAAAAAAAAAAAAAAAAAAA=`, as expected.
+
+Two v1 failures were bugs in this milestone's code, fixed in 0.3.1:
+- **Both delta forms → `InvalidResponse`.** Probe step 5 had just created a 256-character name, which OneDrive accepted. `parseDriveItem` capped received names at 255, so the whole delta page was rejected. Outside the probe this would have stopped sync for good the moment any remote file got a name over 255 characters (for example, a rename in OneDrive web). The fake had masked it: FakeGraph refused names over 255.
+  - Fix: received names are accepted up to the 400-character path limit, and the planner decides whether to sync them (design §8).
+  - Probe v2 runs delta before creating the long names.
+  - Regression tests added.
+- **12 MiB round trip → 400 `invalidRequest` at createUploadSession.** `uploadHost` is missing from the result, so the create call failed, not a fragment. Its body carried `fileSize`, which I added beyond design §6.3.
+  - Fix: `fileSize` is no longer sent.
+  - Probe v2 tries three bodies (with fileSize, without it, none) and records each answer with its inner codes (`largeFile.createAttempts`). It also records which `stage` failed.
+
+**Probe v2 (0.3.1), Ubuntu, 2026-10-12** (owner; whitespace compacted):
+```
+{
+  "probeVersion": 2, "platform": "linux", "pluginVersion": "0.3.1",
+  "startedAt": "2026-10-12T05:10:26.258Z", "durationMs": 31160,
+  "approot": { "ok": true, "parentPath": "/drive/root:/Apps", "name": "MDVaultSync", "pathPrefixLength": 16 },
+  "leftoverRemoved": false,
+  "delta": {
+    "approot-colon": { "ok": false, "code": "InvalidResponse" },
+    "items-id": { "ok": true, "pages": 1, "items": 5, "approotListed": true, "filesWithHash": 3, "filesWithoutHash": 0 }
+  },
+  "putIfMatch": { "honored": true, "staleStatus": 412, "staleCode": "notAllowed" },
+  "caseInsensitive": { "confirmed": true, "status": 409, "code": "nameAlreadyExists" },
+  "nameLength": {
+    "len255": { "status": 201 }, "len256": { "status": 201 },
+    "len300": { "status": 400, "code": "invalidRequest", "innerCodes": ["badArgument"] }, "nameMax": null
+  },
+  "patchIfMatch": { "currentStatus": 200, "staleStatus": 412 },
+  "deleteIfMatch": { "staleStatus": 412, "currentStatus": 204 },
+  "quota": { "readable": true },
+  "largeFile": {
+    "ok": false, "size": 12582912, "fragments": 2,
+    "createAttempts": [ { "variant": "conflictBehavior+fileSize", "status": 400, "code": "invalidRequest" } ],
+    "stage": "create", "code": "UntrustedUrl"
+  },
+  "hashVectors": [ same three vectors as v1 ],
+  "cleanup": { "ok": true }, "errors": 1
+}
+```
+
+What v2 settled, applied in 0.3.2 (`capabilities.ts`, pinned by `test/capabilities.test.ts`):
+- **Delta:** `items-id` works, with one page, the approot listed and hashes on every file, so `DELTA_FORM = "items-id"`. `approot-colon` fails our validation and isn't used [G-DL-1], [G-DL-8].
+- **PUT honors If-Match** (second observation), so `PUT_HONORS_IF_MATCH = true` [G-UP-3].
+- **Name limit:** 256 is accepted and 300 is rejected (`badArgument`, with the path under 400). `NAME_MAX` stays 255 [G-NM-6].
+- **createUploadSession:** the body with `fileSize` → 400 again. The body without it was accepted: the session was created, but its `uploadUrl` failed our host allowlist (`UntrustedUrl` at parse, which is why that attempt wasn't listed). The 0.3.1 fix (no `fileSize`) is confirmed. **The upload host is missing from design §8's list**, and v2 couldn't say which host, because it only reported hostnames that pass.
+- 0.3.2 also stops `getItem` from failing on an unlisted download host. The host is now checked only in `download()`.
+- `CAPABILITIES_PROBED` stays `false` until the upload host is allowlisted and the round trip passes on the iPad.
+
+**Probe v3 (0.3.2), Ubuntu, 2026-10-12** (owner; only `largeFile` differs from v2):
+```
+"largeFile": {
+  "ok": false, "size": 12582912, "fragments": 2,
+  "createAttempts": [
+    { "variant": "conflictBehavior+fileSize", "status": 400, "code": "invalidRequest" },
+    { "variant": "conflictBehavior", "status": 200, "rejectedHost": "my.microsoftpersonalcontent.com" }
+  ],
+  "rejectedUploadHost": "my.microsoftpersonalcontent.com",
+  "stage": "create", "code": "UntrustedUrl"
+}
+(durationMs 19885; every other field equals v2)
+```
+The upload host is `my.microsoftpersonalcontent.com`. WHOIS (2026-10-12) shows the domain belongs to Microsoft Corporation (registrar MarkMonitor, created 2020-06-18). 0.3.3 adds `.microsoftpersonalcontent.com` to `TRANSFER_HOST_SUFFIXES` [G-UP-11]. The download host is still unobserved, because v3 stopped at `create`.
+
+**Probe v3 on 0.3.3, Ubuntu, 2026-10-12** (owner; only `largeFile` and the new vector differ from v2):
+```
+"largeFile": {
+  "ok": false, "size": 12582912, "fragments": 2,
+  "createAttempts": [
+    { "variant": "conflictBehavior+fileSize", "status": 400, "code": "invalidRequest" },
+    { "variant": "conflictBehavior", "status": 200 }
+  ],
+  "uploadHost": "my.microsoftpersonalcontent.com", "uploadMs": 13625,
+  "stage": "download", "code": "InvalidResponse"
+}
+"hashVectors" adds: { "file": "large.bin", "size": 12582912, "generator": "probeBytes(12582912, seed)",
+                      "seed": 1296324179, "quickXorHash": "ZxozysDdwfh/G5yk00nGRvIqEAI=" }
+(durationMs 42290)
+```
+- **The upload works.** 12 MiB went up in two fragments (10 + 2 MiB) to `my.microsoftpersonalcontent.com` in 13.6 s on Ubuntu Electron (O-API-2). OneDrive's hash of `large.bin` is a fourth M4 vector.
+- **The download step failed before any download request.** `downloadHost` would have been recorded first, and it wasn't. So either the download URL was longer than the 8192-character cap or wasn't a string, or it was missing from the response. v3 couldn't tell which: `InvalidResponse` carried no reason.
+- 0.3.4 (probe v4):
+  - `InvalidResponse` now carries a fixed reason code (`download-url-missing`, `download-url-too-long`, `download-url-invalid`, `not-a-file`, `download-length-mismatch`).
+  - The probe reads the large file with and without `$select` and records URL presence, type, length and host (`largeFile.downloadDiag`).
+  - `getItem` no longer parses the download URL at all, so URL problems affect only downloads.
+
+**Probe v4 on 0.3.4, Ubuntu, 2026-10-12** (owner; only `largeFile` is new):
+```
+"largeFile": {
+  "ok": false, "size": 12582912, "fragments": 2,
+  "createAttempts": [
+    { "variant": "conflictBehavior+fileSize", "status": 400, "code": "invalidRequest" },
+    { "variant": "conflictBehavior", "status": 200 }
+  ],
+  "uploadHost": "my.microsoftpersonalcontent.com", "uploadMs": 7141,
+  "downloadDiag": {
+    "select": { "status": 200, "urlPresent": false },
+    "plain":  { "status": 200, "urlPresent": true, "urlType": "string", "urlLength": 1087,
+                "host": "my.microsoftpersonalcontent.com" }
+  },
+  "downloadHost": "my.microsoftpersonalcontent.com", "downloadHostTrusted": true,
+  "stage": "download", "code": "InvalidResponse", "reason": "download-url-missing"
+}
+(durationMs 33793; every other field equals v3)
+```
+- **Cause found.** OneDrive personal omits `@microsoft.graph.downloadUrl` from any `$select` response, even though the get-content doc says to select it. The default response carries it (1087 characters, on `my.microsoftpersonalcontent.com`, already trusted) [G-DLD-1].
+- 0.3.5: `download()` reads the item with no `$select`, and `ITEM_SELECT` no longer asks for the URL. FakeGraph now behaves this way by default, so every download test uses the real server shape.
+- Upload took 7.1 s this run, 13.6 s in the previous one (Ubuntu).
+
+**Probe v4 on 0.3.5, Ubuntu, 2026-10-12: PASS** (owner; local build; every field except `largeFile`, `durationMs` and `errors` equals v4):
+```
+"largeFile": {
+  "ok": true, "size": 12582912, "fragments": 2,
+  "createAttempts": [
+    { "variant": "conflictBehavior+fileSize", "status": 400, "code": "invalidRequest" },
+    { "variant": "conflictBehavior", "status": 200 }
+  ],
+  "uploadHost": "my.microsoftpersonalcontent.com", "uploadMs": 5815,
+  "downloadDiag": {
+    "select": { "status": 200, "urlPresent": false },
+    "plain":  { "status": 200, "urlPresent": true, "urlType": "string", "urlLength": 1087,
+                "host": "my.microsoftpersonalcontent.com" }
+  },
+  "downloadHost": "my.microsoftpersonalcontent.com", "downloadHostTrusted": true,
+  "downloadMs": 4278, "bytesMatch": true
+}
+"cleanup": { "ok": true }, "errors": 0   (durationMs 34235)
+```
+Every probe question is answered on Ubuntu. The 12 MiB round trip works through `my.microsoftpersonalcontent.com` (up 5.8 s, down 4.3 s), with identical bytes. The download URL comes from the unselected item read (the 0.3.5 fix). The four `hashVectors` (the v4 run carries all four) are final for M4.
+
+**iPad (0.3.5)**, the last M3 check (O-API-2, T-D6). Steps:
+1. Publish **only 0.3.5**: Releases → draft `0.3.5` → Publish release. It contains every fix. The 0.3.3 and 0.3.4 drafts aren't needed; BRAT never sees drafts [O-BRAT-1], so leave them or delete them.
+2. On the iPad: BRAT → **Check for updates to all beta plugins**. Confirm that Settings → Community plugins shows MDVaultSync 0.3.5.
+3. Command palette (swipe down on a note, or **Open command palette**) → **MDVaultSync: Run OneDrive capability probe**. Keep Obsidian in the foreground until the result appears.
+4. Pass: `largeFile.ok` and `bytesMatch` are `true`, and `errors` is 0. Record whether Obsidian stayed responsive (you could scroll or open a note while it ran), then paste the JSON below.
+**Probe v4 on 0.3.5, iPad, 2026-10-12: PASS** (owner; installed through BRAT from the published 0.3.5; every field except `platform`, `largeFile`, `durationMs` and `errors` equals the Ubuntu run):
+```
+"platform": "ios", "durationMs": 30063,
+"largeFile": {
+  "ok": true, "size": 12582912, "fragments": 2,
+  "createAttempts": [
+    { "variant": "conflictBehavior+fileSize", "status": 400, "code": "invalidRequest" },
+    { "variant": "conflictBehavior", "status": 200 }
+  ],
+  "uploadHost": "my.microsoftpersonalcontent.com", "uploadMs": 4450,
+  "downloadDiag": {
+    "select": { "status": 200, "urlPresent": false },
+    "plain":  { "status": 200, "urlPresent": true, "urlType": "string", "urlLength": 1087,
+                "host": "my.microsoftpersonalcontent.com" }
+  },
+  "downloadHost": "my.microsoftpersonalcontent.com", "downloadHostTrusted": true,
+  "downloadMs": 5345, "bytesMatch": true
+}
+"cleanup": { "ok": true }, "errors": 0
+Responsive during the run: not reported
+```
+- **iPad (O-API-2, T-D6):** `requestUrl` on iOS uploaded 12 MiB in two fragments (4.5 s) and downloaded it whole (5.3 s), with identical bytes. Every server-side answer matches Ubuntu.
+- Responsiveness wasn't reported. That is a usability observation, not a pass/fail criterion; the round trip completed without a crash.
+
+**Results applied at M3 close (0.3.6):**
+- `capabilities.ts`: `CAPABILITIES_PROBED = true`, `PUT_HONORS_IF_MATCH = true`, `DELTA_FORM = "items-id"`, `NAME_MAX = 255`.
+- **Transfer-host allowlist narrowed** to `.microsoftpersonalcontent.com` (the only host observed, for uploads and downloads on both devices) plus `.1drv.com`, `.onedrive.com` and `.livefilestore.com`.
+  - Those three are OneDrive personal content endpoints in Microsoft's required-URL list. They're kept so a server-side host change fails over rather than stopping transfers.
+  - Dropped: `.sharepoint.com`, because any company can own a tenant subdomain, so a tampered URL could send bytes there.
+  - Dropped: `.microsoft.com` and `.live.com`: huge zones with no observed transfer use.
+  - An exact-host list was considered and rejected: the first Microsoft host change would stop every upload and download.
+
+**Manual checks** (owner; use a throwaway test vault, never the real one)
+1. **Install the newest 0.3.x** (now 0.3.5). `git switch claude/eloquent-clarke-21deia && git pull`, then `git tag 0.3.5 && git push origin 0.3.5`. (0.3.0–0.3.4 ran probes v1–v4 on Ubuntu; see above.)
+   - Wait for the **Release** workflow to pass.
+   - Open the draft release, check that it has the three assets and is marked pre-release, then publish it.
+   - Ubuntu: `npm ci && npm run build`, then copy `main.js`, `manifest.json` and `styles.css` into the test vault's plugin folder (as in M2), or install through BRAT.
+   - iPad: BRAT → **Check for updates to all beta plugins**.
+2. **Run the probe on Ubuntu.** Sign in if needed. Open the command palette (Ctrl+P; on the iPad, swipe down on a note or use **Open command palette**) and run **MDVaultSync: Run OneDrive capability probe**. There is no settings button until M7.
+   - Expect a window that says it is running. After up to a minute it shows JSON. Select **Copy result** and paste it into the block above.
+   - Pass: `probeVersion` is 3 or later, `cleanup.ok` is `true`, `largeFile.bytesMatch` is `true`, and OneDrive web shows no `.mdvaultsync-probe` folder in `Apps/<your app name>` afterwards. The probe's items are in the OneDrive recycle bin; you can empty it.
+3. **Run the probe on the iPad**, the same way. Probe 8, the 12 MiB round trip, is the one the plan requires on the iPad (O-API-2, T-D6). Record whether Obsidian stayed responsive while it ran.
+4. **A follow-up session applies the results:**
+   - `src/remote/capabilities.ts`: `PUT_HONORS_IF_MATCH` from `putIfMatch.honored`; `DELTA_FORM` = the first form with `ok: true`, or `children-walk` if neither works (then the design §5.2 fallback applies and the M5 planner must not assume delta semantics); `NAME_MAX` from `nameLength.nameMax`; then `CAPABILITIES_PROBED = true`.
+   - research.md rows: G-AF-1 (`approot`), G-DL-1 and G-DL-8 (`delta`), G-UP-3 (`putIfMatch`), G-NM-5 (`caseInsensitive`), G-NM-6 (`nameLength`), G-AF-5 (`patchIfMatch`, `deleteIfMatch` and `delta`), G-QT-1 (`quota`), and O-API-2 (`largeFile`).
+   - Narrow `TRANSFER_HOST_SUFFIXES` to the observed `uploadHost` and `downloadHost` suffixes. (Done in 0.3.6 with a deliberate deviation: three unobserved OneDrive content suffixes stay as failover; see **Results applied at M3 close**.)
+   - Record the `hashVectors` for M4.
+
+**Tests added:**
+- `test/retry.test.ts`: Retry-After as seconds and as an HTTP date, the clamp, the global pause (with a manual clock), backoff, jitter, the 60 s cap, the 6-attempt cap, network errors, non-network errors not retried, every non-retryable status, the budget, and `resetBudget`.
+- `test/validate.test.ts`: hostile names, ids (dot-only included), sizes, tags (control characters included) and hashes; deleted-item leniency; the transfer-URL allowlist (Graph host, look-alikes, userinfo, port); delta, children, session, status and quota shapes; the 32 MiB cap; `checkName`.
+- `test/graph.test.ts`:
+  - `getAppRoot` and its `pathPrefix` checks;
+  - the three delta forms, paging, the page cap, duplicates, untrusted links, and 410 and `resync*` → `ResyncRequired`;
+  - `listChildren`, `getItem` and `getChildByName`;
+  - per-segment encoding of `#`, `%`, `?`, space, emoji, NFD and `'()`;
+  - `uploadNew`, `uploadReplace`, `move`, `delete` and `createFolder`: If-Match, `conflictBehavior=fail`, 409 and 412;
+  - `download`: no auth, length check, untrusted host, never GET Graph `/content`;
+  - quota, throttling and redaction in the log, and `sendRaw`;
+  - the transport split, and the If-Match header-injection guard.
+- `test/upload-session.test.ts`: fragment ranges (12 MiB = 10 + 2), `Content-Range`, 320 KiB alignment, new and replace sessions, If-Match, 202/201/404/416, cancel, and untrusted upload URLs.
+- `test/errors.test.ts`, `test/logger.test.ts`, `test/probe.test.ts`: full probe against the fake; no names, URLs or tokens in the JSON; unsupported forms; leftovers; a failing step still cleans up; approot failure; cleanup failure; a non-folder at the probe name.
+- `test/http.test.ts` and `test/auth.test.ts` additions: 401 → invalidate and resend once; `invalidateAccessToken`.
+- `test/fakes/fake-graph.ts` (HTTP-level OneDrive fake) and `test/graph-setup.ts`.
+
+**Deviations from this milestone's text** (recorded in design.md §2 layout, §5.2, §6.1, §6.3, §8, §9 and §10, and in commit messages):
+- **Probe location.** The probe logic is `src/remote/probe.ts`. `src/platform/diagnostics.ts` only registers the command, and `src/ui/diagnostics-modal.ts` shows the JSON. The R-ENG-4 lint rule allows `.uploadNew(`, `.putFragment(` and `.download(` calls only in `src/remote/**` and `remote-content.ts`, and this way the probe is unit tested.
+- **No `graph-types.ts`.** The guards in `validate.ts` read raw JSON as `unknown` directly, so a separate raw-types file would have been unused.
+- **401 handling.** "One refresh then retry once" lives in `AuthorizingTransport`, through a new `AuthClient.invalidateAccessToken(token)`. `ports.ts` is unchanged.
+- **Helpers outside RemotePort.** `GraphClient.deltaAll` (paging helper for M6) and the `CHILDREN_WALK_LINK` sentinel for the fallback. `GraphClient.sendRaw` sends Graph-only requests for the probe.
+- **Stricter validation than design §8.** Names `.` and `..` and dot-only ids are rejected. eTag, cTag and If-Match must be printable ASCII. The approot path is validated per segment.
+- **Probe 8** compares downloaded bytes with uploaded bytes, because QuickXorHash lands in M4. It records OneDrive's hashes of deterministic probe files (`hashVectors`) as M4 test vectors.
+- **Transport split.** Transfers use a bare `transferTransport` (security review).
+- **Version 0.3.0**, so the owner can tag a BRAT pre-release for the iPad probe (the M2 pattern).
+
+**Security review** (`security-reviewer` agent; base: the M2 close commit 643cc29, since `origin/main` isn't fetched in the container):
+- No high findings.
+- Fixed, medium:
+  - Transfer URLs on `graph.microsoft.com` passed the `.microsoft.com` allowlist and went through the authorizing transport, so a tampered `uploadUrl` or `downloadUrl` could make authorized, unconditional Graph calls. Now the Graph host is refused, and transfers use a transport with no auth decorator.
+  - RetryPolicy retried any exception, including `AuthError` from the refresh, and logged it as `network`. Now only `NetworkError` is retried.
+- Fixed, low:
+  - Dot-only ids could climb out of `/items/` in a URL.
+  - The decoded approot path was only partly checked.
+  - If-Match blocked only CR and LF.
+  - The retry budget was never reset (now reset per probe; M6 resets it per run).
+- Fixed, info: the probe no longer deletes a non-folder at `.mdvaultsync-probe`, and the probe header comment now says the JSON includes the App Folder name and parent path.
+- Re-review of fix commit 97b9dec: every finding above is confirmed resolved, with no high or medium findings.
+  - Fixed, low: eTag and cTag from Graph are now required to be printable ASCII at parse time, so no path (the probe, or state M6 reads back) can forward a CR/LF eTag into a header.
+
+- Review of the 0.3.1 fix (87d5e67, `security-reviewer`): no high or medium findings. Its two low findings are requirements for later milestones, because nothing builds a local path from a remote name yet:
+  - **M4 must** run every remote-derived name (now up to 400 characters) through `validateSegment`. That means control characters, trailing dot or space, reserved names, and the 255 limit (design §7 step 3). The hostile-name tests must include 256–400-character names (R-PATH-3, R-PATH-4, T-T1).
+  - **M5 must** test that a skipped remote item (a name over 255, or any other skip) never produces a local or remote delete, and that it counts as a child for the folder-delete rule R-DEL-3 (T-D1).
+  - Info, fixed: the test title that still mentioned `fileSize`. Info, accepted: the probe's "none" session body relies on Graph's documented default `fail`. If probe v2 shows only "none" works, check that default before M6 depends on it.
+
+**Optional for the owner** (not fixed, no security or requirement impact):
+- ~~**For M6:** the `.microsoft.com` transfer suffix is still broad.~~ Resolved in 0.3.6: the list was narrowed at M3 close (see **Results applied at M3 close**).
+- **For M6:** downloads are length-checked only after `requestUrl` has buffered the whole body. The executor must skip items over the size cap before calling `download` (D-12, T-D6).
+- **For M6:** `GraphClientOptions.transferTransport` falls back to `transport` when omitted, which only tests do. It is safe either way, because the Graph host is refused and `AuthorizingTransport` strips Authorization from non-Graph hosts. It could be made required.
+- Review of 0.3.2 (ec47424, `security-reviewer`): no high or medium findings. Fixed, low: hostnames in the probe output are capped at 253 characters, and `NAME_LIMIT` now derives from `NAME_MAX`. Open, low (optional, for M6): `getItemWithUrl` returns the unchecked `downloadUrl` as a plain string. It is private and its only fetching caller (`download`) checks it first; a branded `UncheckedUrl` type would make that structural. Info for M6: when the executor starts using `PUT_HONORS_IF_MATCH`, keep the upload-session path as the fallback, and make sure a stale replace still surfaces as 412.
+- Review of 0.3.3 (4103019, `security-reviewer`): no high or medium findings. The new suffix matches only real subdomains of a Microsoft-registered zone, and the upload host never gets the token. Fixed, low: a stale design §8 sentence and a test title. Closed by decision at M3 close: the exact-host list was rejected, and three OneDrive content suffixes were kept as failover. See **Results applied at M3 close** for the reasons.
+- Review of 0.3.4 (b32dccb, `security-reviewer`): no high or medium findings. It confirmed that no request goes to an unchecked download URL, that the probe output holds only presence, type, length and hostname, and that `getItem` returns only validated fields. Fixed, low: `InvalidResponse.reason` is a closed union type, so the compiler rejects data as a reason. Fixed, info: a test for `download-url-invalid`.
+- Review of 0.3.5 (d0484ff, `security-reviewer`): no high or medium findings. It confirmed the unselected item read still goes through the 32 MiB cap, `parseDriveItem` and the download-URL checks before any request, and that no Authorization reaches the download host. Info: the full response also carries `createdBy`/`lastModifiedBy`; these stay in memory, are never logged, and are dropped after `download()`. Fixed, info: the new test also asserts no Authorization on the download request.
+- **Final review at M3 close** (a17d4cd, `security-reviewer`, M3 `src/` diff 643cc29..a17d4cd plus the close commit): no high or medium findings. It confirmed that every transfer request passes `checkTransferUrl`, that the narrowed list accepts every observed host (and the test fakes' hosts), and that no token reaches a transfer host. Fixed, low: four stale doc lines (this line, the two open allowlist items below, manual-check step 4, and research.md O-API-2). Info, carried forward:
+  - **M8:** `requestUrl` follows redirects from an allowlisted transfer host without re-checking the target (O-API-2). No token can go along, because the transport is bare. Download bytes are length-checked now and hash-checked in M6 (T-T4). Note it in the M8 hardening review.
+  - **M6:** skip items over the size cap before `download()`; the length check runs after buffering (T-D6).
+  - ~~**Optional for the owner:** the 0.3.6 allowlist was unit-tested but not run live.~~ **Confirmed live** (Ubuntu, 0.3.6, `startedAt` 2026-10-12T06:48:42Z):
+    - `errors: 0`, `largeFile.ok: true`, `bytesMatch: true`, `downloadHostTrusted: true`;
+    - upload 8.3 s and download 6.1 s via `my.microsoftpersonalcontent.com`;
+    - every other answer matches the 0.3.5 runs.
+    - `leftoverRemoved: true`: an earlier interrupted run had left `.mdvaultsync-probe` behind, and the probe removed it as designed. That exercised the leftover path live.
+    - **iPad, 0.3.6** (`startedAt` 2026-10-12T06:51:28Z): also `errors: 0`, `largeFile.ok: true`, `bytesMatch: true`, `downloadHostTrusted: true`, with upload 8.0 s and download 3.5 s via `my.microsoftpersonalcontent.com`; every other answer matches. The narrowed allowlist is confirmed on both devices.
+  - The iPad record shows only the fields that differ from Ubuntu, and responsiveness wasn't reported. Both are stated openly above.
+- When the upload URL is off the allowlist, the probe leaves that server-side upload session uncancelled (cancelling would mean contacting the unlisted host). OneDrive expires it [G-UP-9].
+- The probe leaves its test files in the OneDrive recycle bin (about 12 MiB, which counts toward quota [G-DEL-2]) until the user empties it.
+- The command's display name is "Run OneDrive capability probe", not design §10's "Run Graph capability probe", because the obsidianmd sentence-case rule flags "Graph".
 
 ---
 
@@ -669,11 +984,11 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-AUTH-1…8 | M2 | ☑ (M2, 2026-10-12; R-AUTH-3 withdrawn. R-AUTH-7 token clear verified on Ubuntu; clearing real sync state is verified with the M6 StateStore) |
 | R-SCOPE-1…4 | M4, M5, M7 | ☐ |
 | R-TRIG-1…4 | M6 (lock), M7 | ☐ |
-| R-CD-1 | M3, M5 | ☐ |
+| R-CD-1 | M3, M5 | ☐ (M3 part done 2026-10-12: delta with paging to deltaLink; probe chose `items-id` on both devices) |
 | R-CD-2 | M5, M7 | ☐ |
 | R-CD-3, R-CD-4 | M4, M5 | ☐ |
 | R-ORDER | M6 | ☐ |
-| R-CC-1, R-CC-2 | M3, M6 | ☐ |
+| R-CC-1, R-CC-2 | M3, M6 | ☐ (M3 part done 2026-10-12: If-Match on replace, move, delete and replace sessions; conflictBehavior=fail on new files and folders; 412 → GraphError) |
 | R-CONF-1…4 | M4, M5, M6, M7 | ☐ |
 | R-DEL-1…3 | M5, M6 | ☐ |
 | R-MOVE-1 | M5, M6 | ☐ |
@@ -681,13 +996,13 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-GUARD-1 | M5, M7 | ☐ |
 | R-PATH-1…4 | M4, M6 | ☐ |
 | R-IO-1, R-IO-2 | M6 | ☐ |
-| R-NET-1 | M2, M3 | ☐ (M2 part done 2026-10-12: all HTTP through the requestUrl transport; M3 adds Graph) |
-| R-RES-1 | M3 | ☐ |
-| R-RES-2, R-RES-3 | M3, M6 | ☐ |
+| R-NET-1 | M2, M3 | ☑ (M2 and M3, 2026-10-12: auth and Graph go only through the requestUrl transport; lint and the CI script enforce it) |
+| R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested) |
+| R-RES-2, R-RES-3 | M3, M6 | ☐ (M3 part done 2026-10-12: 10 MiB upload-session primitives, status and 404 handling; a 12 MiB two-fragment round trip passed on both devices; persistence and resume are M6) |
 | R-UI-1…3 | M2, M7 | ☐ (M2 part done 2026-10-12: Account section) |
 | R-SEC-1, R-SEC-2 | M2 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 M2 part (SecretStorage observed on both devices, including a locked GNOME keyring) — README residual-risk text is owed in M9 |
-| R-SEC-3 | M3, M8 | ☐ |
-| R-SEC-4 | M3, M4 | ☐ |
+| R-SEC-3 | M3, M8 | ☐ (M3 part done 2026-10-12: typed redacting logger, unit tested; the sentinel test is M8) |
+| R-SEC-4 | M3, M4 | ☐ (M3 part done 2026-10-12: Graph JSON, ids, names, sizes, tags, hashes, links and transfer URLs validated; paths are M4) |
 | R-SEC-5 | M1, M9 | ☐ (M1 part done: lockfile, Dependabot, CodeQL, audit, SHA pins, and secret scanning and push protection verified 2026-10-12; release attestation is M9) |
 | R-SEC-6 | M1 | ☑ (M1, 2026-10-12) |
 | R-ENG-1…5 | M1 onward | ☐ |

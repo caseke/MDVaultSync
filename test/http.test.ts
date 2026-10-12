@@ -75,3 +75,52 @@ test("an unparseable URL error carries no URL", async () => {
 	assert.ok(e instanceof Error);
 	assert.ok(!`${String(e)} ${JSON.stringify(e)} ${e.stack ?? ""}`.includes("SECRET-PATH"));
 });
+
+test("a Graph 401 invalidates the token it used and resends once with a fresh one", async () => {
+	const inner = new FakeHttp();
+	const issued = ["AT-OLD", "AT-NEW"];
+	const invalidated: string[] = [];
+	const t = new AuthorizingTransport(inner, {
+		getAccessToken: () => Promise.resolve(issued[0] as string),
+		invalidateAccessToken: (tok: string) => {
+			invalidated.push(tok);
+			issued.shift();
+		},
+	});
+	inner.enqueue(() => ({ status: 401, headers: {}, body: new ArrayBuffer(0) }));
+	inner.enqueue(() => ({ status: 200, headers: {}, body: new ArrayBuffer(0) }));
+	const res = await t.send({ url: "https://graph.microsoft.com/v1.0/me/drive", method: "GET" });
+	assert.equal(res.status, 200);
+	assert.deepEqual(invalidated, ["AT-OLD"]);
+	assert.equal(inner.requests[1]?.headers?.["Authorization"], "Bearer AT-NEW");
+});
+
+test("a second Graph 401 is returned, not retried again", async () => {
+	const inner = new FakeHttp();
+	let n = 0;
+	const t = new AuthorizingTransport(inner, { getAccessToken: () => Promise.resolve("AT"), invalidateAccessToken: () => n++ });
+	inner.enqueue(() => ({ status: 401, headers: {}, body: new ArrayBuffer(0) }));
+	inner.enqueue(() => ({ status: 401, headers: {}, body: new ArrayBuffer(0) }));
+	assert.equal((await t.send({ url: "https://graph.microsoft.com/v1.0/me", method: "GET" })).status, 401);
+	assert.equal(inner.requests.length, 2);
+	assert.equal(n, 1);
+});
+
+test("a 401 from a non-Graph host is returned as is, with no token work", async () => {
+	const { inner, t, calls } = setup();
+	let n = 0;
+	const t2 = new AuthorizingTransport(inner, { getAccessToken: () => Promise.resolve("AT"), invalidateAccessToken: () => n++ });
+	inner.enqueue(() => ({ status: 401, headers: {}, body: new ArrayBuffer(0) }));
+	assert.equal((await t2.send({ url: "https://api.onedrive.com/up/1", method: "PUT" })).status, 401);
+	assert.equal(inner.requests.length, 1);
+	assert.equal(n, 0);
+	assert.equal(calls(), 0);
+	void t;
+});
+
+test("without invalidateAccessToken a Graph 401 is returned as is", async () => {
+	const { inner, t } = setup();
+	inner.enqueue(() => ({ status: 401, headers: {}, body: new ArrayBuffer(0) }));
+	assert.equal((await t.send({ url: "https://graph.microsoft.com/v1.0/me", method: "GET" })).status, 401);
+	assert.equal(inner.requests.length, 1);
+});
