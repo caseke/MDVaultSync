@@ -1,3 +1,6 @@
-/* MDVaultSync styles. UI classes arrive in M7 (docs/plan.md). */
-.mdvaultsync-placeholder {
+/* MDVaultSync styles. More UI classes arrive in M7 (docs/plan.md). */
+
+/* Standing warning in the Account section when the token is in data.json (D-5). */
+.mdvaultsync-warning {
+	color: var(--text-error);
 }

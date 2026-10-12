@@ -1,0 +1,312 @@
+// OAuth 2.0 authorization code + PKCE against the /consumers endpoints, as a public client (design §4, D-4).
+import type { AccessTokenProvider, Clock, HttpResponse, HttpTransport, TokenStore } from "../core/ports.ts";
+import { isValidClientId } from "../settings.ts";
+import { challengeFromVerifier, createState, createVerifier, timingSafeEqual } from "./pkce.ts";
+import { InvalidResponse, parseTokenError, parseTokenResponse, sanitizeErrorCode, type TokenResponse } from "./validate.ts";
+
+/** Least privilege: the App Folder only, plus a refresh token (R-AUTH-4, T-E2) [I-REG-5]. */
+export const SCOPE = "Files.ReadWrite.AppFolder offline_access";
+/** Personal Microsoft accounts only (R-ENV-1) [I-AC-1]. */
+export const AUTHORITY = "https://login.microsoftonline.com/consumers/oauth2/v2.0";
+export const TOKEN_URL = `${AUTHORITY}/token`;
+/** Primary redirect, registered without a query string [I-RU-2]. */
+export const REDIRECT_PROTOCOL = "obsidian://mdvaultsync-auth";
+/** Paste fallback redirect (R-AUTH-3) [I-RU-4]. */
+export const REDIRECT_NATIVE = "https://login.microsoftonline.com/common/oauth2/nativeclient";
+export type Redirect = typeof REDIRECT_PROTOCOL | typeof REDIRECT_NATIVE;
+
+/** A pending sign-in expires after 10 minutes (R-SEC-1). */
+export const PENDING_TTL_MS = 10 * 60_000;
+/** Refresh when less than this is left on the access token (design §4). */
+export const REFRESH_MARGIN_MS = 5 * 60_000;
+
+export const AUTH_ERROR_CODES = [
+	"no-client-id",
+	"no-pending",
+	"expired",
+	"redirect-mismatch",
+	"state-mismatch",
+	"provider-error",
+	"missing-code",
+	"bad-paste-url",
+	"invalid-response",
+	"token-request-failed",
+	"network",
+	"sign-in-required",
+	"signed-out",
+] as const;
+export type AuthErrorCode = (typeof AUTH_ERROR_CODES)[number];
+
+/** Carries a fixed code and, for provider errors, a sanitized OAuth code. Never URLs, params or descriptions. */
+export class AuthError extends Error {
+	readonly code: AuthErrorCode;
+	readonly providerCode: string | undefined;
+	constructor(code: AuthErrorCode, providerCode?: string) {
+		super(code);
+		this.name = "AuthError";
+		this.code = code;
+		this.providerCode = providerCode;
+	}
+}
+
+export type AuthStatus = "signed-out" | "signed-in" | "sign-in-required";
+
+export interface AuthClientOptions {
+	transport: HttpTransport;
+	tokens: TokenStore;
+	clock: Clock;
+	getClientId: () => string;
+}
+
+interface PendingSignIn {
+	verifier: string;
+	state: string;
+	redirect: Redirect;
+	createdAt: number;
+}
+
+export class AuthClient implements AccessTokenProvider {
+	private readonly transport: HttpTransport;
+	private readonly tokens: TokenStore;
+	private readonly clock: Clock;
+	private readonly getClientId: () => string;
+
+	/** In memory only, never persisted (design §4 step 1). */
+	private pending: PendingSignIn | null = null;
+	/** In memory only (R-AUTH-5). */
+	private access: { token: string; expiresAt: number } | null = null;
+	private refreshing: Promise<string> | null = null;
+	/** Bumped by signOut; work started under an older epoch must not store tokens. */
+	private epoch = 0;
+	private signInRequired = false;
+	private lastStatus: AuthStatus;
+	private readonly listeners = new Set<(s: AuthStatus) => void>();
+
+	constructor(opts: AuthClientOptions) {
+		this.transport = opts.transport;
+		this.tokens = opts.tokens;
+		this.clock = opts.clock;
+		const getClientId = opts.getClientId;
+		this.getClientId = () => getClientId();
+		this.lastStatus = this.status;
+	}
+
+	get status(): AuthStatus {
+		if (this.signInRequired) return "sign-in-required";
+		return this.tokens.get() ? "signed-in" : "signed-out";
+	}
+
+	/** Subscribe to status changes. Returns an unsubscribe function. */
+	onStatusChange(cb: (s: AuthStatus) => void): () => void {
+		this.listeners.add(cb);
+		return () => this.listeners.delete(cb);
+	}
+
+	/**
+	 * Starts a sign-in and returns the URL to open in the system browser [I-BR-1]. Async because the S256
+	 * digest is. Replaces any earlier pending sign-in.
+	 */
+	async buildAuthorizeUrl(redirect: Redirect): Promise<string> {
+		const clientId = this.requireClientId();
+		const epoch = this.epoch;
+		const verifier = createVerifier();
+		const state = createState();
+		const challenge = await challengeFromVerifier(verifier);
+		if (epoch !== this.epoch) throw new AuthError("signed-out");
+		this.pending = { verifier, state, redirect, createdAt: this.clock.now() };
+		const params: [string, string][] = [
+			["client_id", clientId],
+			["response_type", "code"],
+			["redirect_uri", redirect],
+			// The code must arrive in the query: Obsidian may drop the fragment [O-API-3].
+			["response_mode", "query"],
+			["scope", SCOPE],
+			["code_challenge", challenge],
+			["code_challenge_method", "S256"],
+			["state", state],
+			["prompt", "select_account"],
+		];
+		return `${AUTHORITY}/authorize?${params.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&")}`;
+	}
+
+	/**
+	 * Validates a callback and redeems its code (design §4 step 3, T-S1). `via` is the channel it arrived on;
+	 * it must match the redirect the pending sign-in used.
+	 */
+	async handleCallback(params: Readonly<Record<string, string>>, via: "protocol" | "paste"): Promise<void> {
+		const p = this.pending;
+		if (!p) throw new AuthError("no-pending");
+		if (this.clock.now() - p.createdAt > PENDING_TTL_MS) {
+			this.pending = null;
+			throw new AuthError("expired");
+		}
+		if (p.redirect !== (via === "protocol" ? REDIRECT_PROTOCOL : REDIRECT_NATIVE)) {
+			throw new AuthError("redirect-mismatch");
+		}
+		const state = params["state"];
+		// A wrong state leaves the pending sign-in alone: a forged callback can't cancel the real one.
+		if (typeof state !== "string" || !timingSafeEqual(state, p.state)) throw new AuthError("state-mismatch");
+		// Consume the state before any await, so it is single-use even for racing callbacks.
+		this.pending = null;
+		if (params["error"] !== undefined) throw new AuthError("provider-error", sanitizeErrorCode(params["error"]));
+		const code = params["code"];
+		if (typeof code !== "string" || code.length === 0 || code.length > 8192) throw new AuthError("missing-code");
+		await this.redeemCode(code, p.verifier, p.redirect);
+	}
+
+	/** Extracts the query of a pasted nativeclient URL. Anything else is refused (T-S4). */
+	parsePastedUrl(input: string): Record<string, string> {
+		let u: URL;
+		try {
+			u = new URL(input.trim());
+		} catch {
+			throw new AuthError("bad-paste-url");
+		}
+		const native = new URL(REDIRECT_NATIVE);
+		if (
+			u.protocol !== "https:" ||
+			u.origin !== native.origin ||
+			u.pathname !== native.pathname ||
+			u.username !== "" ||
+			u.password !== ""
+		) {
+			throw new AuthError("bad-paste-url");
+		}
+		return Object.fromEntries(u.searchParams);
+	}
+
+	/** Exchanges an authorization code for tokens (design §4 steps 4–5). */
+	async redeemCode(code: string, verifier: string, redirect: Redirect): Promise<void> {
+		const epoch = this.epoch;
+		const clientId = this.requireClientId();
+		const res = await this.postToken({
+			client_id: clientId,
+			grant_type: "authorization_code",
+			code,
+			redirect_uri: redirect,
+			code_verifier: verifier,
+			scope: SCOPE,
+		});
+		if (epoch !== this.epoch) throw new AuthError("signed-out");
+		if (!isSuccess(res)) throw new AuthError("token-request-failed", parseTokenError(res.body));
+		const tok = parseOrThrow(res.body, true);
+		await this.storeRefreshToken(tok, epoch);
+		this.signInRequired = false;
+		this.cacheAccess(tok);
+		this.notify();
+	}
+
+	/** Cached access token, or a single-flight refresh (R-AUTH-6). */
+	getAccessToken(): Promise<string> {
+		if (this.access && this.access.expiresAt - this.clock.now() > REFRESH_MARGIN_MS) {
+			return Promise.resolve(this.access.token);
+		}
+		if (!this.refreshing) {
+			const p: Promise<string> = this.refresh().finally(() => {
+				if (this.refreshing === p) this.refreshing = null;
+			});
+			this.refreshing = p;
+		}
+		return this.refreshing;
+	}
+
+	/** Clears tokens and any pending sign-in. Sync state is cleared by the caller (design §4 sign-out). */
+	async signOut(): Promise<void> {
+		this.epoch++;
+		this.pending = null;
+		this.access = null;
+		this.refreshing = null;
+		this.signInRequired = false;
+		await this.tokens.clear();
+		this.notify();
+	}
+
+	private async refresh(): Promise<string> {
+		const epoch = this.epoch;
+		const rt = this.tokens.get();
+		if (!rt) throw new AuthError(this.signInRequired ? "sign-in-required" : "signed-out");
+		const clientId = this.requireClientId();
+		const res = await this.postToken({
+			client_id: clientId,
+			grant_type: "refresh_token",
+			refresh_token: rt,
+			scope: SCOPE,
+		});
+		if (epoch !== this.epoch) throw new AuthError("signed-out");
+		if (!isSuccess(res)) {
+			const code = parseTokenError(res.body);
+			if (code === "invalid_grant" || code === "interaction_required") {
+				// The grant is dead: forget it and ask the user to sign in again. Local state is kept.
+				this.access = null;
+				this.signInRequired = true;
+				await this.tokens.clear();
+				this.notify();
+				throw new AuthError("sign-in-required", code);
+			}
+			throw new AuthError("token-request-failed", code);
+		}
+		const tok = parseOrThrow(res.body, false);
+		// The rotated refresh token replaces the stored one before the access token is used [I-TL-3].
+		await this.storeRefreshToken(tok, epoch);
+		this.cacheAccess(tok);
+		this.notify();
+		return tok.accessToken;
+	}
+
+	private async storeRefreshToken(tok: TokenResponse, epoch: number): Promise<void> {
+		if (tok.refreshToken === null) return;
+		await this.tokens.set(tok.refreshToken);
+		if (epoch !== this.epoch) {
+			// Signed out while the write was in flight: undo it.
+			await this.tokens.clear();
+			throw new AuthError("signed-out");
+		}
+	}
+
+	private cacheAccess(tok: TokenResponse): void {
+		this.access = { token: tok.accessToken, expiresAt: this.clock.now() + tok.expiresInSec * 1000 };
+	}
+
+	/** Form POST to the token endpoint. No Origin header and no Authorization [I-AC-5], [I-AC-3]. */
+	private async postToken(form: Record<string, string>): Promise<HttpResponse> {
+		const body = Object.entries(form)
+			.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+			.join("&");
+		try {
+			return await this.transport.send({
+				url: TOKEN_URL,
+				method: "POST",
+				headers: { "Content-Type": "application/x-www-form-urlencoded" },
+				body,
+			});
+		} catch {
+			throw new AuthError("network");
+		}
+	}
+
+	private requireClientId(): string {
+		const id = this.getClientId();
+		if (!isValidClientId(id)) throw new AuthError("no-client-id");
+		return id;
+	}
+
+	private notify(): void {
+		const s = this.status;
+		if (s === this.lastStatus) return;
+		this.lastStatus = s;
+		for (const cb of this.listeners) cb(s);
+	}
+}
+
+function isSuccess(res: HttpResponse): boolean {
+	return res.status >= 200 && res.status < 300;
+}
+
+function parseOrThrow(body: ArrayBuffer, requireRefreshToken: boolean): TokenResponse {
+	try {
+		return parseTokenResponse(body, requireRefreshToken);
+	} catch (e) {
+		if (e instanceof InvalidResponse) throw new AuthError("invalid-response");
+		throw e;
+	}
+}

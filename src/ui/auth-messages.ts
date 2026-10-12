@@ -1,0 +1,24 @@
+// User-facing text for sign-in errors. Pure, so a test can check every code has a message.
+import type { AuthErrorCode } from "../remote/auth.ts";
+
+export const AUTH_ERROR_MESSAGES: Record<AuthErrorCode, string> = {
+	"no-client-id": "Enter a valid application (client) ID in the MDVaultSync settings first.",
+	"no-pending": "Sign-in link ignored: no sign-in is in progress. Start again from the MDVaultSync settings.",
+	expired: "The sign-in took longer than 10 minutes. Start again.",
+	"redirect-mismatch": "That sign-in result doesn't match the sign-in method you started. Start again.",
+	"state-mismatch": "Sign-in link ignored: it doesn't belong to the sign-in in progress.",
+	"provider-error": "Microsoft didn't complete the sign-in.",
+	"missing-code": "Microsoft's response had no authorization code. Start again.",
+	"bad-paste-url": "That isn't the address of Microsoft's sign-in result page. Copy the full address bar contents.",
+	"invalid-response": "Microsoft's token response was not valid. Try again.",
+	"token-request-failed": "Microsoft refused the token request.",
+	network: "Couldn't reach Microsoft. Check your connection and try again.",
+	"sign-in-required": "OneDrive access has expired or was revoked. Sign in again in the MDVaultSync settings.",
+	"signed-out": "You're signed out of OneDrive.",
+};
+
+/** Message plus the sanitized provider code, which is safe to show (it matches /^[a-z0-9_]+$/). */
+export function authErrorText(code: AuthErrorCode, providerCode: string | undefined): string {
+	const base = AUTH_ERROR_MESSAGES[code];
+	return providerCode ? `${base} (${providerCode})` : base;
+}
