@@ -565,10 +565,35 @@ The upload host is `my.microsoftpersonalcontent.com`. WHOIS (2026-10-12) shows t
 - 0.3.5: `download()` reads the item with no `$select`, and `ITEM_SELECT` no longer asks for the URL. FakeGraph now behaves this way by default, so every download test uses the real server shape.
 - Upload took 7.1 s this run, 13.6 s in the previous one (Ubuntu).
 
-**Probe v4 on 0.3.5**, needed from Ubuntu, then the iPad. Pass: `largeFile.ok` and `bytesMatch` are `true`. On the iPad, also note whether Obsidian stayed responsive.
+**Probe v4 on 0.3.5, Ubuntu, 2026-10-12: PASS** (owner; local build; every field except `largeFile`, `durationMs` and `errors` equals v4):
 ```
-Ubuntu (0.3.5): (paste here)
-iPad   (0.3.5): (paste here)
+"largeFile": {
+  "ok": true, "size": 12582912, "fragments": 2,
+  "createAttempts": [
+    { "variant": "conflictBehavior+fileSize", "status": 400, "code": "invalidRequest" },
+    { "variant": "conflictBehavior", "status": 200 }
+  ],
+  "uploadHost": "my.microsoftpersonalcontent.com", "uploadMs": 5815,
+  "downloadDiag": {
+    "select": { "status": 200, "urlPresent": false },
+    "plain":  { "status": 200, "urlPresent": true, "urlType": "string", "urlLength": 1087,
+                "host": "my.microsoftpersonalcontent.com" }
+  },
+  "downloadHost": "my.microsoftpersonalcontent.com", "downloadHostTrusted": true,
+  "downloadMs": 4278, "bytesMatch": true
+}
+"cleanup": { "ok": true }, "errors": 0   (durationMs 34235)
+```
+Every probe question is answered on Ubuntu. The 12 MiB round trip works through `my.microsoftpersonalcontent.com` (up 5.8 s, down 4.3 s), with identical bytes. The download URL comes from the unselected item read (the 0.3.5 fix). The four `hashVectors` (the v4 run carries all four) are final for M4.
+
+**iPad (0.3.5)**, the last M3 check (O-API-2, T-D6). Steps:
+1. Publish **only 0.3.5**: Releases → draft `0.3.5` → Publish release. It contains every fix. The 0.3.3 and 0.3.4 drafts aren't needed; BRAT never sees drafts [O-BRAT-1], so leave them or delete them.
+2. On the iPad: BRAT → **Check for updates to all beta plugins**. Confirm that Settings → Community plugins shows MDVaultSync 0.3.5.
+3. Command palette (swipe down on a note, or **Open command palette**) → **MDVaultSync: Run OneDrive capability probe**. Keep Obsidian in the foreground until the result appears.
+4. Pass: `largeFile.ok` and `bytesMatch` are `true`, and `errors` is 0. Record whether Obsidian stayed responsive (you could scroll or open a note while it ran), then paste the JSON below.
+```
+iPad (0.3.5): (paste here)
+Responsive during the run: (yes / no / notes)
 ```
 
 **Manual checks** (owner; use a throwaway test vault, never the real one)
