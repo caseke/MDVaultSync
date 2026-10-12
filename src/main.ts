@@ -6,6 +6,7 @@ import { Diagnostics, platformName } from "./platform/diagnostics.ts";
 import { PluginStateStore } from "./platform/plugin-state-store.ts";
 import { probeRename } from "./platform/rename-probe.ts";
 import { clearSession } from "./platform/sign-out.ts";
+import { isLeftoverInstall } from "./platform/leftover-install.ts";
 import { createRequestUrlTransport } from "./platform/request-url-transport.ts";
 import { PluginTokenStore, TokenClearError } from "./platform/token-store.ts";
 import { AuthClient, AuthError } from "./remote/auth.ts";
@@ -35,8 +36,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 	private pluginDir = "";
 
 	override async onload(): Promise<void> {
-		const raw: unknown = await this.loadData();
-		this.data = parseData(raw);
+		this.data = parseData(await this.loadData());
 		const { configDir } = this.app.vault;
 		this.pluginDir = normalizePath(this.manifest.dir ?? `${configDir}/plugins/${this.manifest.id}`);
 		this.stateStore = new PluginStateStore({
@@ -50,7 +50,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 			save: () => this.saveData(this.data),
 		});
 		// Before AuthClient reads the token: a sign-in left by an uninstalled copy is removed (R-AUTH-9).
-		await this.clearLeftoverSignIn(raw !== null && raw !== undefined);
+		await this.clearLeftoverSignIn(!(await isLeftoverInstall(this.app.vault.adapter, this.pluginDir)));
 		const transport = createRequestUrlTransport((p) => requestUrl(p));
 		const clock: Clock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => window.setTimeout(r, ms)) };
 		this.auth = new AuthClient({
@@ -147,16 +147,21 @@ export default class MDVaultSyncPlugin extends Plugin {
 	}
 
 	/**
-	 * Obsidian has no uninstall hook [O-API-17], and uninstalling leaves SecretStorage alone. A refresh token with no
-	 * data.json is therefore left over from a removed copy: clear it, and say where to revoke the grant itself,
-	 * which a public client can't do [I-TL-4] (R-AUTH-9).
+	 * Obsidian has no uninstall hook [O-API-19], and uninstalling leaves SecretStorage alone. A refresh token in an
+	 * empty plugin folder is therefore left over from a removed copy: clear it, and say where to revoke the grant
+	 * itself, which a public client can't do [I-TL-4] (R-AUTH-9).
 	 */
 	private async clearLeftoverSignIn(hasPluginData: boolean): Promise<void> {
 		try {
 			if (!(await this.tokenStore.clearOrphan(hasPluginData))) return;
 		} catch (e) {
 			console.error(`MDVaultSync: could not clear a leftover sign-in (${e instanceof Error ? e.name : "unknown"})`);
-			new Notice("A OneDrive sign-in from an earlier install of this plugin couldn't be removed. Sign out in the plugin settings.", 0);
+			const failed = createFragment((f) => {
+				f.appendText("A OneDrive sign-in from an earlier install of this plugin couldn't be removed. Sign out in the plugin settings, or remove this app's access at ");
+				f.createEl("a", { text: APP_ACCESS_URL, href: APP_ACCESS_URL });
+				f.appendText(".");
+			});
+			new Notice(failed, 0);
 			return;
 		}
 		const msg = createFragment((f) => {

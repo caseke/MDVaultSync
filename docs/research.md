@@ -60,9 +60,9 @@ Status tags used below:
 | O-API-14 | `Platform` flags: `isDesktopApp`, `isMobileApp`, `isIosApp`, `isLinux` and others. | VERIFIED | obsidian.d.ts |
 | O-API-15 | `loadData` and `saveData` use `<configDir>/plugins/<id>/data.json`. `onExternalSettingsChange`, since 1.5.7, fires when that file changes on disk. | VERIFIED | obsidian.d.ts |
 | O-API-16 | `normalizePath` also applies Unicode NFC normalization. | VERIFIED | obsidian.d.ts |
-| O-API-17 | `Plugin` has no uninstall hook: its lifecycle methods are `onload`, `onunload` and `onUserEnable` (1.7.2). `onunload` also runs when the plugin is disabled and when the app quits, so it can't tell an uninstall apart. Uninstalling removes the plugin folder; SecretStorage is per vault [O-API-5], so a secret survives the uninstall. | VERIFIED (obsidian.d.ts 1.13.1); survival of the secret observed 2026-10-12 by the owner on Ubuntu (0.4.0: still signed in after uninstall and reinstall) | obsidian.d.ts |
 | O-API-17 | Node and Electron APIs are unavailable on mobile. Regex lookbehind needs iOS 16.4 or later. Mobile can be emulated on desktop with `app.emulateMobile(true)`. | VERIFIED | https://docs.obsidian.md/Plugins/Getting+started/Mobile+development |
 | O-API-18 | The npm `obsidian` package latest is 1.14.4. Declarative settings need 1.13.0. | VERIFIED | https://registry.npmjs.org/obsidian/latest ; https://docs.obsidian.md/Plugins/Guides/Migrate+to+declarative+settings |
+| O-API-19 | `Plugin` has no uninstall hook: its lifecycle methods are `onload`, `onunload` and `onUserEnable` (1.7.2). | VERIFIED (obsidian.d.ts 1.13.1) for the missing hook. `onunload` also running on disable and quit, and uninstall removing the plugin folder, are not in obsidian.d.ts: OBSERVED by behavior, not documented. That a SecretStorage secret survives an uninstall: OBSERVED 2026-10-12 by the owner on Ubuntu (0.4.0: still signed in after uninstall and reinstall). What `loadData()` returns for a corrupt or unreadable data.json is SILENT, so R-AUTH-9 decides from file existence (`adapter.exists`), not from `loadData()`. | obsidian.d.ts |
 
 ### Tooling
 | ID | Fact | Status | Source |

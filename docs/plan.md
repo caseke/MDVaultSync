@@ -895,7 +895,7 @@ $ npm audit --audit-level=high
 ---
 
 ## M6: Executor, engine, persistence, resume
-**Status:** awaiting-owner (2026-10-12). Everything the session can verify passes; the `adapter.rename` manual check below is outstanding on both devices. M7 may start: it doesn't depend on the result unless the fallback has to change.
+**Status:** awaiting-owner (2026-10-12). Everything the session can verify passes. Outstanding owner checks: the `adapter.rename` check on the iPad (Ubuntu passed), and the R-AUTH-9 reinstall check on both devices (0.4.1). M7 may start: it doesn't depend on the result unless the fallback has to change.
 
 **Goal.** Running a plan safely and resumably (design §5.5, §6).
 
@@ -936,7 +936,7 @@ $ npm audit --audit-level=high
   - **What the fields mean:** `renameOverExisting` is `replaced` (rename overwrites: writeAtomic is atomic on that device), `threw` or `kept-target` (rename refuses: writeAtomic uses the remove-then-rename fallback, which has a short crash window; see design §12). `fallbackWorks` must be `true` and `cleanedUp` must be `true` on both devices.
   - **Result, Ubuntu (2026-10-12, owner, Flatpak):** `{"renameOverExisting": "threw", "fallbackWorks": true, "cleanedUp": true, "platform": "linux", "pluginVersion": "0.4.0"}`. `adapter.rename` refuses to overwrite on Ubuntu, so writeAtomic uses the remove-then-rename fallback there; the fallback works. Matches the design (design §12, atomic.ts); no code change.
   - **Result, iPad:** (pending)
-- **Leftover sign-in after uninstall (R-AUTH-9, added 2026-10-12 from the owner's report).** On 0.4.1, on each device: sign in, uninstall the plugin, reinstall it (BRAT), and open settings. Expected: a notice says a leftover sign-in was removed, with the account-page link, and the account section shows signed out. A normal restart or a BRAT update must keep the sign-in.
+- **Leftover sign-in after uninstall (R-AUTH-9, added 2026-10-12 from the owner's report).** On 0.4.1, on each device: sign in, uninstall the plugin, reinstall it (BRAT), and open settings. Expected: a notice says a leftover sign-in was removed, with the account-page link, and the account section shows signed out. A normal restart or a BRAT update must keep the sign-in. Also: while signed in, replace data.json's content with `{not json` and restart: the sign-in must be kept (the file isn't overwritten by the check).
   - **Result, Ubuntu:** (pending)
   - **Result, iPad:** (pending)
 
@@ -1023,6 +1023,7 @@ Manual rename results: pending (see **Manual checks**).
 - Medium (process): this section and the verification output, now filled in; the manual check is pending.
 - Fixed, low: the size check before download was time-of-check/time-of-use (`download(id, expectedSize)`); the network-check exemptions now match whole lines; a stale pending copy path is reused only under the planner's checks; a 404 on replace is confirmed with `getItem` before it counts as a delete; a folder move's 412 retries only if the folder hasn't moved elsewhere; after sign-out the executor starts no new op and the state store serializes save and clear.
 - Fixed, info: `trash` and `removeEmptyFolder` re-check containment in ObsidianVault; a local move updates the eTag chain.
+- **R-AUTH-9 follow-up review** (`security-reviewer`, base 238937f): fixed, medium: the first version decided "uninstalled" from `loadData()` returning null, so a corrupt or unreadable data.json could have cleared a live sign-in and overwritten the file. It now checks on disk that the plugin folder holds neither data.json nor sync-state.json (`platform/leftover-install.ts`, tested with corrupt, empty, `null` and `{}` files; an `exists` error keeps the sign-in). Fixed, low: duplicate research ID (now O-API-19) and its overclaimed status; the failure notice now carries the account-page link; the Client ID is saved before it is assigned, so a sign-in can't exist without data.json; the M6 status line. The sync-state finding is moot: a folder with sync-state.json isn't a leftover. Carried to M9: the README uninstall advice.
 - Re-review of the fix diff (`security-reviewer`, base 4059c3f): all three code mediums and every fixed low and info confirmed resolved, no new high or medium, no regressions (network, auth header, logging, data-safety rules, interface sync). It found one new low, **fixed**: a reused pending copy path wasn't reserved before the next await, so a tampered state with two pending conflicts sharing a copy path could make one copy replace the other. The reuse branch now reserves the name at once (and checks the path first), and `parseSyncState` rejects pending conflicts that share a copy path or use another's original; both parser tests fail without the rule. Open, info (owner's call or later milestones): leftover hidden temp files after a `TargetRemoved` are never cleaned up (harmless, hidden files are never synced; M8 could sweep them); the planner still plans file and folder ops onto a folder/file clash key (reported as `type-clash` each run; optional skip above).
 
 **Notes for M7 and later** (carry-ins)
@@ -1031,6 +1032,7 @@ Manual rename results: pending (see **Manual checks**).
 - **Hooks:** `confirmPlan` and `confirmDeletes` resolve false on Cancel; the engine applies the 10-minute timeout itself. Folder deletes are in the `confirmDeletes` list (M5 note).
 - **Statuses:** `syncing` phases are `preflight`, `resume`, `pull`, `scan`, `exec`; a `partial` run (including `changed-during-sync` deferrals) sets `error` with the first code. Map `type-clash`, `changed-during-sync`, `hash-mismatch`, `too-large`, `conflict-name` and `path-too-long` to notice text (M8 table).
 - **Manual check (M7/M8):** a replace over 10 MiB from a real device must not end in a false conflict. Creating a replace session must not change the item's eTag on OneDrive personal; that was never observed (design §6.3). On the iPad, check that a downloaded file shows up in the vault without a restart (writes go through the adapter).
+- **M9 README (R-AUTH-9 review, info):** say to sign out before uninstalling, or to remove the app's access at the account page: until a reinstall, the refresh token stays in SecretStorage, where other plugins can read it (T-I1).
 - **M9 README:** persisted upload-session URLs in `sync-state.json` grant upload access until they expire; the config folder must not be synced by another tool (review, info).
 - Optional (owner): have the planner skip a key that is a folder on one side and a file on the other, so it is reported as a skip instead of a recurring `type-clash` error.
 
@@ -1189,7 +1191,7 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | Requirement | Milestone | Done |
 |---|---|---|
 | R-ENV-1…4 | M1, M2 | ☐ (M2 part done 2026-10-12: personal accounts only via /consumers, iPad and Ubuntu sign-in verified, minAppVersion 1.11.4) |
-| R-AUTH-9 | M6 (follow-up) | ☐ (2026-10-12: a token in SecretStorage with no data.json is cleared at load with a notice; unit tested. Owner check pending: uninstall, reinstall, expect the notice and a signed-out state) |
+| R-AUTH-9 | M6 (follow-up) | ☐ (2026-10-12: a token in SecretStorage is cleared at load, with a notice, only when the plugin folder holds neither data.json nor sync-state.json (checked on disk); unit tested. Owner check pending: uninstall, reinstall, expect the notice and a signed-out state) |
 | R-AUTH-1…8 | M2 | ☑ (M2, 2026-10-12; R-AUTH-3 withdrawn. R-AUTH-7 token clear verified on Ubuntu; clearing real sync state is verified with the M6 StateStore; M6 2026-10-12: sign-out clears sync-state.json through PluginStateStore and a running sync can't write it back; tested) |
 | R-SCOPE-1…4 | M4, M5, M7 | ☐ (M4 part done 2026-10-12: configDir, hidden and user-glob exclusion (R-SCOPE-2); `remoteToVaultPath` returns the skip reason for hidden or excluded remote paths (R-SCOPE-4 rules). M5 part done 2026-10-12: size cap skips `too-large` (R-SCOPE-3), excluded or hidden remote items are skipped and reported, never downloaded (R-SCOPE-4)) |
 | R-TRIG-1…4 | M6 (lock), M7 | ☐ (M6 part done 2026-10-12: single-flight lock with at most one rerun, R-TRIG-4, tested) |

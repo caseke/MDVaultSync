@@ -112,7 +112,7 @@ test("clear throws when SecretStorage can't overwrite the token, after removing 
 	assert.equal(store.get(), "RT");
 });
 
-// R-AUTH-9: Obsidian has no uninstall hook [O-API-17]. Uninstall deletes data.json but not SecretStorage, so a
+// R-AUTH-9: Obsidian has no uninstall hook [O-API-19]. Uninstall deletes data.json but not SecretStorage, so a
 // reinstall would find the old refresh token. A token with no plugin data is a leftover and is cleared at load.
 test("a token left by an uninstalled copy (no plugin data) is cleared at load", async () => {
 	const { secrets, store } = setup();
