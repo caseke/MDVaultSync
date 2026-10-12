@@ -85,18 +85,17 @@ export function parseTokenError(body: ArrayBuffer): string {
 
 /** Caps memory for a delta page; checked before parsing. */
 export const MAX_JSON_BODY = 32 * 1024 * 1024;
-/** Hosts that upload and download URLs may use (design §8). M3's probe records observed hosts to refine this. */
-export const TRANSFER_HOST_SUFFIXES: readonly string[] = [
-	".microsoft.com",
-	".live.com",
-	".sharepoint.com",
-	".1drv.com",
-	".onedrive.com",
-	".livefilestore.com",
-	// OneDrive personal's upload sessions: observed as my.microsoftpersonalcontent.com (M3 probe v3, Ubuntu,
-	// 2026-10-12). WHOIS: registrant Microsoft Corporation, registrar MarkMonitor (checked 2026-10-12) [G-UP-11].
-	".microsoftpersonalcontent.com",
-];
+/**
+ * Hosts that upload and download URLs may use (design §8, T-T5), narrowed at M3 close (2026-10-12):
+ * - `.microsoftpersonalcontent.com`: the only host observed, for uploads and downloads on the owner's Ubuntu and iPad
+ *   (M3 probe). Microsoft-registered (WHOIS) [G-UP-11].
+ * - `.1drv.com`, `.onedrive.com`, `.livefilestore.com`: OneDrive personal content endpoints in Microsoft's required-URL
+ *   list (*.files.1drv.com, *.onedrive.com, *.livefilestore.com), kept so a server-side host change fails over
+ *   rather than stopping transfers.
+ * Dropped: `.sharepoint.com` (any company can own a tenant subdomain, so a tampered URL could exfiltrate to it),
+ * `.microsoft.com` and `.live.com` (very large zones with no observed transfer use).
+ */
+export const TRANSFER_HOST_SUFFIXES: readonly string[] = [".microsoftpersonalcontent.com", ".1drv.com", ".onedrive.com", ".livefilestore.com"];
 /** Longest name we send: capabilities.ts NAME_MAX, one source so they can't drift [G-NM-6]. */
 export const NAME_LIMIT = NAME_MAX;
 /**

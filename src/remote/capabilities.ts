@@ -1,13 +1,11 @@
 // Graph behaviors the docs leave open, fixed at build time from the M3 probe (run-diagnostics) so the choice is
-// reviewable (design §5.5). Values below come from the owner's Ubuntu runs (probe v1 and v2, 2026-10-12, recorded
-// in docs/plan.md M3). They are server behaviors, so they don't depend on the device. CAPABILITIES_PROBED stays
-// false until the upload host is allowlisted and the large-file round trip passes on the iPad; M6 must not ship
-// with it false.
+// reviewable (design §5.5). Values come from the owner's probe runs on Ubuntu (v1–v4) and the iPad (v4 on 0.3.5),
+// 2026-10-12, recorded in docs/plan.md M3. They are server behaviors and matched on both devices.
 
 export type DeltaForm = "approot-colon" | "items-id" | "children-walk";
 
-/** True once every probe question is settled on both devices (docs/plan.md M3). */
-export const CAPABILITIES_PROBED: boolean = false;
+/** Every probe question settled on both devices: the 0.3.5 probe passed with errors 0 on Ubuntu and the iPad. */
+export const CAPABILITIES_PROBED: boolean = true;
 
 /**
  * Whether `PUT /items/{id}/content` returns 412 on a stale If-Match [G-UP-3] (D-11). Observed: 412 (code

@@ -150,22 +150,11 @@ test("parseItemExtras returns the raw download URL (checked at use, in download(
 });
 
 test("transfer URL allowlist (design §8, T-T5)", () => {
-	assert.deepEqual([...TRANSFER_HOST_SUFFIXES], [
-		".microsoft.com",
-		".live.com",
-		".sharepoint.com",
-		".1drv.com",
-		".onedrive.com",
-		".livefilestore.com",
-		".microsoftpersonalcontent.com",
-	]);
+	assert.deepEqual([...TRANSFER_HOST_SUFFIXES], [".microsoftpersonalcontent.com", ".1drv.com", ".onedrive.com", ".livefilestore.com"]);
 	for (const u of [
 		"https://api.onedrive.com/up/1",
 		"https://public.dm.files.1drv.com/y",
 		"https://x.livefilestore.com/z",
-		"https://t.sharepoint.com/a",
-		"https://my.microsoft.com/a",
-		"https://b.live.com/c",
 		"https://my.microsoftpersonalcontent.com/personal/abc/_api/v2.0/drive/items/X/uploadSession?guid=1",
 	]) assert.equal(checkTransferUrl(u), u);
 	for (const u of [
@@ -181,6 +170,10 @@ test("transfer URL allowlist (design §8, T-T5)", () => {
 		"javascript:alert(1)",
 		"https://api.onedrive.com./x",
 		"https://graph.microsoft.com/v1.0/me/drive/items/X",
+		// Narrowed at M3 close: any company can own a sharepoint.com tenant, and microsoft.com / live.com are vast.
+		"https://attacker-tenant.sharepoint.com/upload",
+		"https://my.microsoft.com/a",
+		"https://b.live.com/c",
 		"https://microsoftpersonalcontent.com/x",
 		"https://microsoftpersonalcontent.com.evil.net/x",
 		"https://evilmicrosoftpersonalcontent.com/x",

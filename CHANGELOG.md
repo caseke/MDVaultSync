@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-10-12
+
+Milestone 3 complete: the OneDrive connection is built and checked on both devices.
+
+### Changed
+
+- The plugin trusts fewer servers for file transfers: only OneDrive personal's content servers (`*.microsoftpersonalcontent.com`, `*.1drv.com`, `*.onedrive.com`, `*.livefilestore.com`). It no longer trusts all of `*.sharepoint.com`, `*.microsoft.com` or `*.live.com`.
+- The settings learned from the probe are now final for both devices.
+
 ## [0.3.5] - 2026-10-12
 
 ### Fixed

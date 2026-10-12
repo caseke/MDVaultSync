@@ -353,7 +353,7 @@ Tests were written first and run red (6 files failing to load) before the implem
 ---
 
 ## M3: Graph client, retry, validation, capability probe
-**Status:** awaiting-owner (session work done 2026-10-12). The probe has to run on the owner's Ubuntu and iPad; see **Manual checks**. M4 can start now: only its QuickXorHash vectors need the probe JSON. M6 needs the applied capabilities (`CAPABILITIES_PROBED = true`).
+**Status:** done (2026-10-12). The probe passed with `errors: 0` on Ubuntu and on the iPad (0.3.5). The results are applied in `capabilities.ts` (`CAPABILITIES_PROBED = true`), research.md and design.md, and the transfer-host allowlist is narrowed (0.3.6).
 
 **Goal.** A complete `RemotePort` over Graph. Settle every documentation gap from research.md §6 that can be tested against the live API.
 
@@ -388,28 +388,29 @@ npm run lint && npm run typecheck && npm test && npm run build
 node --test --experimental-test-coverage "test/**/*.test.ts" 2>&1 | grep -E "retry|validate|graph"
 ```
 
-**Verification output** (session container, Node v22.22.0, 2026-10-12, final M3 commit)
+**Verification output** (session container, Node v22.22.0, 2026-10-12, M3 close commit, 0.3.6)
 ```
-$ npm ci --ignore-scripts --no-fund      → exit 0; 3 moderate (unchanged, see M1 "Optional")
+$ npm ci --ignore-scripts --no-fund      → exit 0; added 339 packages; 3 moderate (unchanged, see M1 "Optional")
 $ npm run lint                           → exit 0, 0 errors, 2 warnings (settings-tab.ts, the M2 declarative-settings warnings)
 $ npm run typecheck                      → exit 0
 $ npm test
-# tests 289
+# tests 306
 # suites 8
-# pass 289
+# pass 306
 # fail 0
-$ npm run build                          → exit 0 (main.js 39317 bytes)
+$ npm run build                          → exit 0 (main.js 41073 bytes)
 $ npm audit --audit-level=high           → exit 0
 $ scripts/check-network-apis.sh
 no forbidden network APIs
 $ node --test --experimental-test-coverage "test/**/*.test.ts"   (line % | branch % | funcs %)
   retry.ts            100.00 | 96.67 | 100.00
-  validate.ts          99.31 | 98.13 | 100.00
-  graph.ts            100.00 | 95.07 | 100.00
+  validate.ts          99.38 | 98.20 | 100.00
+  graph.ts            100.00 | 95.00 | 100.00
   upload-session.ts   100.00 | 97.62 | 100.00
-  errors.ts, logger.ts, http.ts  100.00 lines
-  probe.ts             96.72 lines
+  errors.ts, logger.ts, http.ts, capabilities.ts  100.00 lines
+  probe.ts             96.37 lines
 ```
+The first session-close run (289 tests, before the probe rounds) is in the commit history. 0.3.1–0.3.6 each ran the same gate before their commits.
 The plan's grep line (`grep -E "retry|validate|graph"`) also matches test names, so the table rows above are taken from the coverage report itself.
 
 Tests were written first and run red (7 test files failing to load, 3 new tests failing) before the implementation. Each of these mutation spot checks, when applied (and then reverted), makes the suite fail:
@@ -591,10 +592,37 @@ Every probe question is answered on Ubuntu. The 12 MiB round trip works through 
 2. On the iPad: BRAT → **Check for updates to all beta plugins**. Confirm that Settings → Community plugins shows MDVaultSync 0.3.5.
 3. Command palette (swipe down on a note, or **Open command palette**) → **MDVaultSync: Run OneDrive capability probe**. Keep Obsidian in the foreground until the result appears.
 4. Pass: `largeFile.ok` and `bytesMatch` are `true`, and `errors` is 0. Record whether Obsidian stayed responsive (you could scroll or open a note while it ran), then paste the JSON below.
+**Probe v4 on 0.3.5, iPad, 2026-10-12: PASS** (owner; installed through BRAT from the published 0.3.5; every field except `platform`, `largeFile`, `durationMs` and `errors` equals the Ubuntu run):
 ```
-iPad (0.3.5): (paste here)
-Responsive during the run: (yes / no / notes)
+"platform": "ios", "durationMs": 30063,
+"largeFile": {
+  "ok": true, "size": 12582912, "fragments": 2,
+  "createAttempts": [
+    { "variant": "conflictBehavior+fileSize", "status": 400, "code": "invalidRequest" },
+    { "variant": "conflictBehavior", "status": 200 }
+  ],
+  "uploadHost": "my.microsoftpersonalcontent.com", "uploadMs": 4450,
+  "downloadDiag": {
+    "select": { "status": 200, "urlPresent": false },
+    "plain":  { "status": 200, "urlPresent": true, "urlType": "string", "urlLength": 1087,
+                "host": "my.microsoftpersonalcontent.com" }
+  },
+  "downloadHost": "my.microsoftpersonalcontent.com", "downloadHostTrusted": true,
+  "downloadMs": 5345, "bytesMatch": true
+}
+"cleanup": { "ok": true }, "errors": 0
+Responsive during the run: not reported
 ```
+- **iPad (O-API-2, T-D6):** `requestUrl` on iOS uploaded 12 MiB in two fragments (4.5 s) and downloaded it whole (5.3 s), with identical bytes. Every server-side answer matches Ubuntu.
+- Responsiveness wasn't reported. That is a usability observation, not a pass/fail criterion; the round trip completed without a crash.
+
+**Results applied at M3 close (0.3.6):**
+- `capabilities.ts`: `CAPABILITIES_PROBED = true`, `PUT_HONORS_IF_MATCH = true`, `DELTA_FORM = "items-id"`, `NAME_MAX = 255`.
+- **Transfer-host allowlist narrowed** to `.microsoftpersonalcontent.com` (the only host observed, for uploads and downloads on both devices) plus `.1drv.com`, `.onedrive.com` and `.livefilestore.com`.
+  - Those three are OneDrive personal content endpoints in Microsoft's required-URL list. They're kept so a server-side host change fails over rather than stopping transfers.
+  - Dropped: `.sharepoint.com`, because any company can own a tenant subdomain, so a tampered URL could send bytes there.
+  - Dropped: `.microsoft.com` and `.live.com`: huge zones with no observed transfer use.
+  - An exact-host list was considered and rejected: the first Microsoft host change would stop every upload and download.
 
 **Manual checks** (owner; use a throwaway test vault, never the real one)
 1. **Install the newest 0.3.x** (now 0.3.5). `git switch claude/eloquent-clarke-21deia && git pull`, then `git tag 0.3.5 && git push origin 0.3.5`. (0.3.0–0.3.4 ran probes v1–v4 on Ubuntu; see above.)
@@ -666,6 +694,7 @@ Responsive during the run: (yes / no / notes)
 - Review of 0.3.3 (4103019, `security-reviewer`): no high or medium findings. The new suffix matches only real subdomains of a Microsoft-registered zone, and the upload host never gets the token. Fixed, low: a stale design §8 sentence and a test title. Open, low: narrow `.microsoftpersonalcontent.com` (and the other suffixes) to the exact observed hosts when M3 closes, together with the M6 narrowing item.
 - Review of 0.3.4 (b32dccb, `security-reviewer`): no high or medium findings. It confirmed that no request goes to an unchecked download URL, that the probe output holds only presence, type, length and hostname, and that `getItem` returns only validated fields. Fixed, low: `InvalidResponse.reason` is a closed union type, so the compiler rejects data as a reason. Fixed, info: a test for `download-url-invalid`.
 - Review of 0.3.5 (d0484ff, `security-reviewer`): no high or medium findings. It confirmed the unselected item read still goes through the 32 MiB cap, `parseDriveItem` and the download-URL checks before any request, and that no Authorization reaches the download host. Info: the full response also carries `createdBy`/`lastModifiedBy`; these stay in memory, are never logged, and are dropped after `download()`. Fixed, info: the new test also asserts no Authorization on the download request.
+- Final review at M3 close (0.3.6): see the commit message and the line below.
 - When the upload URL is off the allowlist, the probe leaves that server-side upload session uncancelled (cancelling would mean contacting the unlisted host). OneDrive expires it [G-UP-9].
 - The probe leaves its test files in the OneDrive recycle bin (about 12 MiB, which counts toward quota [G-DEL-2]) until the user empties it.
 - The command's display name is "Run OneDrive capability probe", not design §10's "Run Graph capability probe", because the obsidianmd sentence-case rule flags "Graph".
@@ -946,7 +975,7 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-AUTH-1…8 | M2 | ☑ (M2, 2026-10-12; R-AUTH-3 withdrawn. R-AUTH-7 token clear verified on Ubuntu; clearing real sync state is verified with the M6 StateStore) |
 | R-SCOPE-1…4 | M4, M5, M7 | ☐ |
 | R-TRIG-1…4 | M6 (lock), M7 | ☐ |
-| R-CD-1 | M3, M5 | ☐ (M3 part done 2026-10-12: delta in three forms with paging to deltaLink; the form is chosen after the owner's probe) |
+| R-CD-1 | M3, M5 | ☐ (M3 part done 2026-10-12: delta with paging to deltaLink; probe chose `items-id` on both devices) |
 | R-CD-2 | M5, M7 | ☐ |
 | R-CD-3, R-CD-4 | M4, M5 | ☐ |
 | R-ORDER | M6 | ☐ |
@@ -960,7 +989,7 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-IO-1, R-IO-2 | M6 | ☐ |
 | R-NET-1 | M2, M3 | ☑ (M2 and M3, 2026-10-12: auth and Graph go only through the requestUrl transport; lint and the CI script enforce it) |
 | R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested) |
-| R-RES-2, R-RES-3 | M3, M6 | ☐ (M3 part done 2026-10-12: 10 MiB upload-session primitives, status and 404 handling; persistence and resume are M6) |
+| R-RES-2, R-RES-3 | M3, M6 | ☐ (M3 part done 2026-10-12: 10 MiB upload-session primitives, status and 404 handling; a 12 MiB two-fragment round trip passed on both devices; persistence and resume are M6) |
 | R-UI-1…3 | M2, M7 | ☐ (M2 part done 2026-10-12: Account section) |
 | R-SEC-1, R-SEC-2 | M2 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 M2 part (SecretStorage observed on both devices, including a locked GNOME keyring) — README residual-risk text is owed in M9 |
 | R-SEC-3 | M3, M8 | ☐ (M3 part done 2026-10-12: typed redacting logger, unit tested; the sentinel test is M8) |

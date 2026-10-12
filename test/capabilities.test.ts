@@ -9,6 +9,6 @@ test("capabilities applied from the Ubuntu probe runs (v1 and v2, 2026-10-12)", 
 	assert.equal(NAME_MAX, 255, "256 accepted, 300 rejected: send at most 255 [G-NM-6]");
 });
 
-test("CAPABILITIES_PROBED stays false until the upload host is allowlisted and the iPad round trip passes", () => {
-	assert.equal(CAPABILITIES_PROBED, false);
+test("CAPABILITIES_PROBED is true: every probe question passed on Ubuntu and the iPad (0.3.5, 2026-10-12)", () => {
+	assert.equal(CAPABILITIES_PROBED, true);
 });
