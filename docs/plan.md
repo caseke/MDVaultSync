@@ -24,7 +24,7 @@ A **manual check** means a step only the owner can do on a real device. The sess
 ---
 
 ## M1: Scaffold, CI, hooks, security reviewer
-**Status:** not started
+**Status:** done (2026-10-12). Session work verified, owner actions done and verified with `gh api`. The optional desktop load check is still open; steps are under **Manual check (optional)**.
 
 **Goal.** An empty plugin that loads in Obsidian, with the full quality gate (lint, typecheck, test, build, audit) in local hooks and CI, before any real code exists.
 
@@ -72,10 +72,34 @@ A **manual check** means a step only the owner can do on a real device. The sess
     It reports findings as `severity | file:line | issue | fix`.
 
 **Owner actions** (manual, any time during M1):
-- Make `main` the default branch. Merging this branch is the owner's call.
-- In the repo settings, enable private vulnerability reporting, Dependabot alerts, secret scanning and push protection [C-GH-2].
-- Confirm 2FA is on for the GitHub account (T-T8).
-- Verify all of the above with the `gh api` commands in **Verify** (session runs them if `gh` is available, otherwise owner pastes output).
+Done 2026-10-12 (☑ = done by the owner):
+- ☑ Make `main` the default branch. Merging this branch is the owner's call.
+- ☑ In the repo settings, enable private vulnerability reporting, Dependabot alerts, secret scanning and push protection [C-GH-2].
+- ☑ Confirm 2FA is on for the GitHub account (T-T8). Confirmed by the owner.
+- ☑ Turn off CodeQL default setup. Original instructions: switch CodeQL from **default setup** to the workflow (`.github/workflows/codeql.yml`): Settings → Code security → Code scanning → CodeQL analysis → ⋯ → **Disable CodeQL** (or "Switch to advanced"). Until then every CodeQL run fails with "CodeQL analyses from advanced configurations cannot be processed when the default setup is enabled" (observed 2026-10-12, run 38186164070).
+- ☑ Verify all of the above with the `gh api` commands in **Verify** (session runs them if `gh` is available, otherwise owner pastes output). The owner pasted the output; it is below.
+
+**Manual check (optional in M1): the plugin loads in a desktop test vault**
+
+`main.js` is not in the repository. It is the build output: `npm run build` bundles `src/main.ts` and everything it imports into `./main.js`, which is what Obsidian loads. `.gitignore` excludes it; release copies are built only by CI (M9).
+
+On the Ubuntu desktop, with Node ≥ 22.18:
+```bash
+cd ~/src/MDVaultSync
+git fetch origin && git checkout claude/sleepy-allen-tegt17   # or main, after merging
+npm ci
+npm run build                     # creates ./main.js
+mkdir -p ~/mdvs-test-vault/.obsidian/plugins/mdvaultsync
+cp main.js manifest.json styles.css ~/mdvs-test-vault/.obsidian/plugins/mdvaultsync/
+```
+1. In Obsidian, open `~/mdvs-test-vault` as a vault (vault switcher → **Open folder as vault**). Use a throwaway vault, never your real one.
+2. Open **Settings → Community plugins**, select **Turn on community plugins**, then turn on **MDVaultSync**.
+3. Press **Ctrl+Shift+I** to open the developer console. **Pass:** the plugin turns on, nothing visible happens (no ribbon icon, command or setting yet), and the console shows no red errors mentioning `mdvaultsync`.
+4. Record the result and the Obsidian version (Settings → About) on the line below.
+
+Name the plugin folder `mdvaultsync` to match the manifest `id`; that is how Obsidian and BRAT install plugins. `.obsidian` is the default config folder. If you renamed it, use your folder name instead.
+
+Result: not yet run (optional in M1).
 
 **Acceptance criteria**
 - All standard commands pass locally and in CI on both Node versions.
@@ -90,16 +114,74 @@ npm ci && npm run lint && npm run typecheck && npm test && npm run build && npm 
 ls -l main.js
 cp src/main.ts /tmp/main.ts.bak && echo 'const unused = 1;' >> src/main.ts && .claude/hooks/check.sh src/main.ts; echo "exit=$? (expect 2)"; cp /tmp/main.ts.bak src/main.ts
 echo '{"tool_input":{"file_path":"src/main.ts"}}' | .claude/hooks/check.sh; echo "exit=$? (expect 0)"
-! grep -rnE '\bfetch\(|XMLHttpRequest|new WebSocket' src/ && echo "no forbidden network APIs"
+scripts/check-network-apis.sh   # replaces the original grep one-liner; see "Deviations" below
 gh api repos/caseke/MDVaultSync --jq '.security_and_analysis'            # secret_scanning + push_protection: enabled
 gh api repos/caseke/MDVaultSync/private-vulnerability-reporting          # {"enabled":true}
 gh api -i repos/caseke/MDVaultSync/vulnerability-alerts | head -1        # HTTP/2 204 = Dependabot alerts on
 ```
 
-**Verification output**
+**Verification output** (session container, Node v22.22.0, 2026-10-12)
 ```
-(paste here)
+$ npm ci --ignore-scripts --no-fund
+added 319 packages, and audited 320 packages in 4s
+3 moderate severity vulnerabilities            # see "Optional for the owner" below
+$ npm run lint          → exit 0 (eslint . ; also 0 with --max-warnings=0)
+$ npm run typecheck     → exit 0
+$ npm test
+# tests 23
+# pass 23
+# fail 0
+$ npm run build         → exit 0
+$ npm audit --audit-level=high → exit 0
+$ ls -l main.js
+-rw-r--r-- 1 root root 652 Oct 12 00:05 main.js
+$ (append 'const unused = 1;' to src/main.ts) .claude/hooks/check.sh src/main.ts
+  12:7  warning  'unused' is assigned a value but never used  @typescript-eslint/no-unused-vars
+ESLint found too many warnings (maximum: 0).
+exit=2 (expect 2)        # the same case through stdin JSON also exits 2
+$ (revert) echo '{"tool_input":{"file_path":"src/main.ts"}}' | .claude/hooks/check.sh
+exit=0 (expect 0)
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+$ grep -rniE 'sample|MyPlugin' src manifest.json package.json
+(no output, exit 1)      # no sample-plugin names remain [O-SUB-3]
 ```
+`gh api` checks, run by the owner on their Ubuntu machine on 2026-10-12, since `gh` isn't authenticated in the session container:
+```
+$ gh api repos/caseke/MDVaultSync --jq '.security_and_analysis'
+{
+  "dependabot_security_updates": { "status": "enabled" },
+  "secret_scanning": { "status": "enabled" },
+  "secret_scanning_non_provider_patterns": { "status": "disabled" },
+  "secret_scanning_push_protection": { "status": "enabled" },
+  "secret_scanning_validity_checks": { "status": "disabled" }
+}
+$ gh api repos/caseke/MDVaultSync/private-vulnerability-reporting
+{ "enabled": true }
+$ gh api -i repos/caseke/MDVaultSync/vulnerability-alerts | head -1
+HTTP/2.0 204 No Content
+```
+CI on GitHub: the `CI` workflow passed on Node 22.x and 24.x (run 38186164011 at e5c0f13 and run 38186746269 at 5f4663d). `CodeQL` failed on those commits with a configuration error because CodeQL default setup was enabled. The owner turned it off on 2026-10-12; the first run after that passed (CodeQL run 38188191755 at 78463fe; CI run 38188191640 passed on the same commit).
+
+**Tests added:** `test/smoke.test.ts` (runner, ports.ts is erasable-only), `test/lint-rules.test.ts` (every project lint rule, plus disable comments rejected under the full config), `test/manifest.test.ts` (submission rules, versions agree, zero runtime deps, no sample names), `test/hook.test.ts` (hook fast paths), `test/network-check.test.ts` (CI backstop).
+
+**Deviations from this milestone's text** (all recorded in commit messages):
+- The Node built-in ban and the dynamic-`import()` ban apply to `src/**` only. Tests and build scripts use Node modules, and only `src/` ships. To back this up, esbuild no longer marks Node built-ins external, so a built-in reaching the bundle by any route fails the build.
+- The CI grep one-liner matched the `RemoteContent.fetch(...)` method signature in `src/core/ports.ts` (design §2). It is replaced by `scripts/check-network-apis.sh`, which exempts that exact signature only and also catches `activeWindow.fetch`, `EventSource` and `sendBeacon`.
+- `eslint.config.mjs` instead of `.mts`, so `jiti` is not installed (allowed by this milestone). Project rules live in `eslint/project-rules.ts` so they can be unit tested.
+- ESLint stays on 9.x (`npm` marks 9.39.5 deprecated). ESLint 10 leaves eslint-plugin-obsidianmd 0.4.2's bundled sub-plugins (import, react) on a nested ESLint 9. Move to 10 when the plugin supports it.
+- Actions use current majors (checkout v7.0.1, setup-node v7.1.0, codeql-action v4.38.3), pinned by commit SHA resolved with `git ls-remote`. npm caching in setup-node is off, and `npm ci` runs with `--ignore-scripts` in CI and in the SessionStart hook (T-T7).
+
+**Security review** (`security-reviewer` instructions, run through a general-purpose agent because the agent file only registers at the next session start; base `origin/main`, 31 files):
+- Fixed, medium: `activeWindow.fetch` bypassed R-NET-1. Added `window`/`globalThis`/`self`/`activeWindow` × `fetch`/`XMLHttpRequest`/`WebSocket`/`EventSource`/`require` to `no-restricted-properties`, and widened the CI script.
+- Fixed, medium: project rules could be switched off with `// eslint-disable-next-line <rule> -- reason`. `src/**` now restates obsidianmd's `eslint-comments/no-restricted-disable` list (read from the plugin at load time) plus `no-restricted-imports`/`-globals`/`-properties`/`-syntax`, `no-eval`, `no-implied-eval` and `no-new-func`. Tested.
+- Fixed, low: `EventSource`, `navigator.sendBeacon` and bare `require` are now banned. Node built-ins are no longer esbuild externals. The README and SECURITY.md now say the plugin stores its settings and state in its own plugin folder under the config folder (O-POL-2 accuracy). Dependabot `cooldown` is 7 days. `npm ci --ignore-scripts` is used.
+- Fixed, info: the hook only lints `src/`, `test/` and `eslint/` and passes `--no-warn-ignored`, so an edit to an unlinted `.ts` file can't block.
+- Open, info: the README token-storage residual risk is M9 scope. The action SHAs were resolved from the upstream tags in this session.
+
+**Optional for the owner** (not fixed, no security or requirement impact):
+- `npm audit` reports 3 **moderate** advisories: `moment` (GHSA-4p3w-j4w9-5jqw), pulled in by the `obsidian` type package that eslint-plugin-obsidianmd pins at 1.12.3. `obsidian` is external to the bundle and `moment` never ships. It clears when the plugin moves to `obsidian` ≥ 1.14. Dependabot will propose it.
+- `test/hook.test.ts` covers only the hook's fast paths. The lint-failure path is covered by the Verify block, because it runs a full `tsc`.
 
 ---
 
@@ -485,6 +567,6 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-SEC-1, R-SEC-2 | M2 | ☐ |
 | R-SEC-3 | M3, M8 | ☐ |
 | R-SEC-4 | M3, M4 | ☐ |
-| R-SEC-5 | M1, M9 | ☐ |
-| R-SEC-6 | M1 | ☐ |
+| R-SEC-5 | M1, M9 | ☐ (M1 part done: lockfile, Dependabot, CodeQL, audit, SHA pins, and secret scanning and push protection verified 2026-10-12; release attestation is M9) |
+| R-SEC-6 | M1 | ☑ (M1, 2026-10-12) |
 | R-ENG-1…5 | M1 onward | ☐ |

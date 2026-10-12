@@ -1,0 +1,17 @@
+# Editors
+.vscode
+.idea
+*.iml
+
+# npm
+node_modules
+
+# Build output: main.js is built by CI for releases, never committed.
+main.js
+*.map
+
+# Obsidian plugin data (may hold a refresh token, D-5)
+data.json
+
+# OS
+.DS_Store

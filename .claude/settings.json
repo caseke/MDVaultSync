@@ -1,0 +1,25 @@
+{
+	"hooks": {
+		"PostToolUse": [
+			{
+				"matcher": "Edit|Write|MultiEdit",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/check.sh"
+					}
+				]
+			}
+		],
+		"SessionStart": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "cd \"$CLAUDE_PROJECT_DIR\" && { [ -d node_modules ] || npm ci --ignore-scripts --no-audit --no-fund >&2; }"
+					}
+				]
+			}
+		]
+	}
+}
