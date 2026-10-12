@@ -14,6 +14,8 @@ const STATUS_TEXT: Record<AuthStatus, string> = {
 export class MDVaultSyncSettingTab extends PluginSettingTab {
 	private readonly plugin: MDVaultSyncPlugin;
 	private shown = false;
+	/** Bumped on every sign-in control render, so a slow prepare can't fill in an outdated link. */
+	private renderId = 0;
 
 	constructor(app: App, plugin: MDVaultSyncPlugin) {
 		super(app, plugin);
@@ -42,6 +44,7 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl).setName("Status").setDesc(STATUS_TEXT[status]);
 
+		let signInSetting: Setting | null = null;
 		const idSetting = new Setting(containerEl).setName("Application (client) ID");
 		const idDesc = (value: string) => {
 			if (signedIn) return "Sign out to change it. The sign-in belongs to this ID.";
@@ -60,6 +63,8 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 					if (value === "" || isValidClientId(value)) {
 						this.plugin.data.clientId = value;
 						await this.plugin.saveData(this.plugin.data);
+						// Rebuild only the sign-in control, so the text field keeps focus.
+						if (signInSetting) this.renderSignInControl(signInSetting);
 					}
 				}),
 		);
@@ -74,15 +79,10 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 						.onClick(() => void this.plugin.signOut()),
 				);
 		} else {
-			new Setting(containerEl)
+			signInSetting = new Setting(containerEl)
 				.setName("Sign in")
-				.setDesc("Opens Microsoft's sign-in page in your browser, then returns to Obsidian.")
-				.addButton((b) =>
-					b
-						.setButtonText("Sign in")
-						.setCta()
-						.onClick(() => void this.plugin.startSignIn()),
-				);
+				.setDesc("Opens Microsoft's sign-in page in your browser, then returns to Obsidian.");
+			this.renderSignInControl(signInSetting);
 		}
 
 		const storage = new Setting(containerEl).setName("Token storage");
@@ -96,5 +96,47 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 		} else {
 			storage.setDesc("Stored in Obsidian secret storage. Encryption depends on your device's keyring.");
 		}
+	}
+
+	/**
+	 * The Sign in control is a real link whose URL is built before the tap. iOS opens a browser only from the
+	 * tap itself, so nothing may await between the tap and the navigation (M2 check 2). The click handler starts
+	 * the sign-in synchronously and lets the link's default navigation open the default browser [I-BR-1].
+	 */
+	private renderSignInControl(setting: Setting): void {
+		const id = ++this.renderId;
+		setting.controlEl.empty();
+		if (!isValidClientId(this.plugin.data.clientId)) {
+			setting.addButton((b) => b.setButtonText("Enter the client ID first").setDisabled(true));
+			return;
+		}
+		const link = setting.controlEl.createEl("a", {
+			text: "Sign in",
+			cls: "mdvaultsync-signin-link",
+			attr: { rel: "noopener noreferrer", "aria-disabled": "true" },
+		});
+		link.addEventListener("click", (evt) => {
+			const href = link.getAttribute("href");
+			if (!href) {
+				evt.preventDefault();
+				return;
+			}
+			try {
+				this.plugin.auth.activateSignIn(href);
+			} catch (e) {
+				evt.preventDefault();
+				this.plugin.reportAuthError(e);
+			}
+		});
+		this.plugin.auth.prepareSignIn().then(
+			(url) => {
+				if (id !== this.renderId) return;
+				link.setAttribute("href", url);
+				link.removeAttribute("aria-disabled");
+			},
+			(e: unknown) => {
+				if (id === this.renderId) this.plugin.reportAuthError(e);
+			},
+		);
 	}
 }

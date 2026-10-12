@@ -74,8 +74,9 @@ export default class MDVaultSyncPlugin extends Plugin {
 	}
 
 	/**
-	 * Starts a sign-in and shows the authorize URL as a link the user taps; the link opens the system browser
-	 * [I-BR-1]. No window.open: iOS blocks it after the await (see SignInModal).
+	 * The sign-in command's path. A command can't hold a link built ahead of time (the settings tab's one-tap
+	 * Sign in does), so it shows the authorize URL as a link in SignInModal; tapping it opens the system browser
+	 * [I-BR-1]. No window.open: iOS blocks it after the await.
 	 */
 	async startSignIn(): Promise<void> {
 		if (!isValidClientId(this.data.clientId)) {
@@ -150,7 +151,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 	}
 
 	/** Shows a notice and logs the code only, never URLs, params or token data (T-I3). */
-	private reportAuthError(e: unknown): void {
+	reportAuthError(e: unknown): void {
 		if (e instanceof AuthError) {
 			console.error(`MDVaultSync: sign-in error ${e.code}${e.providerCode ? ` (${e.providerCode})` : ""}`);
 			new Notice(authErrorText(e.code, e.providerCode));

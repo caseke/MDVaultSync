@@ -501,3 +501,61 @@ test("a failed undo after sign-out during redemption is surfaced and status is h
 	assert.equal(auth.status, "signed-in");
 	assert.equal(statuses[statuses.length - 1], "signed-in");
 });
+
+describe("one-tap sign-in (prepare, then activate on tap)", () => {
+	test("prepare creates no pending sign-in", async () => {
+		const { auth } = setup();
+		const url = new URL(await auth.prepareSignIn());
+		const state = url.searchParams.get("state") ?? "";
+		assert.equal(await codeOf(auth.handleCallback({ code: "C", state })), "no-pending");
+	});
+
+	test("activating the prepared URL lets its callback through", async () => {
+		const { auth, http, tokens } = setup();
+		const href = await auth.prepareSignIn();
+		auth.activateSignIn(href);
+		http.enqueueJson(200, tokenBody());
+		await auth.handleCallback({ code: "C", state: new URL(href).searchParams.get("state") ?? "" });
+		assert.equal(tokens.value, "RT1");
+	});
+
+	test("an unknown or replaced URL can't be activated", async () => {
+		const { auth } = setup();
+		const first = await auth.prepareSignIn();
+		await auth.prepareSignIn();
+		assert.equal(await codeOf(Promise.resolve().then(() => auth.activateSignIn(first))), "no-pending");
+		assert.equal(await codeOf(Promise.resolve().then(() => auth.activateSignIn("https://evil.example/"))), "no-pending");
+	});
+
+	test("a double tap is a no-op", async () => {
+		const { auth, http } = setup();
+		const href = await auth.prepareSignIn();
+		auth.activateSignIn(href);
+		auth.activateSignIn(href);
+		http.enqueueJson(200, tokenBody());
+		await auth.handleCallback({ code: "C", state: new URL(href).searchParams.get("state") ?? "" });
+	});
+
+	test("expiry counts from the tap, not from prepare", async () => {
+		const { auth, http, clock } = setup();
+		const href = await auth.prepareSignIn();
+		clock.advance(20 * 60_000);
+		auth.activateSignIn(href);
+		clock.advance(9 * 60_000);
+		http.enqueueJson(200, tokenBody());
+		await auth.handleCallback({ code: "C", state: new URL(href).searchParams.get("state") ?? "" });
+		assert.equal(auth.status, "signed-in");
+	});
+
+	test("prepare refuses while signed in", async () => {
+		const { auth } = await signedIn();
+		assert.equal(await codeOf(auth.prepareSignIn()), "already-signed-in");
+	});
+
+	test("sign-out discards a prepared sign-in", async () => {
+		const { auth } = setup();
+		const href = await auth.prepareSignIn();
+		await auth.signOut();
+		assert.equal(await codeOf(Promise.resolve().then(() => auth.activateSignIn(href))), "no-pending");
+	});
+});

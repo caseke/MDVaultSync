@@ -239,32 +239,32 @@ git tag 0.2.0 && git push origin 0.2.0        # triggers .github/workflows/relea
 - Optional: `gh release download 0.2.0 -R caseke/MDVaultSync -p main.js && gh attestation verify main.js -R caseke/MDVaultSync`.
 - **On the iPad,** in the test vault: BRAT → **Add a beta plugin for testing** → `caseke/MDVaultSync` → version `0.2.0` (or latest) → **Add plugin**, then enable MDVaultSync under Community plugins.
 
-For a later build, bump the version in a session (`npm version 0.2.2 --no-git-tag-version`), then tag and publish it the same way. **0.2.1** carries the iPad sign-in fix: tag `0.2.1` the same way, publish it, and in BRAT on the iPad choose **Check for updates to all beta plugins** (or re-add with version `0.2.1`). A tag that doesn't equal `manifest.json`'s version fails the workflow.
+For a later build, bump the version in a session (`npm version 0.2.3 --no-git-tag-version`), then tag and publish it the same way. In BRAT on the iPad choose **Check for updates to all beta plugins** (or re-add with the new version). **0.2.1** fixed iPad sign-in through a small window; **0.2.2** makes **Sign in** in settings open the browser on the first tap. A tag that doesn't equal `manifest.json`'s version fails the workflow.
 
 In **Settings → MDVaultSync**, paste the client ID from entra-setup.md.
 
-1. **Ubuntu sign-in.** Select **Sign in**. A small window opens; select **Open Microsoft sign-in** (since 0.2.1). Your default browser opens Microsoft's page; **pass requires** the default browser, not an Obsidian tab (Obsidian's Web viewer core plugin can open external links in-app; turn its "open external links" option off if it does) (T-S3). Sign in and consent, then allow the browser to open the `obsidian://` link. Pass: Obsidian comes forward, the notice says "Signed in to OneDrive.", and **Status** reads "Signed in to OneDrive.". For the trailing slash: before allowing the link, copy it from the browser prompt or history, and record whether it starts with `obsidian://mdvaultsync-auth/?` or `obsidian://mdvaultsync-auth?`.
-2. **iPad sign-in** (0.2.1 or later). Tap **Sign in**, then **Open Microsoft sign-in** in the window that opens. Safari (or Obsidian's in-app browser) shows Microsoft's page. After consent it asks "Open in Obsidian?"; tap **Open**. **Pass requires** the Microsoft page to open in Safari (or a Safari tab sheet with Safari's address bar and Done button), not inside an Obsidian pane or tab (T-S3, RFC 8252). Record which. If it opens inside Obsidian, or never returns to Obsidian, it fails: record what you saw.
+1. **Ubuntu sign-in.** In **Settings → MDVaultSync**, select **Sign in** (0.2.2: no intermediate window; the **Sign in to OneDrive** command still shows one). Your default browser opens Microsoft's page; **pass requires** the default browser, not an Obsidian tab (Obsidian's Web viewer core plugin can open external links in-app; turn its "open external links" option off if it does) (T-S3). Sign in and consent, then allow the browser to open the `obsidian://` link. Pass: Obsidian comes forward, the notice says "Signed in to OneDrive.", and **Status** reads "Signed in to OneDrive.". For the trailing slash: before allowing the link, copy it from the browser prompt or history, and record whether it starts with `obsidian://mdvaultsync-auth/?` or `obsidian://mdvaultsync-auth?`.
+2. **iPad sign-in** (0.2.2). Tap **Sign in** in settings. Safari shows Microsoft's page on that first tap. After consent it asks "Open in Obsidian?"; tap **Open**. **Pass requires** the Microsoft page to open in Safari (or a Safari tab sheet with Safari's address bar and Done button), not inside an Obsidian pane or tab (T-S3, RFC 8252). Record which. If it opens inside Obsidian, or never returns to Obsidian, it fails: record what you saw.
 3. ~~Paste fallback~~ withdrawn (R-AUTH-3). Also remove the `nativeclient` redirect URI from your app registration if you added it (entra-setup.md step 3).
 4. **Origin header.** Checks 1 and 2 succeeding means token redemption worked, so `requestUrl` sent no breaking `Origin` [I-AC-7]. If redemption fails, the notice ends with a code; `invalid_request` with AADSTS9002326 means `Origin` was sent. Record which.
 5. **Restart.** Quit and relaunch Obsidian on both devices. Pass: **Status** still says signed in. Record **Token storage**: the neutral note means `secret-storage`, and the red warning means `plugin-data`.
    5a. On Ubuntu, run `xdg-mime query default x-scheme-handler/obsidian` and record the output. Then sign out. Lock the keyring (Seahorse → right-click **Login** → **Lock**), or log in to a fresh user session that has no keyring daemon. Sign in again. Record which **Token storage** line appears, and whether Obsidian showed a "secret storage provider" warning. Update research.md O-API-6.
 6. **Sign out.** Select **Sign out**. Pass: **Status** reads "Signed out.", and the notice shows the app-access link. In the developer console (Ctrl+Shift+I on Ubuntu), run `app.secretStorage.getSecret("mdvaultsync-refresh-token")`. It must return `""` or `null`. Also check that `data.json` in the plugin folder has no `fallbackRefreshToken`.
 7. Open https://account.microsoft.com/privacy/app-access. Pass: MDVaultSync (your app registration's name) is listed. Update research.md C-MSA-1.
-8. **entra-setup.md accuracy.** The guide was written from Microsoft's documentation before you used the portal. While you followed it, did every button, page and setting name match what you saw (for example "Authentication (Preview)", "Personal accounts only", "Enable Live SDK support", "App instance property lock")? Answer "all matched", or list each difference (what the guide said, what the portal showed). The session then fixes the guide and ticks its verification box.
+8. **entra-setup.md accuracy.** Did every portal label in the guide match what you saw? Differences get fixed in the guide, then its verification box is ticked.
 9. Confirm that check 1 ran with **Enable Live SDK support = No**, and record the result in research.md I-REG-7.
 
 Manual check results (owner):
 ```
-1 Ubuntu sign-in:        pass (0.2.0, window.open path; trailing slash not visible in the UI) — re-run on 0.2.1 (modal link)
-2 iPad sign-in:          FAIL on 0.2.0: tapping Sign in did nothing (window.open blocked after await; fixed in 0.2.1) — re-run on 0.2.1
-3 Paste fallback:        withdrawn by owner (nativeclient page showed a phishing warning); R-AUTH-3 withdrawn
-4 Origin header:         Electron/Ubuntu: no breaking Origin (check 1 passed). iOS: pending check 2
-5 Restart, backend:      Ubuntu = still signed in, secret-storage.  iPad = pending check 2
-5a xdg-mime / keyring:   md.obsidian.Obsidian.desktop (Flatpak); unlocked keyring: no warning. Locked/absent keyring: pending
+1 Ubuntu sign-in:        pass on 0.2.0 (window.open) and 0.2.1 (modal link → default browser). Trailing slash not visible. Re-run on 0.2.2 (one tap)
+2 iPad sign-in:          FAIL on 0.2.0 (window.open after await did nothing); pass on 0.2.1 (modal link → default browser, sign-in successful). Re-run on 0.2.2 (one tap)
+3 Paste fallback:        withdrawn by owner (nativeclient page showed a phishing warning); R-AUTH-3 withdrawn; nativeclient redirect removed from the registration
+4 Origin header:         pass on both: token redemption succeeded on Ubuntu (Electron) and iPad (0.2.1)
+5 Restart, backend:      Ubuntu = still signed in, secret-storage.  iPad = pending (quit and relaunch; record the Token storage line)
+5a xdg-mime / keyring:   md.obsidian.Obsidian.desktop (Flatpak); no warning after an OS logout/login. That login unlocks the keyring, so the locked/absent case was not run; optional (the plugin-data fallback is unit-tested)
 6 Sign-out:              pass (Ubuntu): getSecret → null, no fallbackRefreshToken in data.json
 7 App-access page:       pass: app listed
-8 entra-setup verified:  pending owner answer (see check 8)
+8 entra-setup verified:  pass: the owner corrected the portal wording in an earlier chat (commits c3e9655, 1cc3f8b, fe1379c, e486789); box ticked
 9 Live SDK = No:         pass
 (all results from the owner, 2026-10-12)
 ```
@@ -298,6 +298,7 @@ Tests were written first and run red (6 files failing to load) before the implem
 - `buildAuthorizeUrl` is async, because the S256 digest is. Because of that, `window.open` after it was blocked on iOS (check 2). Since 0.2.1 the URL is shown as a link in `src/ui/sign-in-modal.ts`, the pattern Remotely Save uses. Until the fallback was withdrawn, `handleCallback` also took the arrival channel; it now takes only the params.
 - A wrong `state` does not clear the pending sign-in, so a forged link can't cancel a real one. Expiry and a matching state do clear it.
 - **Paste fallback withdrawn** (owner, 2026-10-12, after check 3 showed a phishing warning): SPEC R-AUTH-3 withdrawn, D-4 and R-UI-1 updated, threat-model T-S4 n/a, design §4 and entra-setup.md updated; `REDIRECT_NATIVE`, `parsePastedUrl`, the paste UI and their tests removed.
+  - **0.2.2, owner request:** the settings **Sign in** is now itself the link, built before the tap (`AuthClient.prepareSignIn`). The tap starts the sign-in synchronously (`activateSignIn`) and opens the default browser with no intermediate window, using the link mechanism proven on both devices in 0.2.1. The command keeps the modal.
   - Review of the 0.2.1 change (`security-reviewer`): no high findings.
     - Fixed, medium: T-S3 rested on an unverified "system browser" claim. Checks 1 and 2 now pass only if the page opens in the system browser (or a Safari tab sheet), not an Obsidian pane.
     - Fixed, medium: SPEC R-AUTH-3 and design §4 overstated that the primary flow worked on both devices. They now say iPad is pending, and R-AUTH-3 reopens if the iPad can't work.

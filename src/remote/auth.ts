@@ -58,6 +58,15 @@ interface PendingSignIn {
 	verifier: string;
 	state: string;
 	createdAt: number;
+	/** The authorize URL this sign-in was activated from (for a double-tap no-op). */
+	url: string;
+}
+
+/** Built ahead of the tap, so the tap can navigate with no await in between (iOS user activation). */
+interface PreparedSignIn {
+	verifier: string;
+	state: string;
+	url: string;
 }
 
 export class AuthClient implements AccessTokenProvider {
@@ -68,6 +77,8 @@ export class AuthClient implements AccessTokenProvider {
 
 	/** In memory only, never persisted (design §4 step 1). */
 	private pending: PendingSignIn | null = null;
+	/** In memory only; becomes `pending` when the user taps the link. */
+	private prepared: PreparedSignIn | null = null;
 	/** In memory only (R-AUTH-5). */
 	private access: { token: string; expiresAt: number; marginMs: number } | null = null;
 	private refreshing: Promise<string> | null = null;
@@ -98,10 +109,10 @@ export class AuthClient implements AccessTokenProvider {
 	}
 
 	/**
-	 * Starts a sign-in and returns the URL to open in the system browser [I-BR-1]. Async because the S256
-	 * digest is. Replaces any earlier pending sign-in.
+	 * Builds the authorize URL ahead of the tap and holds its verifier and state in memory. Doesn't start a
+	 * sign-in: callbacks stay `no-pending` until `activateSignIn`. Replaces any earlier prepared sign-in.
 	 */
-	async buildAuthorizeUrl(): Promise<string> {
+	async prepareSignIn(): Promise<string> {
 		const clientId = this.requireClientId();
 		// Signing in again over a live grant could relink the vault to another account; sign out first.
 		if (this.status === "signed-in") throw new AuthError("already-signed-in");
@@ -110,7 +121,6 @@ export class AuthClient implements AccessTokenProvider {
 		const state = createState();
 		const challenge = await challengeFromVerifier(verifier);
 		if (epoch !== this.epoch) throw new AuthError("signed-out");
-		this.pending = { verifier, state, createdAt: this.clock.now() };
 		const params: [string, string][] = [
 			["client_id", clientId],
 			["response_type", "code"],
@@ -123,7 +133,31 @@ export class AuthClient implements AccessTokenProvider {
 			["state", state],
 			["prompt", "select_account"],
 		];
-		return `${AUTHORITY}/authorize?${params.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&")}`;
+		const url = `${AUTHORITY}/authorize?${params.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&")}`;
+		this.prepared = { verifier, state, url };
+		return url;
+	}
+
+	/**
+	 * Starts the sign-in for a prepared URL, synchronously, from the tap that opens it. The 10-minute expiry
+	 * runs from here. A second tap on the same link is a no-op; any other URL is refused.
+	 */
+	activateSignIn(url: string): void {
+		const p = this.prepared;
+		if (p && p.url === url) {
+			this.pending = { verifier: p.verifier, state: p.state, createdAt: this.clock.now(), url };
+			this.prepared = null;
+			return;
+		}
+		if (this.pending?.url === url) return;
+		throw new AuthError("no-pending");
+	}
+
+	/** Prepare and activate in one step (the sign-in command and tests). */
+	async buildAuthorizeUrl(): Promise<string> {
+		const url = await this.prepareSignIn();
+		this.activateSignIn(url);
+		return url;
 	}
 
 	/**
@@ -166,6 +200,7 @@ export class AuthClient implements AccessTokenProvider {
 		if (!isSuccess(res)) throw new AuthError("token-request-failed", parseTokenError(res.body));
 		const tok = parseOrThrow(res.body, true);
 		await this.storeRefreshToken(tok, epoch);
+		this.prepared = null;
 		this.signInRequired = false;
 		this.cacheAccess(tok);
 		this.notify();
@@ -189,6 +224,7 @@ export class AuthClient implements AccessTokenProvider {
 	async signOut(): Promise<void> {
 		this.epoch++;
 		this.pending = null;
+		this.prepared = null;
 		this.access = null;
 		this.refreshing = null;
 		this.signInRequired = false;

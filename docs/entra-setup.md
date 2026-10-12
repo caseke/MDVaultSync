@@ -5,7 +5,7 @@ MDVaultSync signs in to your **personal** Microsoft account through an app regis
 At the end you'll have an **Application (client) ID**, a GUID you paste into the MDVaultSync settings.
 
 Status: drafted in session 1 from Microsoft documentation. Microsoft redesigns the portal often. M2 checks every step against the live portal and corrects the wording; check the box when that's done.
-- [ ] Verified against the live portal (M2)
+- [x] Verified against the live portal (M2, 2026-10-12; wording corrected by the owner in commits c3e9655, 1cc3f8b, fe1379c and e486789)
 
 ## Why each step exists
 - Since June 2024, every app registration must live in a Microsoft Entra directory (tenant) [I-REG-1].
@@ -70,7 +70,7 @@ Check the manifest (optional). Under **Manifest**, `signInAudience` should be `P
 2. Choose **Sign in**.
    - The consent screen says the app is **unverified**. That's expected for an app you registered yourself [I-REG-6].
    - The consent screen should show "Have full access to the application's folder". If it asks for anything more, stop and check step 4.
-   - A small window opens in Obsidian. Tap or click **Open Microsoft sign-in**.
+   - Your default browser opens Microsoft's sign-in page.
 3. After you approve, the browser asks to open Obsidian. Allow it. Settings should show you as signed in.
 4. If the browser never offers to open Obsidian, the device has no handler for `obsidian://` links. MDVaultSync has no other sign-in method. On Ubuntu, check `xdg-mime query default x-scheme-handler/obsidian`; the Flatpak and .deb installs register one.
 
