@@ -2,7 +2,17 @@ import obsidianmd from "eslint-plugin-obsidianmd";
 import globals from "globals";
 import { globalIgnores, defineConfig } from "eslint/config";
 // Node ≥ 22.18 strips the types of this .ts import natively [C-NODE-1].
-import { projectRules } from "./eslint/project-rules.ts";
+import { projectRules, restrictedDisables } from "./eslint/project-rules.ts";
+
+// obsidianmd's own list of rules that may not be disabled inline. Flat config replaces rule options, so the
+// src/ block below restates this list plus ours instead of dropping it.
+const obsidianRestrictedDisables = obsidianmd.configs.recommended
+	.map((c) => c.rules?.["eslint-comments/no-restricted-disable"])
+	.filter(Array.isArray)
+	.flatMap((entry) => entry.slice(1));
+if (obsidianRestrictedDisables.length === 0) {
+	throw new Error("eslint-plugin-obsidianmd no longer sets eslint-comments/no-restricted-disable; review eslint.config.mjs");
+}
 
 export default defineConfig(
 	globalIgnores([
@@ -49,4 +59,13 @@ export default defineConfig(
 		},
 	},
 	...projectRules,
+	{
+		files: ["src/**/*.ts"],
+		rules: {
+			"eslint-comments/no-restricted-disable": [
+				"error",
+				...new Set([...obsidianRestrictedDisables, ...restrictedDisables]),
+			],
+		},
+	},
 );

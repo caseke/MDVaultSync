@@ -16,7 +16,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "cd \"$CLAUDE_PROJECT_DIR\" && { [ -d node_modules ] || npm ci --no-audit --no-fund >&2; }"
+						"command": "cd \"$CLAUDE_PROJECT_DIR\" && { [ -d node_modules ] || npm ci --ignore-scripts --no-audit --no-fund >&2; }"
 					}
 				]
 			}

@@ -25,6 +25,26 @@ const contentMethodBan = {
 	message: "Call RemotePort content methods only from src/core/remote-content.ts (R-ENG-4).",
 };
 
+const NET = "Use HttpTransport (requestUrl) (R-NET-1).";
+// `activeWindow` is Obsidian's alias for the focused window (pop-out aware); the others are standard aliases.
+const networkPropertyBans = [
+	...["window", "globalThis", "self", "activeWindow"].flatMap((object) =>
+		["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "require"].map((property) => ({ object, property, message: NET })),
+	),
+	{ object: "navigator", property: "sendBeacon", message: NET },
+];
+
+/** Rules that inline `eslint-disable` comments must not switch off in src/ (merged with obsidianmd's list). */
+export const restrictedDisables = [
+	"no-restricted-imports",
+	"no-restricted-globals",
+	"no-restricted-properties",
+	"no-restricted-syntax",
+	"no-eval",
+	"no-implied-eval",
+	"no-new-func",
+];
+
 export const projectRules: Linter.Config[] = [
 	{
 		name: "mdvaultsync/src",
@@ -33,16 +53,13 @@ export const projectRules: Linter.Config[] = [
 			"no-restricted-imports": ["error", { paths: nodeModuleBans, patterns: nodePatternBans }],
 			"no-restricted-globals": [
 				"error",
-				{ name: "fetch", message: "Use HttpTransport (requestUrl) (R-NET-1)." },
-				{ name: "XMLHttpRequest", message: "Use HttpTransport (requestUrl) (R-NET-1)." },
-				{ name: "WebSocket", message: "No WebSocket (R-NET-1)." },
+				{ name: "fetch", message: NET },
+				{ name: "XMLHttpRequest", message: NET },
+				{ name: "WebSocket", message: NET },
+				{ name: "EventSource", message: NET },
+				{ name: "require", message: "No require(); use static imports (R-NET-1, T-E3)." },
 			],
-			"no-restricted-properties": [
-				"error",
-				{ object: "window", property: "fetch", message: "Use HttpTransport (requestUrl) (R-NET-1)." },
-				{ object: "globalThis", property: "fetch", message: "Use HttpTransport (requestUrl) (R-NET-1)." },
-				{ object: "self", property: "fetch", message: "Use HttpTransport (requestUrl) (R-NET-1)." },
-			],
+			"no-restricted-properties": ["error", ...networkPropertyBans],
 			"no-restricted-syntax": ["error", dynamicImportBan, contentMethodBan],
 			"no-eval": "error",
 			"no-implied-eval": "error",

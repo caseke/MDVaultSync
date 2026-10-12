@@ -17,6 +17,6 @@ What to expect:
 - A fix in a new release, followed by a published GitHub Security Advisory.
 
 ## Scope
-Examples of what's in scope: leaks of the refresh or access token, files written outside the vault or into the Obsidian config folder, data sent to hosts other than Microsoft's sign-in and OneDrive services, remote code loading, and sync behavior that loses data.
+Examples of what's in scope: leaks of the refresh or access token, synced files written outside the vault or into the Obsidian config folder or hidden folders, data sent to hosts other than Microsoft's sign-in and OneDrive services, remote code loading, and sync behavior that loses data.
 
 The accepted residual risks are listed in [docs/threat-model.md](docs/threat-model.md) §4. For example, other Obsidian plugins run in the same JavaScript context and can read the token. Reports about those risks are still welcome if you can show a practical mitigation.

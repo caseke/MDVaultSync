@@ -16,7 +16,7 @@ These are required by the [Obsidian developer policies](https://docs.obsidian.md
   All requests go through Obsidian's own network API. Nothing else is contacted.
 - **Account required.** You need a personal Microsoft account with OneDrive. Work and school accounts aren't supported. You also register your own free Microsoft Entra app to get a client ID; the setup guide will be in this README by version 1.0.0 (draft: [docs/entra-setup.md](docs/entra-setup.md)).
 - **Files outside the vault.** The plugin reads and writes only:
-  - files inside your vault, except the Obsidian config folder and hidden files;
+  - files inside your vault. It never syncs the Obsidian config folder or hidden files. It keeps its own settings and sync state in its plugin folder inside the config folder, on this device only;
   - its own App Folder in your OneDrive (`Apps/<your app name>`). The permission it asks for, `Files.ReadWrite.AppFolder`, can't see the rest of your OneDrive.
 
   This is how your devices share the vault.

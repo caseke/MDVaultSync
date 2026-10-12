@@ -57,6 +57,19 @@ test("fetch, XMLHttpRequest and WebSocket are banned in src (R-NET-1)", async ()
 	await assertFlags('export const w = new WebSocket("wss://example.com");\n', "src/ui/x.ts", "no-restricted-globals");
 });
 
+test("Obsidian's activeWindow and other window aliases can't reach network APIs (R-NET-1)", async () => {
+	for (const obj of ["window", "globalThis", "self", "activeWindow"]) {
+		await assertFlags(`export const p = ${obj}.fetch("https://x");\n`, "src/platform/x.ts", "no-restricted-properties");
+		await assertFlags(`export const x = new ${obj}.XMLHttpRequest();\n`, "src/platform/x.ts", "no-restricted-properties");
+		await assertFlags(`export const w = new ${obj}.WebSocket("wss://x");\n`, "src/ui/x.ts", "no-restricted-properties");
+		await assertFlags(`export const e = new ${obj}.EventSource("https://x");\n`, "src/core/x.ts", "no-restricted-properties");
+	}
+	await assertFlags('export const e = new EventSource("https://x");\n', "src/platform/x.ts", "no-restricted-globals");
+	await assertFlags('export const b = navigator.sendBeacon("https://x", "d");\n', "src/platform/x.ts", "no-restricted-properties");
+	await assertFlags('export const h: unknown = window.require("https");\n', "src/platform/x.ts", "no-restricted-properties");
+	await assertFlags('export const h: unknown = require("https");\n', "src/platform/x.ts", "no-restricted-globals");
+});
+
 test("dynamic import is banned in src (T-E3)", async () => {
 	await assertFlags('export const m = import("https://example.com/x.js");\n', "src/platform/x.ts", "no-restricted-syntax");
 	await assertFlags('export const m = import("./y.ts");\n', "src/core/x.ts", "no-restricted-syntax");
@@ -85,4 +98,26 @@ test("RemotePort content methods are banned outside remote-content.ts and src/re
 
 test("tests and fakes may use Node modules", async () => {
 	await assertClean('import { readFileSync } from "node:fs";\nexport const r = readFileSync;\n', "test/x.test.ts");
+});
+
+// The full project config (with type information) must reject disable comments for the rules above, or
+// `// eslint-disable-next-line <rule> -- reason` would switch them off silently.
+const full = new ESLint({ cwd: join(import.meta.dirname, "..") });
+
+test("project rules can't be switched off with eslint-disable comments", async () => {
+	const cases: [string, string][] = [
+		["no-restricted-syntax", 'export const m = import("https://example.com/x.js");'],
+		["no-restricted-properties", 'export const p = window.fetch("https://x");'],
+		["no-restricted-imports", 'import { requestUrl } from "obsidian";\nexport const r = requestUrl;'],
+		["no-restricted-globals", 'export const p = fetch("https://x");'],
+		["no-implied-eval", 'setTimeout("alert(1)", 1);'],
+		["no-new-func", 'export const f = new Function("return 1");'],
+	];
+	for (const [rule, code] of cases) {
+		const text = `// eslint-disable-next-line ${rule} -- probe\n${code}\n`;
+		const [result] = await full.lintText(text, { filePath: "src/core/ports.ts" });
+		assert.ok(result);
+		const ids = result.messages.map((m) => m.ruleId);
+		assert.ok(ids.includes("eslint-comments/no-restricted-disable"), `${rule}: got [${ids.join(", ")}]`);
+	}
 });

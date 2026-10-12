@@ -29,7 +29,7 @@ jobs:
           node-version: ${{ matrix.node-version }}
           # No dependency cache: npm ci is fast here, and an uncached install can't be cache-poisoned.
           package-manager-cache: false
-      - run: npm ci --no-fund
+      - run: npm ci --ignore-scripts --no-fund # no dependency lifecycle scripts (T-T7)
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test

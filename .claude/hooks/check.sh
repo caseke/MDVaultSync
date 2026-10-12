@@ -40,8 +40,14 @@ if [ ! -d node_modules ]; then
 fi
 
 rel="${abs#"$root"/}"
+# Only the trees in tsconfig.json "include" are linted; anything else would fail as "not in project".
+case "$rel" in
+	src/* | test/* | eslint/*) ;;
+	*) exit 0 ;;
+esac
+
 status=0
-if ! out="$(npx --no-install eslint --max-warnings=0 -- "$rel" 2>&1)"; then
+if ! out="$(npx --no-install eslint --max-warnings=0 --no-warn-ignored -- "$rel" 2>&1)"; then
 	printf 'eslint failed for %s:\n%s\n' "$rel" "$out" >&2
 	status=2
 fi
