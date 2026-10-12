@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PluginTokenStore, SECRET_ID, type SecretStorageLike } from "../src/platform/token-store.ts";
+import { PluginTokenStore, SECRET_ID, TokenClearError, type SecretStorageLike } from "../src/platform/token-store.ts";
 import { DEFAULT_DATA, type PluginData } from "../src/settings.ts";
 
 class FakeSecrets implements SecretStorageLike {
@@ -101,4 +101,13 @@ test("an empty secret reads as null, and a throwing getSecret reads as null", ()
 	assert.equal(store.get(), null);
 	secrets.failGet = true;
 	assert.equal(store.get(), null);
+});
+
+test("clear throws when SecretStorage can't overwrite the token, after removing the fallback", async () => {
+	const { secrets, data, store } = setup({ fallbackRefreshToken: "OLD" });
+	secrets.map.set(SECRET_ID, "RT");
+	secrets.failSet = true;
+	await assert.rejects(store.clear(), (e: unknown) => e instanceof TokenClearError);
+	assert.ok(!("fallbackRefreshToken" in data));
+	assert.equal(store.get(), "RT");
 });

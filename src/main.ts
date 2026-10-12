@@ -91,15 +91,35 @@ export default class MDVaultSyncPlugin extends Plugin {
 
 	/** Clears tokens and sync state; local files stay (R-AUTH-7). */
 	async signOut(): Promise<void> {
-		await this.auth.signOut();
-		await this.stateStore.clear();
+		let tokensCleared = true;
+		try {
+			await this.auth.signOut();
+		} catch (e) {
+			tokensCleared = false;
+			console.error(`MDVaultSync: sign-out could not clear the token (${e instanceof Error ? e.name : "unknown"})`);
+		}
+		try {
+			// Sync state is cleared even if the token wasn't: a later sync then runs in union mode, which never deletes.
+			await this.stateStore.clear();
+		} catch (e) {
+			tokensCleared = false;
+			console.error(`MDVaultSync: sign-out could not clear sync state (${e instanceof Error ? e.name : "unknown"})`);
+		}
+		this.settingTab.refresh();
+		if (!tokensCleared) {
+			new Notice(
+				"Sign-out is incomplete: the stored sign-in couldn't be removed. Try again, or remove this app's access at " +
+					`${APP_ACCESS_URL}.`,
+				0,
+			);
+			return;
+		}
 		const msg = createFragment((f) => {
 			f.appendText("Signed out of OneDrive. Local files are untouched. To remove this app's access to your account, visit ");
 			f.createEl("a", { text: APP_ACCESS_URL, href: APP_ACCESS_URL });
 			f.appendText(".");
 		});
 		new Notice(msg, 15_000);
-		this.settingTab.refresh();
 	}
 
 	private async completeSignIn(run: () => Promise<void>): Promise<void> {

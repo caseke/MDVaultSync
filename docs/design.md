@@ -295,6 +295,7 @@ Each option is compared on the iPad (Obsidian for iOS) and on Ubuntu (Obsidian .
    - Clear the pending state before any `await`, so each state value is used once even when two callbacks race.
    - Only then look at `error` (surfaced as a sanitized code; `error_description` is never read) or `code`.
    - `buildAuthorizeUrl` is async because `crypto.subtle.digest` is (M2).
+   - `buildAuthorizeUrl` refuses with `already-signed-in` while a refresh token is stored: signing in over a live grant could relink the vault to another account's App Folder without clearing sync state. A code redemption also bumps the epoch (below), so no older refresh can overwrite the new grant (M2 security review).
 4. POST to the token endpoint with `application/x-www-form-urlencoded`: `client_id`, `grant_type=authorization_code`, `code`, `redirect_uri`, `code_verifier`, `scope`. Send no `Origin` header [I-AC-5].
 5. Validate the response shape: `access_token` (string), `refresh_token` (string), `expires_in` (number, 60–86,400), `token_type == "Bearer"`. Store the refresh token in TokenStore. Keep the access token in memory only.
 
@@ -304,7 +305,7 @@ Each option is compared on the iPad (Obsidian for iOS) and on Ubuntu (Obsidian .
 - The plugin parses it with `new URL()`. It requires origin `https://login.microsoftonline.com` and path `/common/oauth2/nativeclient`, then extracts `code` and `state` and continues at step 3's checks.
 - M2 verifies this on both devices. If it fails with `/consumers`, M2 records the result in research.md and replaces this fallback before closing.
 
-**Access tokens.** `AccessTokenProvider.getAccessToken()` returns the cached token if it has more than 5 minutes left. Otherwise it refreshes, single-flight: concurrent callers await the same promise.
+**Access tokens.** `AccessTokenProvider.getAccessToken()` returns the cached token if it has more than 5 minutes left (or more than half its lifetime, if that is shorter, so a short-lived token doesn't rotate the refresh token on every call; M2). Otherwise it refreshes, single-flight: concurrent callers await the same promise.
 - After a refresh, the new refresh token *replaces* the stored one before the access token is returned [I-TL-3].
 - `invalid_grant` or `interaction_required` clears the token, sets the account state to "Sign-in required", and raises a notice. Sync stops; local state is kept.
 - Sign-out bumps an in-memory epoch. A refresh or code redemption that started under an older epoch discards its result (and clears the store if its write landed), so an in-flight refresh can't undo a sign-out (M2).
@@ -318,7 +319,7 @@ Each option is compared on the iPad (Obsidian for iOS) and on Ubuntu (Obsidian .
   - The initial `backend` is `plugin-data` when `data.json` holds a fallback token, otherwise `secret-storage`.
   - SecretStorage gives no signal when the OS can't encrypt. For example, Linux with no keyring may store the secret in plaintext without throwing [O-API-6]. So even with `backend = "secret-storage"`, settings shows a neutral note: "Stored in Obsidian secret storage. Encryption depends on your device's keyring." (M2 wording; the obsidianmd sentence-case rule rejects "OS".)
   - M2 records what actually happens on Ubuntu with and without an unlocked keyring.
-- `clear` calls `setSecret(id, "")` (there is no delete method [O-API-4]) and removes the fallback field.
+- `clear` calls `setSecret(id, "")` (there is no delete method [O-API-4]) and removes the fallback field. If a token can still be read back afterwards, it throws, and sign-out shows "Sign-out is incomplete" instead of claiming success (M2 security review).
 - `get` treats `""` as null.
 
 **Sign-out:**

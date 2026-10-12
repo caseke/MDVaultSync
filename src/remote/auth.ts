@@ -17,11 +17,12 @@ export type Redirect = typeof REDIRECT_PROTOCOL | typeof REDIRECT_NATIVE;
 
 /** A pending sign-in expires after 10 minutes (R-SEC-1). */
 export const PENDING_TTL_MS = 10 * 60_000;
-/** Refresh when less than this is left on the access token (design §4). */
+/** Refresh when less than this is left on the access token (design §4), or half its lifetime if shorter. */
 export const REFRESH_MARGIN_MS = 5 * 60_000;
 
 export const AUTH_ERROR_CODES = [
 	"no-client-id",
+	"already-signed-in",
 	"no-pending",
 	"expired",
 	"redirect-mismatch",
@@ -74,7 +75,7 @@ export class AuthClient implements AccessTokenProvider {
 	/** In memory only, never persisted (design §4 step 1). */
 	private pending: PendingSignIn | null = null;
 	/** In memory only (R-AUTH-5). */
-	private access: { token: string; expiresAt: number } | null = null;
+	private access: { token: string; expiresAt: number; marginMs: number } | null = null;
 	private refreshing: Promise<string> | null = null;
 	/** Bumped by signOut; work started under an older epoch must not store tokens. */
 	private epoch = 0;
@@ -108,6 +109,8 @@ export class AuthClient implements AccessTokenProvider {
 	 */
 	async buildAuthorizeUrl(redirect: Redirect): Promise<string> {
 		const clientId = this.requireClientId();
+		// Signing in again over a live grant could relink the vault to another account; sign out first.
+		if (this.status === "signed-in") throw new AuthError("already-signed-in");
 		const epoch = this.epoch;
 		const verifier = createVerifier();
 		const state = createState();
@@ -177,7 +180,10 @@ export class AuthClient implements AccessTokenProvider {
 
 	/** Exchanges an authorization code for tokens (design §4 steps 4–5). */
 	async redeemCode(code: string, verifier: string, redirect: Redirect): Promise<void> {
-		const epoch = this.epoch;
+		// A new grant supersedes any refresh still in flight for an older one.
+		const epoch = ++this.epoch;
+		this.refreshing = null;
+		this.access = null;
 		const clientId = this.requireClientId();
 		const res = await this.postToken({
 			client_id: clientId,
@@ -198,7 +204,7 @@ export class AuthClient implements AccessTokenProvider {
 
 	/** Cached access token, or a single-flight refresh (R-AUTH-6). */
 	getAccessToken(): Promise<string> {
-		if (this.access && this.access.expiresAt - this.clock.now() > REFRESH_MARGIN_MS) {
+		if (this.access && this.access.expiresAt - this.clock.now() > this.access.marginMs) {
 			return Promise.resolve(this.access.token);
 		}
 		if (!this.refreshing) {
@@ -217,14 +223,18 @@ export class AuthClient implements AccessTokenProvider {
 		this.access = null;
 		this.refreshing = null;
 		this.signInRequired = false;
-		await this.tokens.clear();
-		this.notify();
+		try {
+			await this.tokens.clear();
+		} finally {
+			this.notify();
+		}
 	}
 
 	private async refresh(): Promise<string> {
 		const epoch = this.epoch;
+		if (this.signInRequired) throw new AuthError("sign-in-required");
 		const rt = this.tokens.get();
-		if (!rt) throw new AuthError(this.signInRequired ? "sign-in-required" : "signed-out");
+		if (!rt) throw new AuthError("signed-out");
 		const clientId = this.requireClientId();
 		const res = await this.postToken({
 			client_id: clientId,
@@ -239,7 +249,8 @@ export class AuthClient implements AccessTokenProvider {
 				// The grant is dead: forget it and ask the user to sign in again. Local state is kept.
 				this.access = null;
 				this.signInRequired = true;
-				await this.tokens.clear();
+				// If the clear fails, status still reads sign-in-required and the dead token is never sent again.
+				await this.tokens.clear().catch(() => undefined);
 				this.notify();
 				throw new AuthError("sign-in-required", code);
 			}
@@ -258,13 +269,18 @@ export class AuthClient implements AccessTokenProvider {
 		await this.tokens.set(tok.refreshToken);
 		if (epoch !== this.epoch) {
 			// Signed out while the write was in flight: undo it.
-			await this.tokens.clear();
+			await this.tokens.clear().catch(() => undefined);
 			throw new AuthError("signed-out");
 		}
 	}
 
 	private cacheAccess(tok: TokenResponse): void {
-		this.access = { token: tok.accessToken, expiresAt: this.clock.now() + tok.expiresInSec * 1000 };
+		const lifetimeMs = tok.expiresInSec * 1000;
+		this.access = {
+			token: tok.accessToken,
+			expiresAt: this.clock.now() + lifetimeMs,
+			marginMs: Math.min(REFRESH_MARGIN_MS, lifetimeMs / 2),
+		};
 	}
 
 	/** Form POST to the token endpoint. No Origin header and no Authorization [I-AC-5], [I-AC-3]. */

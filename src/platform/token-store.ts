@@ -17,6 +17,14 @@ export interface PluginDataAccess {
 	save(): Promise<void>;
 }
 
+/** The secret couldn't be overwritten, so a refresh token may remain in SecretStorage (R-AUTH-7). */
+export class TokenClearError extends Error {
+	constructor() {
+		super("token-clear-failed");
+		this.name = "TokenClearError";
+	}
+}
+
 export class PluginTokenStore implements TokenStore {
 	private readonly secrets: SecretStorageLike;
 	private readonly data: PluginDataAccess;
@@ -59,12 +67,16 @@ export class PluginTokenStore implements TokenStore {
 		await this.data.save();
 	}
 
-	/** There is no delete method, so the secret is overwritten with "" [O-API-4]. */
+	/**
+	 * There is no delete method, so the secret is overwritten with "" [O-API-4]. The fallback is removed either
+	 * way; if a token is still readable afterwards, this throws so sign-out never reports a false success.
+	 */
 	async clear(): Promise<void> {
 		this.trySecret("");
 		delete this.data.get().fallbackRefreshToken;
 		this.current = "secret-storage";
 		await this.data.save();
+		if (this.readSecret()) throw new TokenClearError();
 	}
 
 	private trySecret(value: string): boolean {

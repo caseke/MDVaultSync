@@ -480,3 +480,65 @@ test("initial status reflects the stored token", () => {
 	const auth = new AuthClient({ transport: http, tokens, clock: new FakeClock(), getClientId: () => CLIENT_ID });
 	assert.equal(auth.status, "signed-in");
 });
+
+describe("security review fixes", () => {
+	test("refuses to start a sign-in while already signed in", async () => {
+		const { auth } = await signedIn();
+		assert.equal(await codeOf(auth.buildAuthorizeUrl(REDIRECT_PROTOCOL)), "already-signed-in");
+	});
+
+	test("a redemption invalidates an older in-flight refresh", async () => {
+		const { auth, http, tokens } = await signedIn();
+		const hold = deferred<ReturnType<typeof jsonResponse>>();
+		http.enqueue(() => hold.promise);
+		const oldRefresh = auth.getAccessToken();
+		http.enqueueJson(200, tokenBody({ access_token: "AT-NEW", refresh_token: "RT-NEW" }));
+		await auth.redeemCode("C", "v".repeat(43), REDIRECT_PROTOCOL);
+		hold.resolve(jsonResponse(200, tokenBody({ access_token: "AT-OLD", refresh_token: "RT-OLD" })));
+		assert.equal(await codeOf(oldRefresh), "signed-out");
+		assert.equal(tokens.value, "RT-NEW");
+		assert.equal(await auth.getAccessToken(), "AT-NEW");
+	});
+
+	test("an older refresh failing with invalid_grant after a redemption doesn't clear the new token", async () => {
+		const { auth, http, tokens } = await signedIn();
+		const hold = deferred<ReturnType<typeof jsonResponse>>();
+		http.enqueue(() => hold.promise);
+		const oldRefresh = auth.getAccessToken();
+		http.enqueueJson(200, tokenBody({ access_token: "AT-NEW", refresh_token: "RT-NEW" }));
+		await auth.redeemCode("C", "v".repeat(43), REDIRECT_PROTOCOL);
+		hold.resolve(jsonResponse(400, { error: "invalid_grant" }));
+		assert.equal(await codeOf(oldRefresh), "signed-out");
+		assert.equal(tokens.value, "RT-NEW");
+		assert.equal(auth.status, "signed-in");
+	});
+
+	test("a short-lived access token is still cached (margin is at most half its lifetime)", async () => {
+		const { auth, http, clock } = await signedIn();
+		http.enqueueJson(200, tokenBody({ access_token: "AT2", refresh_token: "RT2", expires_in: 120 }));
+		assert.equal(await auth.getAccessToken(), "AT2");
+		clock.advance(59_000);
+		assert.equal(await auth.getAccessToken(), "AT2");
+		assert.equal(http.requests.length, 1);
+		clock.advance(2_000);
+		http.enqueueJson(200, tokenBody({ access_token: "AT3", refresh_token: "RT3" }));
+		assert.equal(await auth.getAccessToken(), "AT3");
+	});
+
+	test("a failed token clear surfaces from signOut and status stays honest", async () => {
+		const { auth, tokens } = await signedIn();
+		tokens.clear = () => Promise.reject(new Error("keyring write failed"));
+		await assert.rejects(auth.signOut());
+		assert.equal(auth.status, "signed-in");
+	});
+});
+
+test("invalid_grant still reports sign-in-required when the token clear fails", async () => {
+	const { auth, http, tokens } = await signedIn();
+	tokens.clear = () => Promise.reject(new Error("keyring write failed"));
+	http.enqueueJson(400, { error: "invalid_grant" });
+	assert.equal(await codeOf(auth.getAccessToken()), "sign-in-required");
+	assert.equal(auth.status, "sign-in-required");
+	assert.equal(await codeOf(auth.getAccessToken()), "sign-in-required");
+	assert.equal(http.requests.length, 1);
+});

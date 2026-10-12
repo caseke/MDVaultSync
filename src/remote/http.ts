@@ -3,9 +3,22 @@ import type { AccessTokenProvider, HttpRequest, HttpResponse, HttpTransport } fr
 
 export const GRAPH_ORIGIN = "https://graph.microsoft.com";
 
-/** True only for https://graph.microsoft.com URLs (default port, no userinfo). Throws on an unparseable URL. */
+/** Thrown for an unparseable URL. Carries no URL: transfer URLs are bearer credentials (T-I3). */
+export class InvalidUrl extends Error {
+	constructor() {
+		super("invalid-url");
+		this.name = "InvalidUrl";
+	}
+}
+
+/** True only for https://graph.microsoft.com URLs (default port, no userinfo). Throws InvalidUrl if unparseable. */
 export function isGraphUrl(url: string): boolean {
-	const u = new URL(url);
+	let u: URL;
+	try {
+		u = new URL(url);
+	} catch {
+		throw new InvalidUrl();
+	}
 	return u.protocol === "https:" && u.origin === GRAPH_ORIGIN && u.username === "" && u.password === "";
 }
 

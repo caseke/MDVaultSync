@@ -68,3 +68,10 @@ test("a caller-supplied Authorization on a Graph URL is replaced, not duplicated
 	const auth = Object.entries(sent).filter(([k]) => k.toLowerCase() === "authorization");
 	assert.deepEqual(auth, [["Authorization", "Bearer AT-SENTINEL"]]);
 });
+
+test("an unparseable URL error carries no URL", async () => {
+	const { t } = setup();
+	const e = await t.send({ url: "https//graph SECRET-PATH", method: "GET" }).catch((x: unknown) => x);
+	assert.ok(e instanceof Error);
+	assert.ok(!`${String(e)} ${JSON.stringify(e)} ${e.stack ?? ""}`.includes("SECRET-PATH"));
+});
