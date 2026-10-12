@@ -387,3 +387,12 @@ test("a delta page holding a name longer than 255 characters still parses (0.3.0
 	const all = await g.deltaAll(null);
 	assert.ok(all.items.some((i) => i.name.length === 300));
 });
+
+test("getItem works when the download host is unlisted; only download() refuses it", async () => {
+	const { g, fake } = setupGraph({ downloadHost: "https://cdn.unlisted.example" });
+	const n = fake.addFile("APPROOT", "a.bin", enc("abc"));
+	assert.equal((await g.getItem(n.id))?.size, 3);
+	assert.equal((await g.getChildByName("APPROOT", "a.bin"))?.id, n.id);
+	await assert.rejects(g.download(n.id), UntrustedUrl);
+	assert.ok(!fake.requests.some((r) => r.url.startsWith("https://cdn.unlisted.example")));
+});

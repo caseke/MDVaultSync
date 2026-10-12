@@ -137,12 +137,14 @@ test("rejects non-object items and facets", () => {
 	assert.throws(() => parseDriveItem(file({ file: { hashes: "x" } })), InvalidResponse);
 });
 
-test("parseItemExtras: download URL must be on an allowlisted host; parent path is optional", () => {
+test("parseItemExtras returns the raw download URL (checked at use, in download()); parent path is optional", () => {
 	const ok = parseItemExtras(file({ "@microsoft.graph.downloadUrl": "https://public.dm.files.1drv.com/x?t=1", parentReference: { id: "P", path: "/drive/root:/Apps" } }));
 	assert.equal(ok.downloadUrl, "https://public.dm.files.1drv.com/x?t=1");
 	assert.equal(ok.parentPath, "/drive/root:/Apps");
 	assert.deepEqual(parseItemExtras(file()), { downloadUrl: null, parentPath: null });
-	assert.throws(() => parseItemExtras(file({ "@microsoft.graph.downloadUrl": "https://evil.example/x" })), UntrustedUrl);
+	assert.equal(parseItemExtras(file({ "@microsoft.graph.downloadUrl": "https://evil.example/x" })).downloadUrl, "https://evil.example/x");
+	assert.throws(() => parseItemExtras(file({ "@microsoft.graph.downloadUrl": 5 })), InvalidResponse);
+	assert.throws(() => parseItemExtras(file({ "@microsoft.graph.downloadUrl": `https://a.1drv.com/${"x".repeat(8192)}` })), InvalidResponse);
 	assert.throws(() => parseItemExtras(file({ parentReference: { id: "P", path: 5 } })), InvalidResponse);
 	assert.throws(() => parseItemExtras(file({ parentReference: { id: "P", path: "p".repeat(2049) } })), InvalidResponse);
 });

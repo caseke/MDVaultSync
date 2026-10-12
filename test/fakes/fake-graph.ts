@@ -40,6 +40,8 @@ export interface FakeGraphOptions {
 	downloadHost?: string;
 	/** Answer 400 to a createUploadSession body that carries item.fileSize (the 0.3.0 Ubuntu probe result). */
 	rejectFileSize?: boolean;
+	/** Hand out upload URLs on this origin instead of api.onedrive.com. */
+	uploadHost?: string;
 }
 
 export function sha1Base64(b: Uint8Array): string {
@@ -86,6 +88,7 @@ export class FakeGraph implements HttpTransport {
 			deltaHashes: opts.deltaHashes ?? true,
 			downloadHost: opts.downloadHost ?? DOWNLOAD_HOST,
 			rejectFileSize: opts.rejectFileSize ?? false,
+			uploadHost: opts.uploadHost ?? UPLOAD_HOST,
 		};
 		this.nodes.set("ROOT", this.node("ROOT", "root", null, true));
 		this.nodes.set("APPS", this.node("APPS", "Apps", "ROOT", true));
@@ -180,7 +183,7 @@ export class FakeGraph implements HttpTransport {
 		}
 		const forced = this.intercept?.(req) ?? null;
 		if (forced) return forced;
-		if (u.origin === UPLOAD_HOST) return this.uploadRoute(req, u);
+		if (u.origin === UPLOAD_HOST || u.origin === this.opts.uploadHost) return this.uploadRoute(req, u);
 		if (u.origin === this.opts.downloadHost || u.origin === DOWNLOAD_HOST) return this.downloadRoute(req, u);
 		if (u.origin !== "https://graph.microsoft.com") return err(404, "itemNotFound");
 		return this.graphRoute(req, u);
@@ -323,7 +326,7 @@ export class FakeGraph implements HttpTransport {
 		const total = typeof fileSize === "number" ? fileSize : null;
 		const sid = `S${++this.seq}`;
 		this.sessions.set(sid, { target, total, received: new Uint8Array(total ?? 0), next: 0 });
-		return json(200, { uploadUrl: `${UPLOAD_HOST}/up/${sid}?tempauth=${URL_SECRET}`, expirationDateTime: "2026-10-13T00:00:00Z" });
+		return json(200, { uploadUrl: `${this.opts.uploadHost}/up/${sid}?tempauth=${URL_SECRET}`, expirationDateTime: "2026-10-13T00:00:00Z" });
 	}
 
 	private uploadRoute(req: HttpRequest, u: URL): HttpResponse {

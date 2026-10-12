@@ -32,7 +32,7 @@ test("full probe against an OneDrive-like fake records every result and cleans u
 	const { fake, deps } = setup({ quotaReadable: false });
 	fake.addFile("APPROOT", "Secret Diary.md", enc("private words"));
 	const r = await runProbe(deps);
-	assert.equal(r.probeVersion, 2);
+	assert.equal(r.probeVersion, 3);
 	assert.equal(r.platform, "test");
 	assert.deepEqual(r.approot, { ok: true, parentPath: "/drive/root:/Apps", name: "MDVaultSync", pathPrefixLength: 16 });
 	for (const form of ["approot-colon", "items-id"] as const) {
@@ -59,6 +59,7 @@ test("full probe against an OneDrive-like fake records every result and cleans u
 	assert.equal(r.largeFile.bytesMatch, true);
 	assert.equal(r.largeFile.uploadHost, "api.onedrive.com");
 	assert.equal(r.largeFile.downloadHost, "public.dm.files.1drv.com");
+	assert.equal(r.largeFile.downloadHostTrusted, true);
 	assert.equal(typeof r.largeFile.uploadMs, "number");
 	assert.equal(typeof r.largeFile.downloadMs, "number");
 	// QuickXorHash vectors for M4: the fake uses sha1 in place of QuickXorHash, so compare against that.
@@ -188,4 +189,30 @@ test("when every createUploadSession body fails, the stage is create and all att
 	assert.equal(r.largeFile.stage, "create");
 	assert.deepEqual(r.largeFile.createAttempts?.map((a) => a.variant), ["conflictBehavior+fileSize", "conflictBehavior", "none"]);
 	assert.deepEqual(r.cleanup, { ok: true });
+});
+
+test("an upload URL on an unlisted host is reported by hostname and never contacted (0.3.1 Ubuntu result)", async () => {
+	const { fake, deps } = setup({ rejectFileSize: true, uploadHost: "https://upload.unlisted.example" });
+	const r = await runProbe(deps);
+	assert.equal(r.largeFile.ok, false);
+	assert.equal(r.largeFile.stage, "create");
+	assert.equal(r.largeFile.code, "UntrustedUrl");
+	assert.equal(r.largeFile.rejectedUploadHost, "upload.unlisted.example");
+	assert.deepEqual(r.largeFile.createAttempts, [
+		{ variant: "conflictBehavior+fileSize", status: 400, code: "invalidRequest", innerCodes: ["invalidArgument"] },
+		{ variant: "conflictBehavior", status: 200, rejectedHost: "upload.unlisted.example" },
+	]);
+	assert.equal(fake.requests.filter((q) => q.url.startsWith("https://upload.unlisted.example")).length, 0);
+	assert.ok(!JSON.stringify(r).includes(URL_SECRET));
+	assert.deepEqual(r.cleanup, { ok: true });
+});
+
+test("an unlisted download host is reported by hostname and not contacted", async () => {
+	const { fake, deps } = setup({ downloadHost: "https://cdn.unlisted.example" });
+	const r = await runProbe(deps);
+	assert.equal(r.largeFile.downloadHost, "cdn.unlisted.example");
+	assert.equal(r.largeFile.downloadHostTrusted, false);
+	assert.equal(r.largeFile.stage, "download");
+	assert.equal(r.largeFile.code, "UntrustedUrl");
+	assert.ok(!fake.requests.some((q) => q.url.startsWith("https://cdn.unlisted.example")));
 });

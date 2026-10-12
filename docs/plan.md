@@ -467,21 +467,59 @@ Two v1 failures were bugs in this milestone's code, fixed in 0.3.1:
   - Fix: `fileSize` is no longer sent.
   - Probe v2 tries three bodies (with fileSize, without it, none) and records each answer with its inner codes (`largeFile.createAttempts`). It also records which `stage` failed.
 
-**Probe v2 (0.3.1)**, still needed from both devices: delta forms, the large-file round trip (iPad: O-API-2, T-D6), observed transfer hosts, and the name limit at 300.
+**Probe v2 (0.3.1), Ubuntu, 2026-10-12** (owner; whitespace compacted):
 ```
-Ubuntu: (paste here)
-iPad:   (paste here)
+{
+  "probeVersion": 2, "platform": "linux", "pluginVersion": "0.3.1",
+  "startedAt": "2026-10-12T05:10:26.258Z", "durationMs": 31160,
+  "approot": { "ok": true, "parentPath": "/drive/root:/Apps", "name": "MDVaultSync", "pathPrefixLength": 16 },
+  "leftoverRemoved": false,
+  "delta": {
+    "approot-colon": { "ok": false, "code": "InvalidResponse" },
+    "items-id": { "ok": true, "pages": 1, "items": 5, "approotListed": true, "filesWithHash": 3, "filesWithoutHash": 0 }
+  },
+  "putIfMatch": { "honored": true, "staleStatus": 412, "staleCode": "notAllowed" },
+  "caseInsensitive": { "confirmed": true, "status": 409, "code": "nameAlreadyExists" },
+  "nameLength": {
+    "len255": { "status": 201 }, "len256": { "status": 201 },
+    "len300": { "status": 400, "code": "invalidRequest", "innerCodes": ["badArgument"] }, "nameMax": null
+  },
+  "patchIfMatch": { "currentStatus": 200, "staleStatus": 412 },
+  "deleteIfMatch": { "staleStatus": 412, "currentStatus": 204 },
+  "quota": { "readable": true },
+  "largeFile": {
+    "ok": false, "size": 12582912, "fragments": 2,
+    "createAttempts": [ { "variant": "conflictBehavior+fileSize", "status": 400, "code": "invalidRequest" } ],
+    "stage": "create", "code": "UntrustedUrl"
+  },
+  "hashVectors": [ same three vectors as v1 ],
+  "cleanup": { "ok": true }, "errors": 1
+}
+```
+
+What v2 settled, applied in 0.3.2 (`capabilities.ts`, pinned by `test/capabilities.test.ts`):
+- **Delta:** `items-id` works, with one page, the approot listed and hashes on every file, so `DELTA_FORM = "items-id"`. `approot-colon` fails our validation and isn't used [G-DL-1], [G-DL-8].
+- **PUT honors If-Match** (second observation), so `PUT_HONORS_IF_MATCH = true` [G-UP-3].
+- **Name limit:** 256 is accepted and 300 is rejected (`badArgument`, with the path under 400). `NAME_MAX` stays 255 [G-NM-6].
+- **createUploadSession:** the body with `fileSize` → 400 again. The body without it was accepted: the session was created, but its `uploadUrl` failed our host allowlist (`UntrustedUrl` at parse, which is why that attempt wasn't listed). The 0.3.1 fix (no `fileSize`) is confirmed. **The upload host is missing from design §8's list**, and v2 couldn't say which host, because it only reported hostnames that pass.
+- 0.3.2 also stops `getItem` from failing on an unlisted download host. The host is now checked only in `download()`.
+- `CAPABILITIES_PROBED` stays `false` until the upload host is allowlisted and the round trip passes on the iPad.
+
+**Probe v3 (0.3.2)**, needed from Ubuntu first: `largeFile.rejectedUploadHost` (and `downloadHost` / `downloadHostTrusted`). The next session adds the observed suffixes to `TRANSFER_HOST_SUFFIXES` (0.3.3). Then run it on Ubuntu and the iPad for the full round trip.
+```
+Ubuntu v3: (paste here)
+iPad:      (paste here)
 ```
 
 **Manual checks** (owner; use a throwaway test vault, never the real one)
-1. **Install 0.3.1.** `git switch claude/eloquent-clarke-21deia && git pull`, then `git tag 0.3.1 && git push origin 0.3.1`. (0.3.0 was installed on both devices on 2026-10-12 and ran probe v1 on Ubuntu; see above.)
+1. **Install the newest 0.3.x** (now 0.3.2). `git switch claude/eloquent-clarke-21deia && git pull`, then `git tag 0.3.2 && git push origin 0.3.2`. (0.3.0 ran probe v1 and 0.3.1 ran probe v2 on Ubuntu; see above.)
    - Wait for the **Release** workflow to pass.
-   - Open the draft `0.3.1` release, check that it has the three assets and is marked pre-release, then publish it.
+   - Open the draft release, check that it has the three assets and is marked pre-release, then publish it.
    - Ubuntu: `npm ci && npm run build`, then copy `main.js`, `manifest.json` and `styles.css` into the test vault's plugin folder (as in M2), or install through BRAT.
-   - iPad: BRAT → **Check for updates to all beta plugins**, or add version `0.3.1`.
+   - iPad: BRAT → **Check for updates to all beta plugins**.
 2. **Run the probe on Ubuntu.** Sign in if needed. Open the command palette (Ctrl+P; on the iPad, swipe down on a note or use **Open command palette**) and run **MDVaultSync: Run OneDrive capability probe**. There is no settings button until M7.
    - Expect a window that says it is running. After up to a minute it shows JSON. Select **Copy result** and paste it into the block above.
-   - Pass: `probeVersion` is 2, `cleanup.ok` is `true`, `largeFile.bytesMatch` is `true`, and OneDrive web shows no `.mdvaultsync-probe` folder in `Apps/<your app name>` afterwards. The probe's items are in the OneDrive recycle bin; you can empty it.
+   - Pass: `probeVersion` is 3 or later, `cleanup.ok` is `true`, `largeFile.bytesMatch` is `true`, and OneDrive web shows no `.mdvaultsync-probe` folder in `Apps/<your app name>` afterwards. The probe's items are in the OneDrive recycle bin; you can empty it.
 3. **Run the probe on the iPad**, the same way. Probe 8, the 12 MiB round trip, is the one the plan requires on the iPad (O-API-2, T-D6). Record whether Obsidian stayed responsive while it ran.
 4. **A follow-up session applies the results:**
    - `src/remote/capabilities.ts`: `PUT_HONORS_IF_MATCH` from `putIfMatch.honored`; `DELTA_FORM` = the first form with `ok: true`, or `children-walk` if neither works (then the design §5.2 fallback applies and the M5 planner must not assume delta semantics); `NAME_MAX` from `nameLength.nameMax`; then `CAPABILITIES_PROBED = true`.
@@ -539,6 +577,7 @@ iPad:   (paste here)
 - **For M6:** the `.microsoft.com` transfer suffix is still broad. No token can leak (Graph is refused, and transfers carry no auth), but bytes could go to another `*.microsoft.com` host. Narrow the list from the probe's `uploadHost` and `downloadHost` (step 4 above).
 - **For M6:** downloads are length-checked only after `requestUrl` has buffered the whole body. The executor must skip items over the size cap before calling `download` (D-12, T-D6).
 - **For M6:** `GraphClientOptions.transferTransport` falls back to `transport` when omitted, which only tests do. It is safe either way, because the Graph host is refused and `AuthorizingTransport` strips Authorization from non-Graph hosts. It could be made required.
+- When the upload URL is off the allowlist, the probe leaves that server-side upload session uncancelled (cancelling would mean contacting the unlisted host). OneDrive expires it [G-UP-9].
 - The probe leaves its test files in the OneDrive recycle bin (about 12 MiB, which counts toward quota [G-DEL-2]) until the user empties it.
 - The command's display name is "Run OneDrive capability probe", not design §10's "Run Graph capability probe", because the obsidianmd sentence-case rule flags "Graph".
 

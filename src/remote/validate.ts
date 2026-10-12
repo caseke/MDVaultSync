@@ -94,6 +94,7 @@ const QXH_RE = /^[A-Za-z0-9+/]{27}=$/;
 const MAX_TAG = 512;
 const MAX_TIMESTAMP = 64;
 const MAX_PARENT_PATH = 2048;
+const MAX_TRANSFER_URL = 8192;
 const MAX_RANGE_START = Number.MAX_SAFE_INTEGER;
 
 function obj(v: unknown): Record<string, unknown> {
@@ -191,14 +192,18 @@ export function parseDriveItem(raw: unknown): RemoteItem {
 	};
 }
 
-/** Fields outside RemoteItem that some calls need: a checked download URL, and the parent's drive path. */
+/**
+ * Fields outside RemoteItem that some calls need: the raw download URL and the parent's drive path. The download
+ * URL is NOT host-checked here, so an unlisted CDN host can't break every item read; download() runs
+ * checkTransferUrl before any request (design §8, T-T5).
+ */
 export function parseItemExtras(raw: unknown): { downloadUrl: string | null; parentPath: string | null } {
 	const o = obj(raw);
 	const dl = o["@microsoft.graph.downloadUrl"];
 	const parent = optObj(o["parentReference"]);
 	const path = parent ? parent["path"] : undefined;
 	return {
-		downloadUrl: dl === undefined ? null : checkTransferUrl(dl),
+		downloadUrl: dl === undefined ? null : boundedString(dl, MAX_TRANSFER_URL),
 		parentPath: path === undefined ? null : boundedString(path, MAX_PARENT_PATH),
 	};
 }

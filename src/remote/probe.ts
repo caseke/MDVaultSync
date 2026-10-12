@@ -4,10 +4,10 @@
 // registration, not vault data). No vault names, URLs, tokens or contents (T-I3). Every name it creates is fixed.
 import type { Clock, RemoteItem, UploadSessionInfo } from "../core/ports.ts";
 import type { DeltaForm } from "./capabilities.ts";
-import { GraphError, sanitizeGraphCode, toGraphError } from "./errors.ts";
+import { GraphError, UntrustedUrl, sanitizeGraphCode, toGraphError } from "./errors.ts";
 import { GRAPH_BASE, encodeSegment, type GraphClient } from "./graph.ts";
 import { fragmentRanges } from "./upload-session.ts";
-import { MAX_JSON_BODY, parseItemExtras, parseJsonObject, parseUploadSession } from "./validate.ts";
+import { MAX_JSON_BODY, checkTransferUrl, parseItemExtras, parseJsonObject, parseUploadSession } from "./validate.ts";
 
 export const PROBE_DIR = ".mdvaultsync-probe";
 export const LARGE_SIZE = 12 * 1024 * 1024;
@@ -34,6 +34,8 @@ export interface Outcome {
 export interface CreateAttempt extends Outcome {
 	/** Which createUploadSession body was sent (probe v2; the 0.3.0 Ubuntu run got 400 with fileSize). */
 	variant: "conflictBehavior+fileSize" | "conflictBehavior" | "none";
+	/** Hostname of an uploadUrl that the server returned but our allowlist refused (probe v3). */
+	rejectedHost?: string;
 }
 export interface DeltaResult extends Outcome {
 	ok: boolean;
@@ -51,7 +53,7 @@ export interface HashVector {
 	quickXorHash: string | null;
 }
 export interface ProbeResult {
-	probeVersion: 2;
+	probeVersion: 3;
 	platform: string;
 	pluginVersion: string;
 	startedAt: string;
@@ -73,7 +75,11 @@ export interface ProbeResult {
 		downloadMs?: number;
 		bytesMatch?: boolean;
 		uploadHost?: string;
+		/** Hostname of the upload URL when the allowlist refused it; nothing is sent there (probe v3). */
+		rejectedUploadHost?: string;
 		downloadHost?: string;
+		/** Whether downloadHost passes the transfer allowlist (probe v3). */
+		downloadHostTrusted?: boolean;
 		/** The step that failed, when ok is false. */
 		stage?: "create" | "fragment" | "download" | "compare";
 		createAttempts?: CreateAttempt[];
@@ -110,8 +116,22 @@ function outcomeOf(e: unknown): Outcome {
 	return { code: sanitizeGraphCode(e instanceof Error ? e.name : "unknown") };
 }
 
+/** Hostname only: paths and queries carry the URL's credentials (T-I3). */
 function hostOf(url: string): string {
-	return new URL(url).hostname;
+	try {
+		return new URL(url).hostname;
+	} catch {
+		return "unparseable";
+	}
+}
+
+function trusted(url: string): boolean {
+	try {
+		checkTransferUrl(url);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 function sameBytes(a: ArrayBuffer, b: ArrayBuffer): boolean {
@@ -142,7 +162,7 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 
 	const notRun: DeltaResult = { ok: false, code: "not-run" };
 	const result: ProbeResult = {
-		probeVersion: 2,
+		probeVersion: 3,
 		platform: deps.platform,
 		pluginVersion: deps.pluginVersion,
 		startedAt: new Date(t0).toISOString(),
@@ -297,7 +317,19 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 					...(body === undefined ? {} : { body: JSON.stringify(body) }),
 				});
 				if (res.status === 200 || res.status === 201) {
-					s = parseUploadSession(res.body);
+					try {
+						s = parseUploadSession(res.body);
+					} catch (e) {
+						// The server made a session, but its URL is off the allowlist: report the hostname and send nothing
+						// there. The orphaned session expires by itself [G-UP-9].
+						if (e instanceof UntrustedUrl) {
+							const rawUrl = parseJsonObject(res.body, MAX_JSON_BODY)["uploadUrl"];
+							const host = typeof rawUrl === "string" ? hostOf(rawUrl) : "missing";
+							attempts.push({ variant, status: res.status, rejectedHost: host });
+							result.largeFile.rejectedUploadHost = host;
+						}
+						throw e;
+					}
 					attempts.push({ variant, status: res.status });
 					break;
 				}
@@ -316,7 +348,10 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 			const meta = await graph.sendRaw({ url: `${item(done.id)}?$select=id,@microsoft.graph.downloadUrl`, method: "GET" });
 			if (meta.status !== 200) throw toGraphError(meta);
 			const dl = parseItemExtras(parseJsonObject(meta.body, MAX_JSON_BODY)).downloadUrl;
-			if (dl) result.largeFile.downloadHost = hostOf(dl);
+			if (dl) {
+				result.largeFile.downloadHost = hostOf(dl);
+				result.largeFile.downloadHostTrusted = trusted(dl);
+			}
 			const tDown = clock.now();
 			const back = await graph.download(done.id);
 			result.largeFile.downloadMs = clock.now() - tDown;

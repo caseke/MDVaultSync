@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-12
+
+### Changed
+
+- Settings learned from the capability probe are now built in: conditional plain uploads for small files, and the delta form that works on personal OneDrive.
+- The probe output is now version 3. When OneDrive hands back an upload or download address on a server the plugin doesn't trust yet, the probe reports that server's name (never the full address) and sends nothing to it.
+
+### Fixed
+
+- Reading a file's details no longer fails when OneDrive's download server isn't on the trusted list. Only the download itself is refused.
+
 ## [0.3.1] - 2026-10-12
 
 ### Fixed
