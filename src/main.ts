@@ -1,4 +1,4 @@
-import { normalizePath, Notice, Platform, Plugin, requestUrl, setTooltip, TFile, TFolder } from "obsidian";
+import { getIcon, normalizePath, Notice, Platform, Plugin, requestUrl, setIcon, setTooltip, TFile, TFolder } from "obsidian";
 import type { App, EventRef, ObsidianProtocolData, TAbstractFile } from "obsidian";
 import { Engine } from "./core/engine.ts";
 import { RingLogger } from "./core/logger.ts";
@@ -30,7 +30,7 @@ import type { PromptModal } from "./ui/prompt-modal.ts";
 import { ReportModal } from "./ui/report-modal.ts";
 import { MDVaultSyncSettingTab } from "./ui/settings-tab.ts";
 import { SignInModal } from "./ui/sign-in-modal.ts";
-import { statusText } from "./ui/status.ts";
+import { DEFAULT_ICON, statusIcon, statusText } from "./ui/status.ts";
 import { PATTERNS_TEXT, triggerDecision } from "./ui/triggers.ts";
 
 /**
@@ -199,19 +199,25 @@ export default class MDVaultSyncPlugin extends Plugin {
 			}),
 		);
 
-		// Triggers (R-TRIG-3): the ribbon button and "Sync now" run the same action. The ribbon tooltip carries the
-		// state, the only always-visible place on the iPad, which has no status bar [O-API-13] (R-UI-2).
+		// Triggers (R-TRIG-3): the ribbon button and "Sync now" run the same action. The ribbon icon shows the state
+		// everywhere; the iPad has no status bar [O-API-13] and no hover for the tooltip [O-API-20] (R-UI-2).
 		this.ribbonEl = this.addRibbonIcon("refresh-cw", "Sync now", () => void this.sync("ribbon"));
 		if (!Platform.isMobile) {
 			this.statusBarEl = this.addStatusBarItem();
 			this.statusBarEl.addClass("mod-clickable");
-			this.statusBarEl.addEventListener("click", () => new ReportModal(this.app, this.lastReport).open());
+			this.statusBarEl.addEventListener("click", () => this.showStatus());
 		}
 		this.updateStatus();
 		this.addCommand({
 			id: "sync-now",
 			name: "Sync now",
 			callback: () => void this.sync("command"),
+		});
+		// The iPad has no status bar and no hover (R-UI-2 as amended in M7): state and last sync time on demand.
+		this.addCommand({
+			id: "show-status",
+			name: "Show sync status",
+			callback: () => this.showStatus(),
 		});
 		this.addCommand({
 			id: "sync-preview",
@@ -377,8 +383,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 		new Notice(msg, n.persistent ? 0 : 10_000);
 	}
 
-	/** Status bar (desktop) and ribbon tooltip (R-UI-2, design §5.6). */
-	private updateStatus(): void {
+	private currentStatus(): { status: EngineStatus; text: string } {
 		const status: EngineStatus = this.auth.status === "sign-in-required" ? { state: "sign-in-required" } : this.engine.status;
 		const last = this.lastReport;
 		const text = statusText(status, {
@@ -386,8 +391,24 @@ export default class MDVaultSyncPlugin extends Plugin {
 			lastSyncAt: last && (last.result === "ok" || last.result === "partial") ? last.finishedAt : null,
 			signedIn: this.auth.status === "signed-in",
 		});
+		return { status, text };
+	}
+
+	/** Status bar (desktop), ribbon icon (every platform) and ribbon tooltip (desktop hover) (R-UI-2, design §5.6). */
+	private updateStatus(): void {
+		const { status, text } = this.currentStatus();
 		this.statusBarEl?.setText(`MDVaultSync: ${text}`);
-		if (this.ribbonEl) setTooltip(this.ribbonEl, `Sync now. ${text}`);
+		if (this.ribbonEl) {
+			// The first candidate this Obsidian build has; a missing name would leave the button blank.
+			const icon = statusIcon(status, this.auth.status === "signed-in").find((n) => getIcon(n) !== null) ?? DEFAULT_ICON;
+			setIcon(this.ribbonEl, icon);
+			setTooltip(this.ribbonEl, `Sync now. ${text}`);
+		}
+	}
+
+	/** The "Show sync status" command and the status-bar click: state, last sync time and the last report. */
+	private showStatus(): void {
+		new ReportModal(this.app, this.lastReport, this.currentStatus().text).open();
 	}
 
 	/**

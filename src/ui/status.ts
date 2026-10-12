@@ -1,5 +1,6 @@
-// The one-line sync state shown in the status bar (desktop) and the ribbon tooltip (the only always-visible
-// state on the iPad, which has no status bar [O-API-13]) (R-UI-2, design §5.6). Pure, so it is unit tested.
+// The sync state for the status bar and the ribbon tooltip (desktop), the ribbon icon (every platform) and the
+// Show sync status window. The iPad has no status bar [O-API-13] and no hover [O-API-20], so there the icon and
+// the command carry it (R-UI-2 as amended in M7, design §5.6, §10). Pure, so it is unit tested.
 import { LOG_CODE_RE } from "../core/logger.ts";
 import type { EngineStatus } from "../core/ports.ts";
 
@@ -19,6 +20,29 @@ export function formatSyncTime(t: number, now: number): string {
 	const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 	const sameDay = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
 	return sameDay ? hm : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`;
+}
+
+/** The idle icon, and the last resort when this Obsidian build has none of a state's candidates (main.ts). */
+export const DEFAULT_ICON = "refresh-cw";
+
+/**
+ * Candidate icon names for a state, tried in order (main.ts takes the first this Obsidian build has; Lucide
+ * renamed some, such as alert-triangle → triangle-alert). A tooltip needs hover, which a touchscreen doesn't
+ * have [O-API-20], so on the iPad the icon itself shows the state (R-UI-2 as amended in M7).
+ */
+export function statusIcon(s: EngineStatus, signedIn: boolean): readonly string[] {
+	switch (s.state) {
+		case "syncing":
+			return ["loader", "loader-circle", "loader-2", "hourglass"];
+		case "waiting-for-user":
+			return ["hourglass", "clock"];
+		case "error":
+			return ["triangle-alert", "alert-triangle", "circle-alert", "alert-circle"];
+		case "sign-in-required":
+			return ["log-in", "user"];
+		case "idle":
+			return signedIn ? [DEFAULT_ICON] : ["log-in", "user"];
+	}
 }
 
 /** R-UI-2 asks for the state and the last sync time: every state but idle appends the last successful sync. */

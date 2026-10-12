@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+0.5.1: the sync state on the iPad.
+
+### Fixed
+
+- The iPad had no way to see the sync state at a glance: it has no status bar, and the ribbon button's tooltip needs a mouse to hover. The ribbon button's icon now shows the state on every device (arrows when synced, a loader while syncing, an hourglass when the sync waits for you, a warning after an error, a sign-in arrow when you need to sign in).
+
+### Added
+
+- A **Show sync status** command shows the current state, the time of the last sync and the last sync report. Clicking the status bar on desktop opens the same window.
+
 Milestone 7 (0.5.0): sync is switched on. The plugin now syncs by itself and can be used day to day; the owner's device checks are still to come.
 
 ### Added

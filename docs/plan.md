@@ -1040,7 +1040,7 @@ Manual rename results: Ubuntu and iPad both `threw` / fallback works / cleaned u
 ---
 
 ## M7: Obsidian integration and UI
-**Status:** awaiting-owner (2026-10-12). Session work done and verified: lint with no warnings, typecheck, 803 tests and the build pass, and three security-review passes are done and their findings fixed. Manual checks 1–11 below need the owner on both devices with 0.5.0. M8 may start on its unit-test work (sentinel test, notice table, quota mapping), but its device matrix needs M7's checks first.
+**Status:** awaiting-owner (2026-10-12): the owner's checks pass except 7 on the iPad, which 0.5.1 fixes; only re-check 7 is left. Session work done and verified (0.5.1: lint with no warnings, typecheck, 804 tests and the build pass; see **Verification output**), and the security-review passes are done and their findings fixed. M8 may start on its unit-test work (sentinel test, notice table, quota mapping), but its device matrix needs M7's checks first.
 
 **Goal.** A usable plugin: triggers, events, settings, status and notices (design §3, §10).
 
@@ -1064,7 +1064,7 @@ Manual rename results: Ubuntu and iPad both `threw` / fallback works / cleaned u
   4. Delete a note: the other device puts it in trash per the Obsidian setting, and OneDrive has it in the recycle bin.
   5. Edit the same note on both devices offline, then sync both: one conflict copy named after the device, a notice listing it, and both versions present on both devices.
   6. Delete 30 % of the test vault: the confirm modal appears, and "Skip deletes" leaves the remote intact.
-  7. The status bar on Ubuntu and the ribbon tooltip on iPad show the state and last sync time.
+  7. The status bar on Ubuntu and the ribbon tooltip on iPad show the state and last sync time. *(Amended 2026-10-12 with SPEC R-UI-2: a tooltip can't show on a touchscreen [O-API-20]. On the iPad, the ribbon icon shows the state and **Show sync status** shows the state and last sync time; see check 7b.)*
   8. "Sync now" pressed repeatedly during a sync doesn't start parallel runs (the log shows sequential runs).
 
 **Verify**
@@ -1086,15 +1086,18 @@ npm run lint && npm run typecheck && npm test && npm run build
 | 4 | Delete a note on Ubuntu. Sync both devices. | The iPad puts it where its Obsidian "Deleted files" setting says (system trash or `.trash`). OneDrive web shows it in the recycle bin. |
 | 5 | Put both devices offline (airplane mode on the iPad, network off on Ubuntu). Edit the same note differently on each. Reconnect, sync Ubuntu, then the iPad, then Ubuntu again. | One conflict copy named `<note> (conflict iPad <date time>).md` (the iPad's version); a notice on the iPad lists it and stays until dismissed; both versions are on both devices. |
 | 6 | With 10 or more notes synced, delete 30 % of them on Ubuntu. Sync. Choose **Skip deletes this time**. Then run **Sync now** and choose **Delete N files**. | The confirm window lists the deletes. Skipping leaves them in OneDrive (and the next interval run doesn't ask again); Sync now asks again and then deletes them. |
-| 7 | Watch the status bar on Ubuntu and hover or long-press the ribbon icon on the iPad during and after a sync. | Ubuntu: "MDVaultSync: Syncing…", then "MDVaultSync: Synced HH:MM". iPad tooltip: "Sync now. Synced HH:MM". Clicking the status bar opens **Last sync**. |
+| 7 | Watch the status bar on Ubuntu and hover or long-press the ribbon icon on the iPad during and after a sync. | Ubuntu: "MDVaultSync: Syncing…", then "MDVaultSync: Synced HH:MM". iPad tooltip: "Sync now. Synced HH:MM". Clicking the status bar opens **Last sync**. (0.5.0 wording, as tested.) |
+| 7b | **0.5.1 re-check.** On both devices, watch the ribbon icon during and after a sync; on the iPad, note where you see it (the sidebar ribbon or the ribbon menu). Run **MDVaultSync: Show sync status**. On Ubuntu, click the status bar. To see the error icon, turn the network off and select **Sync now**. | The icon changes to a loader while syncing and back to the sync arrows after; with the network off it shows a warning triangle. **Show sync status** (and, on Ubuntu, the status-bar click) opens **Sync status** with "Synced HH:MM" (or the error) and the last report. |
 | 8 | Add a 20 MB file, start a sync, and while it runs run **Sync now** five times. Copy the log. | The log shows `sync.run` entries one after another (never two starting before one ends), and at most one extra run after the first. |
 | 9 | (M6 carry-in) Sync a file over 10 MB, edit it (for example, replace it with another file over 10 MB under the same name), sync again. | It uploads; no conflict copy appears. |
 | 10 | (M6 carry-in) On the iPad, with the note list visible, add a note on Ubuntu and sync both. | The note appears in the iPad's file list without restarting Obsidian. |
 | 11 | Open Settings → MDVaultSync on both devices; record the Obsidian version (Settings → General). Change each Sync field, close and reopen settings. Type "exclude" in the settings search box. | Every R-UI-1 field is there (account, sign in/out, client ID, device name, interval, size, exclude patterns, preview toggle, delete threshold, last sync report, probe, copy log), values persist, invalid values show a red explanation and aren't saved, and the search finds **Exclude patterns** on Obsidian 1.13 or later. |
 
-**Results** (owner; per device: pass/fail and notes)
-- Ubuntu (Obsidian version: ____): 1 ☐ 2 ☐ 3 ☐ 4 ☐ 5 ☐ 6 ☐ 7 ☐ 8 ☐ 9 ☐ 10 n/a 11 ☐
-- iPad (Obsidian version: ____): 1 ☐ 2 ☐ 3 ☐ 4 ☐ 5 ☐ 6 ☐ 7 ☐ 8 ☐ 9 ☐ 10 ☐ 11 ☐
+**Results** (owner, 2026-10-12, 0.5.0)
+- **Ubuntu** (Obsidian 1.14.4): 1–9 and 11 pass; 10 n/a (iPad-only check).
+- **iPad** (Obsidian 1.14.5 (387)): 1–6 and 8–11 pass. **7 failed:** there's no status bar on mobile (expected [O-API-13]), and hovering or long-pressing the ribbon icon showed nothing. Owner: "not a deal breaker; fix it if it's an easy fix."
+  - **Cause:** a design error, not user error. `setTooltip` is a hover tooltip, and a touchscreen has no hover [O-API-20], so SPEC R-UI-2's "on iPad the ribbon tooltip shows the same state" couldn't work. **Fix (0.5.1):** the ribbon icon shows the state on every platform, and a new **Show sync status** command shows the state and last sync time; SPEC R-UI-2 changed to match (design §10). Re-check 7b on 0.5.1: pending (owner).
+- **Check 8 log** (owner, 0.5.0; reviewed in session): every `sync.run` ends before the next run's first `graph.request`, so runs never overlapped; pressing Sync now again after a run finished starts a new run, as designed. The owner recorded check 8 as passed; the log alone can't show which runs were reruns, so the "at most one extra run" part rests on the owner's observation. One `op.upload-new` ended `changed-during-sync` while the 20 MB file was still being written; the next run uploaded it (201). One observation, carried to M8: a single `graph.request` took 1,424,364 ms (about 24 minutes), and its run held the single-flight lock for that long. Most likely the iPad suspended Obsidian mid-request (or the network stalled). It caused no error, but `requestUrl` has no timeout.
 
 **Verification output** (2026-10-12, after all three review passes; Node 22.22, container)
 ```
@@ -1118,10 +1121,26 @@ $ node --test --experimental-test-coverage "test/**/*.test.ts"   (line % | branc
 #   settings.ts 100 | 97.6 | 100   display.ts 100 | 75.0 | 100   notices.ts 100 | 91.7 | 100
 #   plan-groups.ts 100 | 97.4 | 100   status.ts 100 | 100 | 100   triggers.ts 100 | 100 | 100
 ```
+**Verification output, 0.5.1** (2026-10-12, after the review of the check 7 fix; Node 22.22, container)
+```
+$ npm run lint                  (exit 0; 0 errors, 0 warnings)
+$ npm run typecheck             (exit 0)
+$ npm test
+# tests 804
+# suites 8
+# pass 804
+# fail 0
+$ npm run build                 (exit 0)
+$ npm audit --audit-level=high  (exit 0; 3 moderate, unchanged)
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+```
+**0.5.1 review** (`security-reviewer`, base 363faf6): no high or medium. Fixed, low: plan.md records (check 10 is iPad-only; the check 7 wording as tested on 0.5.0 kept, with the 0.5.1 re-check as 7b, including the Ubuntu status-bar click and the error icon; the stale status line; the acceptance and built-list lines); stale comments about the tooltip; a missing error icon could have fallen back to the "synced" arrows, so each state now tries its own list of icon names (Lucide renamed `alert-triangle` to `triangle-alert`) before the default. Open, info: whether the iPad shows the updated icon where the user sees the ribbon (re-check 7b records where); the status window is a snapshot taken when it opens (design §10).
+
 The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidian` at runtime and can't run under `node --test`; every decision they make is in a pure module above, and the manual checks cover the rendering.
 
 **What was built**
-- `src/main.ts`: the `Engine` wired with `ObsidianVault` (through `instanceof`-checked adapters for Vault and FileManager), `TransformedRemoteContent(graph, IdentityTransform, PUT_HONORS_IF_MATCH, classifyError)`, `PluginStateStore`, `ensureSignedIn`, `resetBudget` and the hooks. `onLayoutReady`: vault events, the startup sync 5 s later, the interval timer (restarted when the setting changes). Commands `sync-now` and `sync-preview` (no hotkeys), the ribbon button with the state in its tooltip, the status bar on desktop only (click opens **Last sync**). Notices come from the engine's new `onReport` hook. Sign-out passes the engine to `clearSession` and closes open prompts; unload closes prompts, refuses new ones and resets the engine. `persist()` serializes every data.json write.
+- `src/main.ts`: the `Engine` wired with `ObsidianVault` (through `instanceof`-checked adapters for Vault and FileManager), `TransformedRemoteContent(graph, IdentityTransform, PUT_HONORS_IF_MATCH, classifyError)`, `PluginStateStore`, `ensureSignedIn`, `resetBudget` and the hooks. `onLayoutReady`: vault events, the startup sync 5 s later, the interval timer (restarted when the setting changes). Commands `sync-now`, `sync-preview` and (0.5.1) `show-status` (no hotkeys); the ribbon button, whose icon shows the state (0.5.1) and whose desktop tooltip adds the text; the status bar on desktop only (click opens **Sync status**, 0.5.1; **Last sync** in 0.5.0). Notices come from the engine's new `onReport` hook. Sign-out passes the engine to `clearSession` and closes open prompts; unload closes prompts, refuses new ones and resets the engine. `persist()` serializes every data.json write.
 - `src/ui/`: `settings-tab.ts` (every R-UI-1 field; one row list for `getSettingDefinitions()` on 1.13+ and the `display()` fallback through `SettingGroup` on 1.11.4–1.12; invalid input isn't saved and says why; after a sync only the report re-renders), `plan-preview-modal.ts`, `confirm-deletes-modal.ts`, `prompt-modal.ts` (answers no on close, closes itself after 10 minutes), `report-view.ts`, `report-modal.ts`; pure: `display.ts`, `status.ts`, `notices.ts`, `plan-groups.ts`, `triggers.ts`.
 - `src/platform/vault-events.ts`: events to hints; hidden, configDir and excluded paths ignored; renames into or out of them become a delete or a new file.
 - `src/settings.ts`: the sync settings with range checks (T-T6), the device-name rules, the interval floor for the listing fallback, `toEngineSettings`, the fail-closed pattern check and `snapshotForSave`.
@@ -1132,7 +1151,7 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 
 **Acceptance**
 - Lint passes with no warnings from `obsidianmd` rules (no warnings at all).
-- Manual checks 1–8, plus 9–11: pending (owner).
+- Manual checks (owner, 2026-10-12, 0.5.0): 1–6, 8, 9 and 11 pass on both devices; 10 (iPad only) passes; 7 passes on Ubuntu and fails on the iPad (fixed in 0.5.1; re-check 7b pending).
 
 **Carry-ins closed**
 - Exclude-setting help: the help text says `!` lines and backslash escapes aren't supported and never match, and that matching is case-sensitive, with the iPad case. (The literal `PRIVATE/` example was reworded: the sentence-case lint rule flags it.)
@@ -1155,6 +1174,7 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 - **Third pass** on the second-round fixes (base c1a35ae, commit 0329a38): every second-round item confirmed fixed, no high or medium. Fixed, low: a data.json on disk that doesn't load as an object (corrupt or truncated) now pauses sync too, since its patterns are unknown (T-I6); a test pins that the full re-hash survives a cancelled and a reset run; a failed **Save and resume sync** says so; the pause notice is hidden on resume and names the button. Fixed, info: the field is pre-filled with the readable lines. Open, info (no action): the re-hash generation is in memory only (same exposure as the approved deviation); rename hints over 50,000 are dropped (the scan hashes name-skipped files, so the record still matches by hash); visible look-alikes (Zs spaces, combining marks) aren't escaped, by design: they're visible.
 
 **Notes for M8 and later** (carry-ins)
+- **Long requests (owner check 8 log):** one `graph.request` took about 24 minutes (most likely iOS suspending Obsidian mid-request), and the run held the single-flight lock throughout. `requestUrl` takes no timeout. M8 hardening should decide whether to race each request against a timer, and what happens to a response that arrives after its run gave up.
 - **Notice table:** `src/ui/notices.ts` `ERROR_TEXT` holds the M6 codes and the run-level codes; M8 adds every `GraphError` code and the test that each maps to a message. `quota` text exists; 507 → `quota` mapping is already in `classify.ts`.
 - **Sentinel test:** the new UI shows paths only in the report, preview and notices, never in logs; `Copy log` copies only the ring buffer. The sentinel test should cover a full fake sync through `Engine` with the M7 hooks attached.
 - **Optional (owner):** the per-fragment `live()` check above; `recordDownload` trusts a same-size stat taken right after the write, so an edit landing in that window depends on its vault event (now always kept); re-hashing after the write would remove the dependency at the cost of one extra read per download.
@@ -1294,7 +1314,7 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-NET-1 | M2, M3 | ☑ (M2 and M3, 2026-10-12: auth and Graph go only through the requestUrl transport; lint and the CI script enforce it) |
 | R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested) |
 | R-RES-2, R-RES-3 | M3, M6 | ☑ (M3 part done 2026-10-12: 10 MiB upload-session primitives, status and 404 handling; a 12 MiB two-fragment round trip passed on both devices; persistence and resume are M6; M6 part done 2026-10-12: sessions persisted before the first fragment and resumed from nextExpectedRanges, 404 restarts; saves at most 1 s after an op and before every destructive op; crash injection after every mutating call converges) |
-| R-UI-1…3 | M2, M7 | ☐ (M2 part done 2026-10-12: Account section. M7 part done 2026-10-12 (session; owner checks pending, see M7): every R-UI-1 field; status bar on desktop and ribbon tooltip with the state and last sync time; notices for errors and conflicts only; tested in the pure modules) |
+| R-UI-1…3 | M2, M7 | ☐ (M2 part done 2026-10-12: Account section. M7 part done 2026-10-12 (session; owner checks pending, see M7): every R-UI-1 field; status bar on desktop with the state and last sync time; on mobile the ribbon icon shows the state and Show sync status the time (R-UI-2 amended 2026-10-12, 0.5.1); notices for errors and conflicts only; tested in the pure modules) |
 | R-SEC-1, R-SEC-2 | M2 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 M2 part (SecretStorage observed on both devices, including a locked GNOME keyring) — README residual-risk text is owed in M9 |
 | R-SEC-3 | M3, M8 | ☐ (M3 part done 2026-10-12: typed redacting logger, unit tested; the sentinel test is M8) |
 | R-SEC-4 | M3, M4 | ☐ (M3 part done 2026-10-12: Graph JSON, ids, names, sizes, tags, hashes, links and transfer URLs validated; paths are M4) — M4 part done 2026-10-12: remote-derived paths validated by `remoteToVaultPath` |

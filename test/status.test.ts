@@ -1,7 +1,7 @@
-// Status bar and ribbon tooltip text (R-UI-2, design §5.6).
+// Status bar text, ribbon icon and status line (R-UI-2 as amended in M7, design §5.6, §10).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatSyncTime, statusText } from "../src/ui/status.ts";
+import { DEFAULT_ICON, formatSyncTime, statusIcon, statusText } from "../src/ui/status.ts";
 
 const NOW = new Date(2026, 9, 12, 15, 30).getTime();
 const T1402 = new Date(2026, 9, 12, 14, 2).getTime();
@@ -38,4 +38,19 @@ test("an idle engine while signed out says so", () => {
 
 test("an error code that isn't a plain identifier is shown as 'other'", () => {
 	assert.equal(statusText({ state: "error", code: "a b/c" }, { now: NOW, lastSyncAt: null, signedIn: true }), "Sync error (other)");
+});
+
+test("the ribbon icon shows the state without hover, for the iPad (R-UI-2 as amended in M7)", () => {
+	assert.deepEqual(statusIcon({ state: "idle", lastSyncAt: null }, true), ["refresh-cw"]);
+	assert.equal(statusIcon({ state: "syncing", phase: "pull" }, true)[0], "loader");
+	assert.equal(statusIcon({ state: "waiting-for-user" }, true)[0], "hourglass");
+	assert.equal(statusIcon({ state: "sign-in-required" }, true)[0], "log-in");
+	assert.equal(statusIcon({ state: "idle", lastSyncAt: null }, false)[0], "log-in", "signed out");
+	assert.equal(statusIcon({ state: "syncing", phase: "pull" }, false)[0], "loader", "a run in progress still shows as syncing");
+	// Lucide renamed some icons (alert-triangle → triangle-alert); every candidate is tried in order.
+	const err = statusIcon({ state: "error", code: "network" }, true);
+	assert.ok(err.includes("triangle-alert") && err.includes("alert-triangle"));
+	for (const s of [{ state: "syncing", phase: "x" }, { state: "waiting-for-user" }, { state: "error", code: "x" }, { state: "sign-in-required" }] as const) {
+		assert.ok(!statusIcon(s, true).includes(DEFAULT_ICON), `${s.state}: never looks like "synced" through its own candidates`);
+	}
 });
