@@ -256,6 +256,17 @@ function report(v: unknown): SyncReport {
 	};
 }
 
+/** Two pending conflicts may never share a copy path (or use another's original as theirs): one write would replace the other. */
+function uniqueCopies(m: Record<VaultPath, PendingConflict>): Record<VaultPath, PendingConflict> {
+	const seen = new Set<string>(Object.keys(m).map(caseKey));
+	for (const pc of Object.values(m)) {
+		const k = caseKey(pc.copyPath);
+		if (seen.has(k)) fail();
+		seen.add(k);
+	}
+	return m;
+}
+
 function parseOrThrow(raw: unknown, configDir: string): SyncState {
 	const o = obj(raw);
 	if (o["schemaVersion"] !== 1) fail();
@@ -285,7 +296,7 @@ function parseOrThrow(raw: unknown, configDir: string): SyncState {
 		folders: pathMap(o["folders"], configDir, (v) => id(v)),
 		pendingLocal: arr(o["pendingLocal"], MAX_PENDING_LOCAL).map((v) => pendingLocal(v, configDir)),
 		uploadSessions: pathMap(o["uploadSessions"], configDir, (v, k) => uploadSession(v, k, configDir)),
-		pendingConflicts: pathMap(o["pendingConflicts"], configDir, (v, k) => pendingConflict(v, k, configDir)),
+		pendingConflicts: uniqueCopies(pathMap(o["pendingConflicts"], configDir, (v, k) => pendingConflict(v, k, configDir))),
 		firstSyncCompleted: bool(o["firstSyncCompleted"]),
 		unionPending: bool(o["unionPending"]),
 		declinedDeletes: pathMap(o["declinedDeletes"], configDir, (v) => {

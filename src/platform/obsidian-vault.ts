@@ -9,7 +9,7 @@ import { exclusionReason } from "../core/exclude.ts";
 import { UnsafePath } from "../core/failure.ts";
 import { containmentProblem, toVaultPath, validatePath } from "../core/paths.ts";
 import type { LocalEntry, VaultPath, VaultPort } from "../core/ports.ts";
-import { replaceInto } from "./atomic.ts";
+import { replaceInto, TargetRemoved } from "./atomic.ts";
 
 export interface FileLike {
 	path: string;
@@ -160,6 +160,9 @@ export class ObsidianVault implements VaultPort {
 		try {
 			await replaceInto(adapter, tmp, target);
 		} catch (e) {
+			// Once the target is gone the temp file holds the only copy of these bytes: leave it (security review).
+			// The next run sees "deleted here, changed there" and downloads the file again (R-DEL-2).
+			if (e instanceof TargetRemoved) throw e;
 			try {
 				if (await adapter.exists(tmp)) await adapter.remove(tmp);
 			} catch {
@@ -193,12 +196,14 @@ export class ObsidianVault implements VaultPort {
 	}
 
 	async trash(path: VaultPath): Promise<void> {
+		this.check(path, false);
 		const f = this.find(path);
 		if (!isFile(f) && !isFolder(f)) throw new Error("not-found");
 		await this.fileManager.trashFile(f);
 	}
 
 	async removeEmptyFolder(path: VaultPath): Promise<boolean> {
+		this.check(path, true);
 		const f = this.find(path);
 		if (!f) return true;
 		if (!isFolder(f) || f.children.length > 0) return false;

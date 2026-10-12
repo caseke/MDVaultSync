@@ -62,7 +62,8 @@ export class TransformedRemoteContent implements RemoteContent {
 	}
 
 	async fetch(item: RemoteItem, path: VaultPath): Promise<{ plain: ArrayBuffer; remoteHash: string }> {
-		const stored = await this.remote.download(item.id);
+		// The item's size was checked against the cap; the remote refuses before the GET if it changed (T-D6).
+		const stored = await this.remote.download(item.id, item.size);
 		if (stored.byteLength !== item.size) throw new HashMismatch();
 		const remoteHash = quickXorHash(stored);
 		// A null hash (zero-byte files, or missing from delta [G-DL-8]) can only be checked by size (design §5.4).

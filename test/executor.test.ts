@@ -10,6 +10,7 @@ import { IdentityTransform } from "../src/core/transform.ts";
 import { quickXorHash } from "../src/core/quickxor.ts";
 import type { Plan, PlanOp, RemotePort, VaultPath, VaultPort } from "../src/core/ports.ts";
 import { classifyError } from "../src/remote/classify.ts";
+import { GraphError } from "../src/remote/errors.ts";
 import { CFG, SETTINGS, STAMP, hashOf, vp, world, type World } from "./fakes/plan-fixtures.ts";
 import { ManualClock, MemoryStateStore, enc, withOverrides } from "./fakes/sync-fakes.ts";
 
@@ -461,4 +462,95 @@ test("state maps: a note named __proto__ stays data and round-trips through the 
 	assert.equal(loaded?.files[vp("__proto__")]?.localHash, quickXorHash(enc("p")));
 	assert.equal(loaded?.files[vp("constructor")]?.localHash, quickXorHash(enc("c")));
 	assert.equal(Object.getPrototypeOf(loaded?.files), Object.prototype);
+});
+
+// ---------- security-review regressions ----------
+
+test("a local folder where the remote has a file fails once as type-clash (no download/conflict loop)", async () => {
+	const w = world({ "a.md": "a" });
+	w.vault.write("Ideas/x.md", "x");
+	const it = w.remote.putFile("Ideas", "a remote file with no extension");
+	let reads = 0;
+	const counting: RemotePort = withOverrides(w.remote, {
+		getItem: (id: string) => {
+			reads++;
+			return w.remote.getItem(id);
+		},
+	});
+	const r = await prepare(w, { remote: counting, ops: [{ kind: "download", id: it.id, path: vp("Ideas"), reason: "new" }] });
+	const out = await executePlan(r.ctx);
+	assert.deepEqual(
+		out.results.map((x) => (x.ok ? x.op.kind : x.code)),
+		["type-clash"],
+	);
+	assert.ok(reads <= 2, `bounded reads (${reads})`);
+	assert.equal(w.vault.contentAt("Ideas/x.md"), "x");
+});
+
+test("two conflicts in one run whose copy names shorten to the same name get different copies (no lost edit)", async () => {
+	const stem = "n".repeat(240);
+	const p1 = `${stem}-one.md`;
+	const p2 = `${stem}-two.md`;
+	const w = world({ [p1]: "base1", [p2]: "base2" });
+	w.remote.putFile(p1, "theirs1");
+	w.remote.putFile(p2, "theirs2");
+	// Edited after the scan, so both conflicts are discovered at runtime and run concurrently.
+	const { out } = await sync(w, {
+		between: () => {
+			w.vault.write(p1, "mine1");
+			w.vault.write(p2, "mine2");
+		},
+	});
+	assert.equal(out.conflicts.length, 2);
+	const copies = out.conflicts.map((c) => c.copyPath);
+	assert.notEqual(copies[0], copies[1]);
+	const kept = new Set(copies.map((c) => w.vault.contentAt(c)));
+	assert.deepEqual([...kept].sort(), ["mine1", "mine2"]);
+	assert.equal(w.vault.contentAt(p1), "theirs1");
+	assert.equal(w.vault.contentAt(p2), "theirs2");
+});
+
+test("a 404 on a replace whose item still exists (an expired session) is not treated as a remote delete", async () => {
+	const w = world({ "a.md": "v1" });
+	w.vault.write("a.md", "v2");
+	let failed = false;
+	const flaky: RemotePort = withOverrides(w.remote, {
+		uploadReplace: (id: string, ifMatch: string, d: ArrayBuffer) => {
+			if (!failed) {
+				failed = true;
+				return Promise.reject(new GraphError(404, "itemNotFound"));
+			}
+			return w.remote.uploadReplace(id, ifMatch, d);
+		},
+	});
+	const { kinds, out } = await sync(w, { remote: flaky });
+	assert.deepEqual(kinds, ["upload-replace"]);
+	assert.deepEqual(out.conflicts, []);
+	assert.equal(w.remote.contentAt("a.md"), "v2");
+});
+
+test("a folder remote-move that hits 412 because the folder moved elsewhere doesn't override that move", async () => {
+	const w = world({ "f/a.md": "a", "f/b.md": "b" });
+	w.vault.rename("f", "g");
+	w.state.pendingLocal.push({ kind: "renamed", from: vp("f"), to: vp("g") });
+	const { codes } = await sync(w, { between: () => w.remote.rename("f", "elsewhere") });
+	assert.deepEqual(codes, ["precondition"]);
+	assert.ok(w.remote.itemAt("elsewhere"), "the other device's rename stands");
+});
+
+test("after sign-out (live() false) no further op starts", async () => {
+	const w = world({ "a.md": "a" });
+	for (let i = 0; i < 10; i++) w.remote.putFile(`n${i}.md`, `${i}`);
+	const r = await prepare(w);
+	let alive = true;
+	r.ctx.live = () => alive;
+	r.ctx.concurrency = 1;
+	r.ctx.vault = withOverrides(w.vault, {
+		writeAtomic: (p: VaultPath, d: ArrayBuffer) => {
+			alive = false;
+			return w.vault.writeAtomic(p, d);
+		},
+	});
+	const out = await executePlan(r.ctx);
+	assert.equal(out.results.length, 1);
 });

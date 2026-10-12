@@ -46,7 +46,7 @@ export interface RemotePort {
   putFragment(uploadUrl: string, start: number, total: number, bytes: ArrayBuffer): Promise<RemoteItem | null>; // item on final fragment
   getUploadStatus(uploadUrl: string): Promise<UploadStatus>;         // 404 → { nextExpectedStart: null }
   cancelUpload(uploadUrl: string): Promise<void>;
-  download(id: string): Promise<ArrayBuffer>;                        // via fresh downloadUrl, no auth header [G-DLD-1]
+  download(id: string, expectedSize?: number): Promise<ArrayBuffer>; // via fresh downloadUrl, no auth header [G-DLD-1]; refused before the GET if the item's size isn't expectedSize (M6, T-D6)
   createFolder(parentId: string, name: string): Promise<RemoteItem>; // conflictBehavior=fail
   uploadNew(parentId: string, name: string, data: ArrayBuffer): Promise<RemoteItem>;   // fail on name clash
   uploadReplace(id: string, ifMatch: string, data: ArrayBuffer): Promise<RemoteItem>;  // 412 → PreconditionFailed

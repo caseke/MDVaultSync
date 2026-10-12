@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ObsidianVault } from "../src/platform/obsidian-vault.ts";
-import { replaceInto } from "../src/platform/atomic.ts";
+import { replaceInto, TargetRemoved } from "../src/platform/atomic.ts";
 import { UnsafePath } from "../src/core/failure.ts";
 import type { VaultPath } from "../src/core/ports.ts";
 import { FakeObsidian, normalizePath } from "./fakes/fake-obsidian.ts";
@@ -129,4 +129,34 @@ test("replaceInto: never leaves the temp file when the fallback runs", async () 
 	await replaceInto(o.adapter, "t", "x");
 	assert.equal(o.text("x"), "\u0001");
 	assert.equal(o.text("t"), null);
+});
+
+test("fallback: if the retried rename fails after the target was removed, the temp file is kept (it holds the only copy)", async () => {
+	const { o, v } = setup();
+	o.renameOverwrites = false;
+	o.put("a.md", new Uint8Array([1]));
+	let renames = 0;
+	const rename = o.adapter.rename;
+	o.adapter.rename = (a: string, b: string) => (++renames === 2 ? Promise.reject(new Error("EIO")) : rename(a, b));
+	await assert.rejects(v.writeAtomic(vp("a.md"), enc("new")), TargetRemoved);
+	const temps = [...o.entries.keys()].filter((p) => p.includes("mdvaultsync-tmp"));
+	assert.equal(temps.length, 1);
+	assert.equal(o.text(temps[0] ?? ""), "new");
+});
+
+test("replaceInto: a rename failure with no existing target is not a refusal: nothing is removed", async () => {
+	const o = new FakeObsidian();
+	o.put("t", new Uint8Array([1]));
+	o.adapter.rename = () => Promise.reject(new Error("EIO"));
+	await assert.rejects(replaceInto(o.adapter, "t", "x"), /EIO/);
+	assert.ok(!o.calls.some((c) => c.startsWith("remove")));
+	assert.equal(o.text("t"), "\u0001");
+});
+
+test("trash and removeEmptyFolder re-check containment too (T-T1)", async () => {
+	const { o, v } = setup();
+	o.put("obs-config/x.md", new Uint8Array());
+	await assert.rejects(v.trash(vp("obs-config/x.md")), UnsafePath);
+	await assert.rejects(v.removeEmptyFolder(vp("obs-config")), UnsafePath);
+	assert.deepEqual(o.trashed, []);
 });

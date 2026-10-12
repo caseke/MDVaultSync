@@ -280,6 +280,7 @@ export class Engine implements SyncEngine {
 				saver,
 				expectedWrites: this.expectedWrites,
 				logger: this.logger,
+				live,
 				...(deps.concurrency !== undefined ? { concurrency: deps.concurrency } : {}),
 			});
 			results = exec.results;

@@ -64,3 +64,29 @@ test("clear removes the state file and any temp file", async () => {
 	assert.equal(o.text(`${DIR}/sync-state.json.tmp`), null);
 	assert.equal(await s.load(), null);
 });
+
+test("load falls back to the temp file when a crash left only it (rename fallback window)", async () => {
+	const o = new FakeObsidian();
+	const s = store(o);
+	const st = emptyState("dev-tmp");
+	o.put(`${DIR}/sync-state.json.tmp`, new TextEncoder().encode(JSON.stringify(st)));
+	assert.equal((await s.load())?.deviceId, "dev-tmp");
+});
+
+test("clear waits for a save already in progress, so the old state can't survive sign-out (R-AUTH-7)", async () => {
+	const o = new FakeObsidian();
+	const s = store(o);
+	let release!: () => void;
+	const gate = new Promise<void>((r) => (release = r));
+	const write = o.adapter.write;
+	o.adapter.write = async (p: string, d: string) => {
+		await gate;
+		return write(p, d);
+	};
+	const saving = s.save(emptyState("old"));
+	const clearing = s.clear();
+	release();
+	await saving;
+	await clearing;
+	assert.equal(await s.load(), null);
+});

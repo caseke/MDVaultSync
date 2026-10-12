@@ -41,15 +41,18 @@ test("CI network backstop flags forbidden APIs (R-NET-1)", () => {
 });
 
 test("CI network backstop allows the RemoteContent.fetch signature in core/ports.ts and member calls", () => {
-	const signature = "interface C {\n  fetch(item: RemoteItem, path: VaultPath): Promise<R>;\n}\n";
+	const signature = "interface C {\n  fetch(item: RemoteItem, path: VaultPath): Promise<{ plain: ArrayBuffer; remoteHash: string }>;\n}\n";
 	assert.equal(check(signature, "core/ports.ts"), 0);
 	assert.equal(check(signature, "core/other.ts"), 1);
 	assert.equal(check("const r = await content.fetch(item, path);\n"), 0);
 });
 
 test("CI network backstop allows the RemoteContent.fetch implementation line in core/remote-content.ts only", () => {
-	const impl = "class T {\n\tasync fetch(item: RemoteItem, path: VaultPath): Promise<R> {\n\t}\n}\n";
+	const impl = "class T {\n\tasync fetch(item: RemoteItem, path: VaultPath): Promise<{ plain: ArrayBuffer; remoteHash: string }> {\n\t}\n}\n";
 	assert.equal(check(impl, "core/remote-content.ts"), 0);
 	assert.equal(check(impl, "core/executor.ts"), 1);
 	assert.equal(check(impl + 'const r = fetch("https://x");\n', "core/remote-content.ts"), 1, "a real fetch call in that file is still caught");
+	const oneLine = "\tasync fetch(item: RemoteItem, path: VaultPath): Promise<{ plain: ArrayBuffer; remoteHash: string }> { return fetch(u) as never; }\n";
+	assert.equal(check(oneLine, "core/remote-content.ts"), 1, "a call on the exempted line itself is caught");
+	assert.equal(check("  fetch(item: RemoteItem, path: VaultPath): Promise<{ plain: ArrayBuffer; remoteHash: string }>; fetch(u);\n", "core/ports.ts"), 1);
 });

@@ -70,6 +70,8 @@ export interface ExecContext {
 	expectedWrites?: Map<VaultPath, string>;
 	logger?: Logger;
 	concurrency?: number;
+	/** Returns false after sign-out (Engine.reset); the executor then starts no further op. */
+	live?: () => boolean;
 }
 
 export interface ExecOutcome {
@@ -204,11 +206,16 @@ class Execution {
 		return { results: this.results, conflicts: this.conflicts, fatal: this.fatal };
 	}
 
+	/** False once sign-out reset the engine: no further op starts (R-AUTH-7). */
+	private live(): boolean {
+		return this.ctx.live ? this.ctx.live() : true;
+	}
+
 	/** Runs ops with `n` workers. Items appended while it runs (conflict copies) are picked up too. */
 	private async pool(items: PlanOp[], n: number): Promise<void> {
 		let i = 0;
 		const worker = async () => {
-			while (this.fatal === null && i < items.length) {
+			while (this.fatal === null && this.live() && i < items.length) {
 				const op = items[i++] as PlanOp;
 				await this.runOp(op);
 			}
@@ -458,10 +465,16 @@ class Execution {
 		return ok(op);
 	}
 
+	/**
+	 * A fresh copy name, reserved in `taken` before any await, so two conflicts running at the same time can't pick
+	 * the same name (security review: long stems shorten to the same copy name).
+	 */
 	private newCopyPath(path: VaultPath): VaultPath {
 		const s = this.ctx.settings;
 		try {
-			return conflictCopyPath(path, s.deviceName, s.now, (p) => this.taken.has(caseKey(p)), s.pathPrefixLen);
+			const p = conflictCopyPath(path, s.deviceName, s.now, (q) => this.taken.has(caseKey(q)), s.pathPrefixLen);
+			this.taken.add(caseKey(p));
+			return p;
 		} catch (e) {
 			// No room for a copy name: keep both sides untouched and report it (M4 carry-in).
 			if (e instanceof RangeError) throw new OpFailed("path-too-long");
@@ -480,7 +493,10 @@ class Execution {
 		if (fresh.size > this.ctx.settings.maxFileSize) return fail(pending, "too-large");
 		this.checkPath(path, false);
 		const st = await this.ctx.vault.stat(path);
-		if (!st || st.isFolder) {
+		// A folder where the remote has a file: nothing here can resolve it, and a download would loop back into
+		// this procedure (security review). Reported every run until the user renames one of them.
+		if (st?.isFolder) return fail(pending, "type-clash");
+		if (!st) {
 			// Nothing local to keep any more: a plain download.
 			return this.pullFile({ kind: "download", id, path, reason: "changed" });
 		}
@@ -490,7 +506,16 @@ class Execution {
 		let copyPath = plannedCopy;
 		const pc = own(this.state.pendingConflicts, path) ? this.state.pendingConflicts[path] : undefined;
 		// A crash mid-procedure: reuse the same copy for the same pair (step 1). The planner already vetted a planned one.
-		if (!copyPath && pc && pc.remoteId === id && pc.localHash === mineHash) copyPath = pc.copyPath;
+		// Reused only where nothing else in this run claims the name, or the copy itself is already there (T-T6).
+		if (!copyPath && pc && pc.remoteId === id && pc.localHash === mineHash && caseKey(pc.copyPath) !== caseKey(path)) {
+			this.checkPath(pc.copyPath, false);
+			const key = caseKey(pc.copyPath);
+			if (!this.taken.has(key)) {
+				// Reserve it before any await, as newCopyPath does (security re-review).
+				this.taken.add(key);
+				copyPath = pc.copyPath;
+			} else if ((await this.hashOf(pc.copyPath)) === mineHash) copyPath = pc.copyPath;
+		}
 		copyPath ??= this.newCopyPath(path);
 		this.checkPath(copyPath, false);
 		const there = await this.hashOf(copyPath);
@@ -504,6 +529,8 @@ class Execution {
 			}
 			defineEntry(this.state.pendingConflicts, path, { path, copyPath, localHash: mineHash, remoteId: id });
 			await this.ctx.saver.flush();
+			// Create-only: the copy must never replace a file that appeared there meanwhile.
+			if ((await this.ctx.vault.stat(copyPath)) !== null) return fail({ ...pending, copyPath }, "conflict-name");
 			await this.writeLocal(copyPath, mine);
 		} else if (!pc) {
 			defineEntry(this.state.pendingConflicts, path, { path, copyPath, localHash: mineHash, remoteId: id });
@@ -587,7 +614,8 @@ class Execution {
 				const kind = this.ctx.classify(e).kind;
 				if (kind === "raced") return this.conflict(op.path, op.id, null);
 				if (kind !== "precondition" && kind !== "not-found") throw e;
-				const fresh = kind === "not-found" ? null : await this.ctx.remote.getItem(op.id);
+				// A 404 can also be an expired session URL: only a fresh read says the item itself is gone.
+				const fresh = await this.ctx.remote.getItem(op.id);
 				if (!fresh || fresh.deleted) {
 					// Deleted remotely meanwhile: the local edit wins over the delete (R-DEL-2).
 					removeFile(this.state, op.path);
@@ -613,8 +641,10 @@ class Execution {
 			if (this.ctx.classify(e).kind !== "precondition") throw e;
 			const fresh = await this.ctx.remote.getItem(op.id);
 			const rec = fileAt(this.state, op.from);
-			// A metadata-only change retries once; changed content is re-planned by the next run.
-			if (!fresh || !(isFolder || (rec && metadataOnly(rec, fresh)))) throw e;
+			// A metadata-only change retries once; anything else is re-planned by the next run. A folder retries only
+			// if it is still where this move expects it (another device's rename must not be overridden).
+			const folderInPlace = isFolder && fresh !== null && fresh.name === baseName(op.from) && fresh.parentId === this.indexItem(op.id)?.parentId;
+			if (!fresh || !(folderInPlace || (!isFolder && rec && metadataOnly(rec, fresh)))) throw e;
 			moved = await this.ctx.remote.move(op.id, fresh.eTag, parentId, name);
 		}
 		this.etags.set(op.id, moved.eTag);
@@ -660,6 +690,7 @@ class Execution {
 					next.cTag = target.cTag;
 				}
 				putFile(this.state, next);
+				this.etags.set(next.remoteId, next.eTag);
 			}
 		}
 		if (target) this.recordAncestors(op.to, target.parentId);

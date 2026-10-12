@@ -26,7 +26,11 @@ export function classifyError(e: unknown): RemoteFailure {
 	if (e instanceof RetryBudgetExceeded) return { kind: "budget", code: "retry-budget-exceeded" };
 	if (e instanceof AuthError) return AUTH_NETWORK.has(e.code) ? { kind: "network", code: e.code } : { kind: "auth", code: e.code };
 	if (e instanceof UntrustedUrl) return { kind: "other", code: "untrusted-url" };
-	if (e instanceof InvalidResponse) return { kind: "other", code: "invalid-response" };
+	if (e instanceof InvalidResponse) {
+		// The bytes or the item's size don't match what was checked (T-T4, T-D6).
+		if (e.reason === "download-length-mismatch") return { kind: "hash-mismatch", code: "hash-mismatch" };
+		return { kind: "other", code: "invalid-response" };
+	}
 	if (e instanceof RangeError) return { kind: "other", code: "range-error" };
 	return { kind: "other", code: "other" };
 }
