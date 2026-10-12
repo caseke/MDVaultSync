@@ -169,7 +169,7 @@ CI on GitHub: the `CI` workflow passed on Node 22.x and 24.x (run 38186164011 at
 - The Node built-in ban and the dynamic-`import()` ban apply to `src/**` only. Tests and build scripts use Node modules, and only `src/` ships. To back this up, esbuild no longer marks Node built-ins external, so a built-in reaching the bundle by any route fails the build.
 - The CI grep one-liner matched the `RemoteContent.fetch(...)` method signature in `src/core/ports.ts` (design §2). It is replaced by `scripts/check-network-apis.sh`, which exempts that exact signature only and also catches `activeWindow.fetch`, `EventSource` and `sendBeacon`.
 - `eslint.config.mjs` instead of `.mts`, so `jiti` is not installed (allowed by this milestone). Project rules live in `eslint/project-rules.ts` so they can be unit tested.
-- ESLint stays on 9.x (`npm` marks 9.39.5 deprecated). ESLint 10 leaves eslint-plugin-obsidianmd 0.4.2's bundled sub-plugins (import, react) on a nested ESLint 9. Move to 10 when the plugin supports it.
+- ESLint started on 9.x because ESLint 10 leaves eslint-plugin-obsidianmd 0.4.2's bundled sub-plugins (import, react) on a nested ESLint 9. **Superseded 2026-10-12** by Dependabot PR #2 (eslint 10.12.0, @eslint/js 10.0.1, obsidian 1.13.1, @types/node 26). It was checked before merge: the obsidianmd, Microsoft SDL and `no-console` rules still fire under ESLint 10 (probe file), and lint, typecheck, build and all 23 tests pass. The plugin keeps its nested ESLint 9 internally, which is harmless. `@types/node` 26 is newer than the Node 22.18 floor; the Node 22 CI job catches any Node 26–only API in tests or scripts, and `src/` can't use Node APIs.
 - Actions use current majors (checkout v7.0.1, setup-node v7.1.0, codeql-action v4.38.3), pinned by commit SHA resolved with `git ls-remote`. npm caching in setup-node is off, and `npm ci` runs with `--ignore-scripts` in CI and in the SessionStart hook (T-T7).
 
 **Security review** (`security-reviewer` instructions, run through a general-purpose agent because the agent file only registers at the next session start; base `origin/main`, 31 files):
@@ -180,7 +180,7 @@ CI on GitHub: the `CI` workflow passed on Node 22.x and 24.x (run 38186164011 at
 - Open, info: the README token-storage residual risk is M9 scope. The action SHAs were resolved from the upstream tags in this session.
 
 **Optional for the owner** (not fixed, no security or requirement impact):
-- `npm audit` reports 3 **moderate** advisories: `moment` (GHSA-4p3w-j4w9-5jqw), pulled in by the `obsidian` type package that eslint-plugin-obsidianmd pins at 1.12.3. `obsidian` is external to the bundle and `moment` never ships. It clears when the plugin moves to `obsidian` ≥ 1.14. Dependabot will propose it.
+- `npm audit` reports 3 **moderate** advisories: `moment` (GHSA-4p3w-j4w9-5jqw), pulled in by the `obsidian` type package (ours is 1.13.1; eslint-plugin-obsidianmd pins its own 1.12.3). `obsidian` is external to the bundle and `moment` never ships. It clears when both move to `obsidian` ≥ 1.14. Dependabot will propose it.
 - `test/hook.test.ts` covers only the hook's fast paths. The lint-failure path is covered by the Verify block, because it runs a full `tsc`.
 
 ---
