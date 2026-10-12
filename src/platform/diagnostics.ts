@@ -6,7 +6,7 @@ import type { App } from "obsidian";
 import { runProbe, type ProbeDeps } from "../remote/probe.ts";
 import { DiagnosticsModal } from "../ui/diagnostics-modal.ts";
 
-function platformName(): string {
+export function platformName(): string {
 	if (Platform.isIosApp) return "ios";
 	if (Platform.isAndroidApp) return "android";
 	if (Platform.isLinux) return "linux";

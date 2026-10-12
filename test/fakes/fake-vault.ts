@@ -70,6 +70,7 @@ export class FakeVault implements VaultPort {
 	}
 
 	move(from: VaultPath, to: VaultPath): Promise<void> {
+		if (!this.files.has(from) && !this.allFolders().has(from)) return Promise.reject(new Error("not-found"));
 		this.rename(from, to);
 		return Promise.resolve();
 	}

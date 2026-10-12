@@ -46,3 +46,10 @@ test("CI network backstop allows the RemoteContent.fetch signature in core/ports
 	assert.equal(check(signature, "core/other.ts"), 1);
 	assert.equal(check("const r = await content.fetch(item, path);\n"), 0);
 });
+
+test("CI network backstop allows the RemoteContent.fetch implementation line in core/remote-content.ts only", () => {
+	const impl = "class T {\n\tasync fetch(item: RemoteItem, path: VaultPath): Promise<R> {\n\t}\n}\n";
+	assert.equal(check(impl, "core/remote-content.ts"), 0);
+	assert.equal(check(impl, "core/executor.ts"), 1);
+	assert.equal(check(impl + 'const r = fetch("https://x");\n', "core/remote-content.ts"), 1, "a real fetch call in that file is still caught");
+});

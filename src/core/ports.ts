@@ -71,6 +71,8 @@ export interface RemoteContent {
         onSession?: (s: UploadSessionInfo) => Promise<void>): Promise<{ item: RemoteItem; remoteHash: string }>;
   /** Stored-bytes hash this plaintext WOULD have remotely (encode + quickXorHash). Identity: equals the plaintext hash. */
   storedHashOf(plain: ArrayBuffer, path: VaultPath): Promise<string>;
+  /** Continues a persisted upload session from its nextExpectedRanges (M6, §6.3). null: the session is gone; start over. */
+  resume(rec: UploadSessionRecord, plain: ArrayBuffer): Promise<{ item: RemoteItem; remoteHash: string } | null>;
 }
 
 // ---------- persisted state ----------
