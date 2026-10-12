@@ -2,12 +2,12 @@
 // PROBE_DIR, which normal sync excludes (design §7), then deletes it. The result holds statuses, codes, counts,
 // durations, hostnames, and the App Folder's own name and parent drive path (set by Microsoft and the app
 // registration, not vault data). No vault names, URLs, tokens or contents (T-I3). Every name it creates is fixed.
-import type { Clock, RemoteItem } from "../core/ports.ts";
+import type { Clock, RemoteItem, UploadSessionInfo } from "../core/ports.ts";
 import type { DeltaForm } from "./capabilities.ts";
 import { GraphError, sanitizeGraphCode, toGraphError } from "./errors.ts";
 import { GRAPH_BASE, encodeSegment, type GraphClient } from "./graph.ts";
 import { fragmentRanges } from "./upload-session.ts";
-import { MAX_JSON_BODY, parseItemExtras, parseJsonObject } from "./validate.ts";
+import { MAX_JSON_BODY, parseItemExtras, parseJsonObject, parseUploadSession } from "./validate.ts";
 
 export const PROBE_DIR = ".mdvaultsync-probe";
 export const LARGE_SIZE = 12 * 1024 * 1024;
@@ -28,6 +28,12 @@ export interface ProbeDeps {
 export interface Outcome {
 	status?: number;
 	code?: string;
+	/** Sanitized Graph inner error codes, when the server sent any (probe v2). */
+	innerCodes?: string[];
+}
+export interface CreateAttempt extends Outcome {
+	/** Which createUploadSession body was sent (probe v2; the 0.3.0 Ubuntu run got 400 with fileSize). */
+	variant: "conflictBehavior+fileSize" | "conflictBehavior" | "none";
 }
 export interface DeltaResult extends Outcome {
 	ok: boolean;
@@ -45,7 +51,7 @@ export interface HashVector {
 	quickXorHash: string | null;
 }
 export interface ProbeResult {
-	probeVersion: 1;
+	probeVersion: 2;
 	platform: string;
 	pluginVersion: string;
 	startedAt: string;
@@ -55,7 +61,7 @@ export interface ProbeResult {
 	delta: Record<"approot-colon" | "items-id", DeltaResult>;
 	putIfMatch: { honored: boolean | null; staleStatus?: number; staleCode?: string };
 	caseInsensitive: { confirmed: boolean | null } & Outcome;
-	nameLength: { len255: Outcome; len256: Outcome; nameMax: number | null };
+	nameLength: { len255: Outcome; len256: Outcome; len300: Outcome; nameMax: number | null };
 	patchIfMatch: { currentStatus?: number; staleStatus?: number };
 	deleteIfMatch: { staleStatus?: number; currentStatus?: number };
 	quota: { readable: boolean | null } & Outcome;
@@ -68,6 +74,9 @@ export interface ProbeResult {
 		bytesMatch?: boolean;
 		uploadHost?: string;
 		downloadHost?: string;
+		/** The step that failed, when ok is false. */
+		stage?: "create" | "fragment" | "download" | "compare";
+		createAttempts?: CreateAttempt[];
 	} & Outcome;
 	hashVectors: HashVector[];
 	cleanup: { ok: boolean } & Outcome;
@@ -97,7 +106,7 @@ function text(s: string): ArrayBuffer {
 
 /** Status and sanitized code of a failure; never the message (T-I3). */
 function outcomeOf(e: unknown): Outcome {
-	if (e instanceof GraphError) return { status: e.status, code: e.code };
+	if (e instanceof GraphError) return { status: e.status, code: e.code, ...(e.innerCodes.length ? { innerCodes: [...e.innerCodes] } : {}) };
 	return { code: sanitizeGraphCode(e instanceof Error ? e.name : "unknown") };
 }
 
@@ -125,8 +134,7 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 	const raw = async (method: string, url: string, headers: Record<string, string> = {}, body?: ArrayBuffer): Promise<Outcome> => {
 		const res = await graph.sendRaw({ url, method, headers, ...(body !== undefined ? { body } : {}) });
 		if (res.status >= 200 && res.status < 300) return { status: res.status };
-		const e = toGraphError(res);
-		return { status: e.status, code: e.code };
+		return outcomeOf(toGraphError(res));
 	};
 	const item = (id: string) => `${GRAPH_BASE}/me/drive/items/${encodeURIComponent(id)}`;
 	const childPut = (parentId: string, name: string) =>
@@ -134,7 +142,7 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 
 	const notRun: DeltaResult = { ok: false, code: "not-run" };
 	const result: ProbeResult = {
-		probeVersion: 1,
+		probeVersion: 2,
 		platform: deps.platform,
 		pluginVersion: deps.pluginVersion,
 		startedAt: new Date(t0).toISOString(),
@@ -144,7 +152,7 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 		delta: { "approot-colon": notRun, "items-id": notRun },
 		putIfMatch: { honored: null },
 		caseInsensitive: { confirmed: null },
-		nameLength: { len255: {}, len256: {}, nameMax: null },
+		nameLength: { len255: {}, len256: {}, len300: {}, nameMax: null },
 		patchIfMatch: {},
 		deleteIfMatch: {},
 		quota: { readable: null },
@@ -191,6 +199,26 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 			result.hashVectors.push({ file, size: data.byteLength, generator, ...(seed !== undefined ? { seed } : {}), quickXorHash: it.quickXorHash });
 		}
 
+		// 2. Delta forms on the App Folder, and hashes in delta [G-DL-1], [G-DL-8]. Runs before the long-name files
+		// exist, so it measures delta itself (in v1 a 256-character name broke the page parser).
+		for (const form of ["approot-colon", "items-id"] as const) {
+			try {
+				const d = await deps.graphFor(form).deltaAll(null);
+				const files = d.items.filter((i) => !i.isFolder && !i.deleted);
+				result.delta[form] = {
+					ok: true,
+					pages: d.pages,
+					items: d.items.length,
+					approotListed: d.items.some((i) => i.id === approot.id),
+					filesWithHash: files.filter((i) => i.quickXorHash !== null).length,
+					filesWithoutHash: files.filter((i) => i.quickXorHash === null).length,
+				};
+			} catch (e) {
+				// An unsupported form is a finding, not an error.
+				result.delta[form] = { ok: false, ...outcomeOf(e) };
+			}
+		}
+
 		// 4. Case-insensitive names [G-NM-5]: PROBE.md next to probe.md with conflictBehavior=fail.
 		try {
 			const r = await raw("PUT", childPut(dir, "PROBE.md"), { "Content-Type": "application/octet-stream" }, text("x"));
@@ -214,10 +242,12 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 		try {
 			const len255 = await raw("PUT", childPut(dir, `${"n".repeat(251)}.txt`), { "Content-Type": "application/octet-stream" }, text("x"));
 			const len256 = await raw("PUT", childPut(dir, `${"m".repeat(252)}.txt`), { "Content-Type": "application/octet-stream" }, text("x"));
+			// 300 still fits the 400-character path: "Apps/<name>/.mdvaultsync-probe/" plus the name.
+			const len300 = await raw("PUT", childPut(dir, `${"p".repeat(296)}.txt`), { "Content-Type": "application/octet-stream" }, text("x"));
 			const ok = (o: Outcome) => o.status === 200 || o.status === 201;
-			result.nameLength = { len255, len256, nameMax: ok(len255) && !ok(len256) ? 255 : null };
+			result.nameLength = { len255, len256, len300, nameMax: ok(len255) && !ok(len256) ? 255 : null };
 		} catch (e) {
-			result.nameLength = { len255: fail(e), len256: {}, nameMax: null };
+			result.nameLength = { len255: fail(e), len256: {}, len300: {}, nameMax: null };
 		}
 
 		// 6. PATCH and DELETE with If-Match under the AppFolder scope [G-AF-5], [G-MV-1], [G-DEL-1].
@@ -236,25 +266,6 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 			fail(e);
 		}
 
-		// 2. Delta forms on the App Folder, and hashes in delta [G-DL-1], [G-DL-8].
-		for (const form of ["approot-colon", "items-id"] as const) {
-			try {
-				const d = await deps.graphFor(form).deltaAll(null);
-				const files = d.items.filter((i) => !i.isFolder && !i.deleted);
-				result.delta[form] = {
-					ok: true,
-					pages: d.pages,
-					items: d.items.length,
-					approotListed: d.items.some((i) => i.id === approot.id),
-					filesWithHash: files.filter((i) => i.quickXorHash !== null).length,
-					filesWithoutHash: files.filter((i) => i.quickXorHash === null).length,
-				};
-			} catch (e) {
-				// An unsupported form is a finding, not an error.
-				result.delta[form] = { ok: false, ...outcomeOf(e) };
-			}
-		}
-
 		// 7. Quota under the AppFolder scope [G-QT-1].
 		try {
 			result.quota = { readable: (await graph.quota()) !== null };
@@ -263,16 +274,45 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 		}
 
 		// 8. 12 MiB round trip through an upload session (10 + 2 MiB) and the download URL [O-API-2] (T-D6).
+		let stage: "create" | "fragment" | "download" | "compare" = "create";
 		try {
 			const data = probeBytes(LARGE_SIZE, LARGE_SEED);
 			const tUp = clock.now();
-			const s = await graph.createUploadSession({ kind: "new", parentId: dir, name: "large.bin" }, null, LARGE_SIZE);
+			// Try each createUploadSession body in turn and record what OneDrive says to each [G-UP-5].
+			const createUrl = `${item(dir)}:/large.bin:/createUploadSession`;
+			const variants: [CreateAttempt["variant"], unknown][] = [
+				["conflictBehavior+fileSize", { item: { "@microsoft.graph.conflictBehavior": "fail", fileSize: LARGE_SIZE } }],
+				["conflictBehavior", { item: { "@microsoft.graph.conflictBehavior": "fail" } }],
+				["none", undefined],
+			];
+			const attempts: CreateAttempt[] = [];
+			result.largeFile.createAttempts = attempts;
+			let s: UploadSessionInfo | null = null;
+			let lastError: GraphError | null = null;
+			for (const [variant, body] of variants) {
+				const res = await graph.sendRaw({
+					url: createUrl,
+					method: "POST",
+					headers: body === undefined ? {} : { "Content-Type": "application/json" },
+					...(body === undefined ? {} : { body: JSON.stringify(body) }),
+				});
+				if (res.status === 200 || res.status === 201) {
+					s = parseUploadSession(res.body);
+					attempts.push({ variant, status: res.status });
+					break;
+				}
+				lastError = toGraphError(res);
+				attempts.push({ variant, ...outcomeOf(lastError) });
+			}
+			if (!s) throw lastError ?? new GraphError(0, "upload-session-failed");
+			stage = "fragment";
 			result.largeFile.uploadHost = hostOf(s.uploadUrl);
 			let done: RemoteItem | null = null;
 			for (const r of fragmentRanges(LARGE_SIZE)) done = await graph.putFragment(s.uploadUrl, r.start, LARGE_SIZE, data.slice(r.start, r.end));
 			if (!done) throw new GraphError(0, "upload-incomplete");
 			result.largeFile.uploadMs = clock.now() - tUp;
 			result.hashVectors.push({ file: "large.bin", size: LARGE_SIZE, generator: `probeBytes(${LARGE_SIZE}, seed)`, seed: LARGE_SEED, quickXorHash: done.quickXorHash });
+			stage = "download";
 			const meta = await graph.sendRaw({ url: `${item(done.id)}?$select=id,@microsoft.graph.downloadUrl`, method: "GET" });
 			if (meta.status !== 200) throw toGraphError(meta);
 			const dl = parseItemExtras(parseJsonObject(meta.body, MAX_JSON_BODY)).downloadUrl;
@@ -282,8 +322,12 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 			result.largeFile.downloadMs = clock.now() - tDown;
 			result.largeFile.bytesMatch = sameBytes(data, back);
 			result.largeFile.ok = result.largeFile.bytesMatch;
+			if (!result.largeFile.ok) {
+				result.largeFile.stage = "compare";
+				errors++;
+			}
 		} catch (e) {
-			Object.assign(result.largeFile, { ok: false }, fail(e));
+			Object.assign(result.largeFile, { ok: false, stage }, fail(e));
 		}
 	} catch (e) {
 		// Setup (leftover removal, folder or vector files) failed; later steps didn't run.

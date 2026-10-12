@@ -22,7 +22,8 @@ interface Node {
 
 interface Session {
 	target: { parentId: string; name: string } | { id: string };
-	total: number;
+	/** From fileSize when sent, otherwise from the first fragment's Content-Range. */
+	total: number | null;
 	received: Uint8Array;
 	next: number;
 }
@@ -37,6 +38,8 @@ export interface FakeGraphOptions {
 	deltaHashes?: boolean;
 	/** Return a download URL on this host instead of the 1drv.com one. */
 	downloadHost?: string;
+	/** Answer 400 to a createUploadSession body that carries item.fileSize (the 0.3.0 Ubuntu probe result). */
+	rejectFileSize?: boolean;
 }
 
 export function sha1Base64(b: Uint8Array): string {
@@ -82,6 +85,7 @@ export class FakeGraph implements HttpTransport {
 			pageSize: opts.pageSize ?? 3,
 			deltaHashes: opts.deltaHashes ?? true,
 			downloadHost: opts.downloadHost ?? DOWNLOAD_HOST,
+			rejectFileSize: opts.rejectFileSize ?? false,
 		};
 		this.nodes.set("ROOT", this.node("ROOT", "root", null, true));
 		this.nodes.set("APPS", this.node("APPS", "Apps", "ROOT", true));
@@ -243,9 +247,7 @@ export class FakeGraph implements HttpTransport {
 		if (m === "POST" && r) {
 			const parent = this.nodes.get(decodeURIComponent(r[1] as string));
 			if (!parent) return err(404, "itemNotFound");
-			const body = JSON.parse(new TextDecoder().decode(toBytes(req.body))) as { item: Record<string, unknown> };
-			const total = body.item["fileSize"] as number;
-			return this.newSession({ parentId: parent.id, name: decodeURIComponent(r[2] as string) }, total);
+			return this.newSession({ parentId: parent.id, name: decodeURIComponent(r[2] as string) }, req);
 		}
 		r = /^\/me\/drive\/items\/([^/:]+)\/createUploadSession$/.exec(p);
 		if (m === "POST" && r) {
@@ -253,8 +255,7 @@ export class FakeGraph implements HttpTransport {
 			if (!n) return err(404, "itemNotFound");
 			const im = header(req, "if-match");
 			if (im !== undefined && im !== this.eTag(n)) return err(412, "resourceModified", "entityTagDoesNotMatch");
-			const body = JSON.parse(new TextDecoder().decode(toBytes(req.body))) as { item: Record<string, unknown> };
-			return this.newSession({ id: n.id }, body.item["fileSize"] as number);
+			return this.newSession({ id: n.id }, req);
 		}
 		r = /^\/me\/drive\/items\/([^/:]+):\/([^/:]+)$/.exec(p);
 		if (m === "GET" && r) {
@@ -314,9 +315,14 @@ export class FakeGraph implements HttpTransport {
 		});
 	}
 
-	private newSession(target: Session["target"], total: number): HttpResponse {
+	private newSession(target: Session["target"], req: HttpRequest): HttpResponse {
+		const raw = new TextDecoder().decode(toBytes(req.body));
+		const body = (raw === "" ? {} : JSON.parse(raw)) as { item?: Record<string, unknown> };
+		const fileSize = body.item?.["fileSize"];
+		if (fileSize !== undefined && this.opts.rejectFileSize) return err(400, "invalidRequest", "invalidArgument");
+		const total = typeof fileSize === "number" ? fileSize : null;
 		const sid = `S${++this.seq}`;
-		this.sessions.set(sid, { target, total, received: new Uint8Array(total), next: 0 });
+		this.sessions.set(sid, { target, total, received: new Uint8Array(total ?? 0), next: 0 });
 		return json(200, { uploadUrl: `${UPLOAD_HOST}/up/${sid}?tempauth=${URL_SECRET}`, expirationDateTime: "2026-10-13T00:00:00Z" });
 	}
 
@@ -336,6 +342,10 @@ export class FakeGraph implements HttpTransport {
 		const start = Number(range[1]);
 		const end = Number(range[2]);
 		const bytes = toBytes(req.body);
+		if (s.total === null) {
+			s.total = Number(range[3]);
+			s.received = new Uint8Array(s.total);
+		}
 		if (Number(range[3]) !== s.total || end - start + 1 !== bytes.byteLength) return err(400, "invalidRequest");
 		if (start !== s.next) return err(416, "invalidRange", "fragmentOverlap");
 		s.received.set(bytes, start);

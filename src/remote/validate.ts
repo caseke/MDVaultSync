@@ -80,7 +80,14 @@ export const TRANSFER_HOST_SUFFIXES: readonly string[] = [
 	".onedrive.com",
 	".livefilestore.com",
 ];
+/** Longest name we send (NAME_MAX in capabilities.ts until the probe proves more) [G-NM-6]. */
 export const NAME_LIMIT = 255;
+/**
+ * Longest name we accept from Graph: the 400-character full-path limit [G-NM-4]. OneDrive accepts names over 255
+ * (0.3.0 probe, Ubuntu), so a longer remote name is a real state; the planner skips it as invalid-name (M4)
+ * rather than letting one item fail every delta page.
+ */
+export const MAX_REMOTE_NAME = 400;
 // Dot-only ids are refused: "..", unencoded in a URL path, would climb out of /items/ (M3 review).
 const ID_RE = /^(?!\.+$)[A-Za-z0-9!._-]{1,256}$/;
 const QXH_RE = /^[A-Za-z0-9+/]{27}=$/;
@@ -130,7 +137,7 @@ function nameOk(v: unknown, max: number): v is string {
 	);
 }
 
-/** True for a valid item name (design §8). */
+/** True for a name we would send (design §8, at most NAME_LIMIT). */
 export function isValidName(v: unknown): v is string {
 	return nameOk(v, NAME_LIMIT);
 }
@@ -155,7 +162,7 @@ export function parseDriveItem(raw: unknown): RemoteItem {
 	// Deleted items on consumer OneDrive omit cTag and size, and may omit name and eTag [G-DL-5].
 	let name = "";
 	if (!deleted || o["name"] !== undefined) {
-		if (!nameOk(o["name"], NAME_LIMIT)) throw new InvalidResponse();
+		if (!nameOk(o["name"], MAX_REMOTE_NAME)) throw new InvalidResponse();
 		name = o["name"];
 	}
 	const eTag = deleted && o["eTag"] === undefined ? "" : tag(o["eTag"]);

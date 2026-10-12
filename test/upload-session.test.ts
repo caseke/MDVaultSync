@@ -35,7 +35,7 @@ test("new-file session: conflictBehavior=fail and fileSize in the body, 10 + 2 M
 	const createReq = last(fake.requests);
 	assert.equal(createReq?.method, "POST");
 	assert.ok(createReq?.url.endsWith("/me/drive/items/APPROOT:/big.bin:/createUploadSession"));
-	assert.deepEqual(JSON.parse(createReq?.body as string), { item: { "@microsoft.graph.conflictBehavior": "fail", fileSize: 12 * MiB } });
+	assert.deepEqual(JSON.parse(createReq?.body as string), { item: { "@microsoft.graph.conflictBehavior": "fail" } });
 	const ranges = fragmentRanges(data.byteLength);
 	const first = await g.putFragment(s.uploadUrl, 0, data.byteLength, data.slice(0, ranges[0]?.end));
 	assert.equal(first, null);
@@ -59,7 +59,7 @@ test("replace session sends If-Match verbatim; a stale one is 412; replace needs
 	const req = last(fake.requests);
 	assert.equal(req?.headers?.["If-Match"], etag);
 	assert.ok(req?.url.endsWith(`/me/drive/items/${encodeURIComponent(n.id)}/createUploadSession`));
-	assert.deepEqual(JSON.parse(req?.body as string), { item: { "@microsoft.graph.conflictBehavior": "replace", fileSize: 5 } });
+	assert.deepEqual(JSON.parse(req?.body as string), { item: { "@microsoft.graph.conflictBehavior": "replace" } });
 	await assert.rejects(g.createUploadSession({ kind: "replace", id: n.id }, '"stale"', 5), (e: unknown) => e instanceof GraphError && e.status === 412);
 	const before = fake.requests.length;
 	await assert.rejects(g.createUploadSession({ kind: "replace", id: n.id }, null, 5), RangeError);

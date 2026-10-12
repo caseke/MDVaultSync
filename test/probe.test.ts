@@ -32,7 +32,7 @@ test("full probe against an OneDrive-like fake records every result and cleans u
 	const { fake, deps } = setup({ quotaReadable: false });
 	fake.addFile("APPROOT", "Secret Diary.md", enc("private words"));
 	const r = await runProbe(deps);
-	assert.equal(r.probeVersion, 1);
+	assert.equal(r.probeVersion, 2);
 	assert.equal(r.platform, "test");
 	assert.deepEqual(r.approot, { ok: true, parentPath: "/drive/root:/Apps", name: "MDVaultSync", pathPrefixLength: 16 });
 	for (const form of ["approot-colon", "items-id"] as const) {
@@ -89,6 +89,10 @@ test("PUT that ignores If-Match, case-sensitive names, longer names and readable
 	assert.equal(r.putIfMatch.staleStatus, 200);
 	assert.equal(r.nameLength.nameMax, null);
 	assert.equal(r.nameLength.len256.status, 201);
+	assert.equal(r.nameLength.len300.status, 201);
+	// The regression: long names must not break delta.
+	assert.equal(r.delta["approot-colon"].ok, true);
+	assert.equal(r.delta["items-id"].ok, true);
 	assert.deepEqual(r.quota, { readable: true });
 	assert.deepEqual(r.cleanup, { ok: true });
 });
@@ -116,8 +120,8 @@ test("a failing step is recorded and cleanup still runs", async () => {
 		req.url.startsWith(UPLOAD_HOST) && req.method === "PUT" ? jsonResponse(507, { error: { code: "quotaLimitReached" } }) : null;
 	const r = await runProbe(deps);
 	assert.deepEqual(
-		{ ok: r.largeFile.ok, status: r.largeFile.status, code: r.largeFile.code },
-		{ ok: false, status: 507, code: "quotaLimitReached" },
+		{ ok: r.largeFile.ok, status: r.largeFile.status, code: r.largeFile.code, stage: r.largeFile.stage },
+		{ ok: false, status: 507, code: "quotaLimitReached", stage: "fragment" },
 	);
 	assert.ok(r.errors >= 1);
 	assert.deepEqual(r.cleanup, { ok: true });
@@ -151,5 +155,37 @@ test("a file (not a folder) at the probe name is left alone and the probe stops"
 	assert.equal(fake.nodes.has(f.id), true);
 	assert.equal(r.leftoverRemoved, false);
 	assert.ok(r.errors >= 1);
+	assert.deepEqual(r.cleanup, { ok: true });
+});
+
+test("delta runs before the long-name files exist", async () => {
+	const { fake, deps } = setup({ nameMax: 400 });
+	await runProbe(deps);
+	const urls = fake.requests.map((r) => r.url);
+	const firstDelta = urls.findIndex((u) => u.includes("/delta"));
+	const firstLong = urls.findIndex((u) => u.includes("m".repeat(252)));
+	assert.ok(firstDelta >= 0 && firstLong >= 0 && firstDelta < firstLong);
+});
+
+test("if createUploadSession rejects fileSize, the probe records it, falls back, and completes the round trip", async () => {
+	const { deps } = setup({ rejectFileSize: true });
+	const r = await runProbe(deps);
+	assert.deepEqual(r.largeFile.createAttempts, [
+		{ variant: "conflictBehavior+fileSize", status: 400, code: "invalidRequest", innerCodes: ["invalidArgument"] },
+		{ variant: "conflictBehavior", status: 200 },
+	]);
+	assert.equal(r.largeFile.ok, true);
+	assert.equal(r.largeFile.bytesMatch, true);
+	assert.equal(r.largeFile.uploadHost, "api.onedrive.com");
+	assert.equal(r.errors, 0);
+});
+
+test("when every createUploadSession body fails, the stage is create and all attempts are listed", async () => {
+	const { fake, deps } = setup();
+	fake.intercept = (req) => (req.url.endsWith(":/createUploadSession") ? jsonResponse(400, { error: { code: "invalidRequest" } }) : null);
+	const r = await runProbe(deps);
+	assert.equal(r.largeFile.ok, false);
+	assert.equal(r.largeFile.stage, "create");
+	assert.deepEqual(r.largeFile.createAttempts?.map((a) => a.variant), ["conflictBehavior+fileSize", "conflictBehavior", "none"]);
 	assert.deepEqual(r.cleanup, { ok: true });
 });

@@ -380,3 +380,10 @@ test("dot-only ids never reach a URL", async () => {
 	}
 	assert.equal(fake.requests.length, 0);
 });
+
+test("a delta page holding a name longer than 255 characters still parses (0.3.0 Ubuntu probe regression)", async () => {
+	const { g, fake } = setupGraph({}, "approot-colon");
+	fake.addFile("APPROOT", `${"L".repeat(296)}.txt`, enc("long"));
+	const all = await g.deltaAll(null);
+	assert.ok(all.items.some((i) => i.name.length === 300));
+});

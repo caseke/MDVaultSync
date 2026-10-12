@@ -421,20 +421,67 @@ Tests were written first and run red (7 test files failing to load, 3 new tests 
 - after the review: the Graph host allowed as a transfer URL, every error retried, the download sent through the authorizing transport, and dot-only ids allowed.
 
 Probe JSON (owner, from **Run OneDrive capability probe** → Copy result):
+
+**Probe v1 (0.3.0), Ubuntu, 2026-10-12** (owner; whitespace compacted):
+```
+{
+  "probeVersion": 1, "platform": "linux", "pluginVersion": "0.3.0",
+  "startedAt": "2026-10-12T04:51:36.567Z", "durationMs": 24912,
+  "approot": { "ok": true, "parentPath": "/drive/root:/Apps", "name": "MDVaultSync", "pathPrefixLength": 16 },
+  "leftoverRemoved": false,
+  "delta": {
+    "approot-colon": { "ok": false, "code": "InvalidResponse" },
+    "items-id": { "ok": false, "code": "InvalidResponse" }
+  },
+  "putIfMatch": { "honored": true, "staleStatus": 412, "staleCode": "notAllowed" },
+  "caseInsensitive": { "confirmed": true, "status": 409, "code": "nameAlreadyExists" },
+  "nameLength": { "len255": { "status": 201 }, "len256": { "status": 201 }, "nameMax": null },
+  "patchIfMatch": { "currentStatus": 200, "staleStatus": 412 },
+  "deleteIfMatch": { "staleStatus": 412, "currentStatus": 204 },
+  "quota": { "readable": true },
+  "largeFile": { "ok": false, "size": 12582912, "fragments": 2, "status": 400, "code": "invalidRequest" },
+  "hashVectors": [
+    { "file": "probe.md", "size": 18, "generator": "utf8:\"MDVaultSync probe\\n\"", "quickXorHash": "DCznRcJQBzbQYQp5YsMYQAAHObw=" },
+    { "file": "empty.bin", "size": 0, "generator": "empty", "quickXorHash": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=" },
+    { "file": "seq.bin", "size": 1000, "generator": "probeBytes(1000, seed)", "seed": 7, "quickXorHash": "RW+Rh6PcZW2m++mFuOGq5DBJwQk=" }
+  ],
+  "cleanup": { "ok": true }, "errors": 1
+}
+```
+
+What v1 settled (server behavior, the same from any device; recorded in research.md):
+- PUT honors a stale If-Match: 412 [G-UP-3]. The error code is `notAllowed`, so M6 must branch on status 412, not on the code.
+- Names are case-insensitive: 409 `nameAlreadyExists` [G-NM-5].
+- The name limit is above 255: 256 was accepted [G-NM-6].
+- PATCH and DELETE honor If-Match under the AppFolder scope [G-AF-5].
+- Quota is readable [G-QT-1].
+- The App Folder is `/Apps/MDVaultSync` [G-AF-1].
+- Hash vectors for M4 were recorded. The empty file hashes to `AAAAAAAAAAAAAAAAAAAAAAAAAAA=`, as expected.
+
+Two v1 failures were bugs in this milestone's code, fixed in 0.3.1:
+- **Both delta forms → `InvalidResponse`.** Probe step 5 had just created a 256-character name, which OneDrive accepted. `parseDriveItem` capped received names at 255, so the whole delta page was rejected. Outside the probe this would have stopped sync for good the moment any remote file got a name over 255 characters (for example, a rename in OneDrive web). The fake had masked it: FakeGraph refused names over 255.
+  - Fix: received names are accepted up to the 400-character path limit, and the planner decides whether to sync them (design §8).
+  - Probe v2 runs delta before creating the long names.
+  - Regression tests added.
+- **12 MiB round trip → 400 `invalidRequest` at createUploadSession.** `uploadHost` is missing from the result, so the create call failed, not a fragment. Its body carried `fileSize`, which I added beyond design §6.3.
+  - Fix: `fileSize` is no longer sent.
+  - Probe v2 tries three bodies (with fileSize, without it, none) and records each answer with its inner codes (`largeFile.createAttempts`). It also records which `stage` failed.
+
+**Probe v2 (0.3.1)**, still needed from both devices: delta forms, the large-file round trip (iPad: O-API-2, T-D6), observed transfer hosts, and the name limit at 300.
 ```
 Ubuntu: (paste here)
 iPad:   (paste here)
 ```
 
 **Manual checks** (owner; use a throwaway test vault, never the real one)
-1. **Install 0.3.0.** `git fetch origin && git checkout claude/eloquent-clarke-21deia && git pull`, then `git tag 0.3.0 && git push origin 0.3.0`.
+1. **Install 0.3.1.** `git switch claude/eloquent-clarke-21deia && git pull`, then `git tag 0.3.1 && git push origin 0.3.1`. (0.3.0 was installed on both devices on 2026-10-12 and ran probe v1 on Ubuntu; see above.)
    - Wait for the **Release** workflow to pass.
-   - Open the draft `0.3.0` release, check that it has the three assets and is marked pre-release, then publish it.
+   - Open the draft `0.3.1` release, check that it has the three assets and is marked pre-release, then publish it.
    - Ubuntu: `npm ci && npm run build`, then copy `main.js`, `manifest.json` and `styles.css` into the test vault's plugin folder (as in M2), or install through BRAT.
-   - iPad: BRAT → **Check for updates to all beta plugins**, or add version `0.3.0`.
-2. **Run the probe on Ubuntu.** Sign in if needed. Open the command palette and run **MDVaultSync: Run OneDrive capability probe**.
+   - iPad: BRAT → **Check for updates to all beta plugins**, or add version `0.3.1`.
+2. **Run the probe on Ubuntu.** Sign in if needed. Open the command palette (Ctrl+P; on the iPad, swipe down on a note or use **Open command palette**) and run **MDVaultSync: Run OneDrive capability probe**. There is no settings button until M7.
    - Expect a window that says it is running. After up to a minute it shows JSON. Select **Copy result** and paste it into the block above.
-   - Pass: `cleanup.ok` is `true`, `largeFile.bytesMatch` is `true`, and OneDrive web shows no `.mdvaultsync-probe` folder in `Apps/<your app name>` afterwards. The probe's items are in the OneDrive recycle bin; you can empty it.
+   - Pass: `probeVersion` is 2, `cleanup.ok` is `true`, `largeFile.bytesMatch` is `true`, and OneDrive web shows no `.mdvaultsync-probe` folder in `Apps/<your app name>` afterwards. The probe's items are in the OneDrive recycle bin; you can empty it.
 3. **Run the probe on the iPad**, the same way. Probe 8, the 12 MiB round trip, is the one the plan requires on the iPad (O-API-2, T-D6). Record whether Obsidian stayed responsive while it ran.
 4. **A follow-up session applies the results:**
    - `src/remote/capabilities.ts`: `PUT_HONORS_IF_MATCH` from `putIfMatch.honored`; `DELTA_FORM` = the first form with `ok: true`, or `children-walk` if neither works (then the design §5.2 fallback applies and the M5 planner must not assume delta semantics); `NAME_MAX` from `nameLength.nameMax`; then `CAPABILITIES_PROBED = true`.

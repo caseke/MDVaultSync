@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
 	InvalidResponse,
 	MAX_JSON_BODY,
+	MAX_REMOTE_NAME,
 	TRANSFER_HOST_SUFFIXES,
 	checkName,
 	checkTransferUrl,
@@ -67,12 +68,17 @@ test("deleted items may omit size, cTag, eTag and name [G-DL-5]", () => {
 	assert.equal(d.name, "");
 });
 
-const hostileNames = ["..", ".", "a/b", "a\\b", "a\u0000b", "", "x".repeat(256), 7, null];
+const hostileNames = ["..", ".", "a/b", "a\\b", "a\u0000b", "", "x".repeat(401), 7, null];
 for (const name of hostileNames) {
 	test(`rejects item name ${JSON.stringify(name)?.slice(0, 20)}`, () => {
 		assert.throws(() => parseDriveItem(file({ name })), InvalidResponse);
 	});
 }
+
+test("accepts long remote names up to the 400-character path limit [G-NM-4]; the planner decides whether to sync them", () => {
+	assert.equal(MAX_REMOTE_NAME, 400);
+	for (const n of [256, 300, 400]) assert.equal(parseDriveItem(file({ name: "x".repeat(n) })).name.length, n);
+});
 
 test("accepts 255-character names, hidden names, unicode and emoji", () => {
 	for (const name of ["x".repeat(255), ".mdvaultsync-probe", "café.md", "📝 note.md", "100% #1?.md"]) {

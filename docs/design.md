@@ -528,7 +528,7 @@ After the run, a notice lists every conflict path (D-9). It stays up until click
 - An interrupted run therefore resumes by running the full algorithm again. Pull is idempotent (same `deltaLink`), and the plan contains only what is left.
 
 ### 6.3 Upload sessions (files over 10 MiB, and replace-uploads if PUT ignores If-Match)
-- **Create** with `POST /items/{parentId}:/{name}:/createUploadSession` (new file) or `POST /items/{id}/createUploadSession` with `if-match` (replace). Body: `{"item":{"@microsoft.graph.conflictBehavior":"fail"|"replace","fileSize":<bytes>}}` [G-UP-5]. `fileSize` (M3) lets OneDrive personal fail early with 507 when quota is short. A replace session without If-Match is refused locally (R-CC-1).
+- **Create** with `POST /items/{parentId}:/{name}:/createUploadSession` (new file) or `POST /items/{id}/createUploadSession` with `if-match` (replace). Body: `{"item":{"@microsoft.graph.conflictBehavior":"fail"|"replace"}}` [G-UP-5]. A replace session without If-Match is refused locally (R-CC-1). `fileSize` is documented for OneDrive personal, but the 0.3.0 probe on Ubuntu got 400 `invalidRequest` from a body that included it, so it isn't sent. Probe v2 records which bodies OneDrive accepts.
 - **Persist** an `UploadSessionRecord` right after creation.
 - **Fragment size:** 10 MiB = 32 × 320 KiB (`FRAGMENT = 10 * 1024 * 1024`; assert `FRAGMENT % 327_680 === 0`) [G-UP-6]. The last fragment is the remainder.
 - **Send** fragments in order with `Content-Range` and **no Authorization header** [G-UP-7]. Read only that slice of the file. The Obsidian adapter API reads whole files, so on iPad memory use is the file size. This is one reason for the 100 MiB default cap.
@@ -566,13 +566,13 @@ Remote to vault (§8): the inverse rebuild, plus containment checks.
 All Graph and token JSON passes through hand-written type guards before use. Unknown fields are ignored; missing or mistyped required fields throw `InvalidResponse`.
 - **Item fields:**
   - `id` matches `/^[A-Za-z0-9!._-]{1,256}$/` and is not made only of dots (M3 review: `..` in a URL path would climb out of `/items/`);
-  - `name` is 1–255 characters with no `/`, `\` or NUL, and is not `.` or `..` (M3);
+  - `name` is 1–400 characters with no `/`, `\` or NUL, and is not `.` or `..` (M3). The cap is the 400-character full-path limit [G-NM-4], not 255: OneDrive accepted a 256-character name in the 0.3.0 probe, and rejecting it here made every delta page fail. Whether a long name syncs is the planner's decision (M4 `validateSegment`, skip `invalid-name`). Names we *send* stay at most 255 (`NAME_MAX`) until the probe proves more;
   - `size` is a safe non-negative integer;
   - `eTag` and `cTag` are printable-ASCII strings of at most 512 characters, because they go back out as If-Match (M3 review);
   - `quickXorHash` matches base64 of 28 characters.
   - Deleted items may omit `size`, `cTag`, `eTag` and `name` [G-DL-5].
   - The approot's decoded `pathPrefix` must have only valid name segments with no control characters, and be at most 400 characters long.
-  - Names and If-Match values we *send* get the same checks: the name rules above, and If-Match as printable ASCII of at most 512 characters.
+  - Names and If-Match values we *send* get the same checks: the name rules above (at most 255 characters), and If-Match as printable ASCII of at most 512 characters.
 - **Response bodies:**
   - JSON responses over 32 MiB are rejected before parsing, which caps memory for a delta page.
   - Downloads whose byte length differs from `R.size` are rejected.

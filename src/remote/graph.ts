@@ -262,17 +262,18 @@ export class GraphClient implements RemotePort {
 
 	createUploadSession(target: UploadTarget | UploadTargetReplace, ifMatch: string | null, size: number): Promise<UploadSessionInfo> {
 		if (!Number.isSafeInteger(size) || size < 0) return Promise.reject(new RangeError("invalid-size"));
-		// fileSize lets OneDrive personal fail early with 507 when quota is short [G-UP-5].
+		// Body exactly as design §6.3. `fileSize` is documented for OneDrive personal [G-UP-5], but the 0.3.0 probe
+		// got 400 invalidRequest on Ubuntu with it in the body, so it is not sent (probe v2 records which bodies work).
 		if (target.kind === "new") {
 			const seg = encodeSegment(checkName(target.name.normalize("NFC"), this.maxName));
 			const url = `${GRAPH_BASE}/me/drive/items/${idSegment(target.parentId)}:/${seg}:/createUploadSession`;
-			return session.createSession(this.call, url, null, { item: { "@microsoft.graph.conflictBehavior": "fail", fileSize: size } });
+			return session.createSession(this.call, url, null, { item: { "@microsoft.graph.conflictBehavior": "fail" } });
 		}
 		// R-CC-1: a replace must be conditional on the last-synced eTag.
 		if (ifMatch === null) return Promise.reject(new RangeError("if-match-required"));
 		const url = `${GRAPH_BASE}/me/drive/items/${idSegment(target.id)}/createUploadSession`;
 		return session.createSession(this.call, url, checkIfMatch(ifMatch), {
-			item: { "@microsoft.graph.conflictBehavior": "replace", fileSize: size },
+			item: { "@microsoft.graph.conflictBehavior": "replace" },
 		});
 	}
 
