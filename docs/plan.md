@@ -75,6 +75,7 @@ A **manual check** means a step only the owner can do on a real device. The sess
 - Make `main` the default branch. Merging this branch is the owner's call.
 - In the repo settings, enable private vulnerability reporting, Dependabot alerts, secret scanning and push protection [C-GH-2].
 - Confirm 2FA is on for the GitHub account (T-T8).
+- Switch CodeQL from **default setup** to the workflow (`.github/workflows/codeql.yml`): Settings → Code security → Code scanning → CodeQL analysis → ⋯ → **Disable CodeQL** (or "Switch to advanced"). Until then every CodeQL run fails with "CodeQL analyses from advanced configurations cannot be processed when the default setup is enabled" (observed 2026-10-12, run 38186164070).
 - Verify all of the above with the `gh api` commands in **Verify** (session runs them if `gh` is available, otherwise owner pastes output).
 
 **Acceptance criteria**
@@ -123,7 +124,7 @@ $ grep -rniE 'sample|MyPlugin' src manifest.json package.json
 (no output, exit 1)      # no sample-plugin names remain [O-SUB-3]
 $ gh api ...             # owner to paste: gh is not authenticated in the session container
 ```
-CI on Node 22.x and 24.x: see the run for the M1 head commit on `claude/sleepy-allen-tegt17` (Actions tab).
+CI on GitHub: the `CI` workflow passed on Node 22.x and 24.x (run 38186164011 at e5c0f13 and run 38186746269 at 5f4663d). `CodeQL` failed with a configuration error because the repo has CodeQL default setup enabled (owner action above).
 
 **Tests added:** `test/smoke.test.ts` (runner, ports.ts is erasable-only), `test/lint-rules.test.ts` (every project lint rule, plus disable comments rejected under the full config), `test/manifest.test.ts` (submission rules, versions agree, zero runtime deps, no sample names), `test/hook.test.ts` (hook fast paths), `test/network-check.test.ts` (CI backstop).
 
