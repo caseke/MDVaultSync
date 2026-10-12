@@ -107,6 +107,7 @@ const BAD: [string, (o: Record<string, unknown>) => void][] = [
 	["session target kind unknown", (o) => (at(o, "uploadSessions", "n.md", "target")["kind"] = "overwrite")],
 	["session target name with a slash", (o) => (at(o, "uploadSessions", "n.md", "target")["name"] = "../n.md")],
 	["pending conflict copy into a hidden folder", (o) => (at(o, "pendingConflicts", "a.md")["copyPath"] = ".x/copy.md")],
+	["pending conflict copy onto the original", (o) => (at(o, "pendingConflicts", "a.md")["copyPath"] = "A.md")],
 	["declined delete with a bad hash", (o) => (at(o, "declinedDeletes", "D/b.md")["localHash"] = 7)],
 ];
 for (const [name, edit] of BAD) {
@@ -159,6 +160,9 @@ test("applyAppRoot: same id is a no-op; first id is recorded; a changed id reset
 	const fresh = applyAppRoot(emptyState("d"), "root-1");
 	assert.equal(fresh.appRootId, "root-1");
 	assert.equal(fresh.unionPending, true);
+	const noRoot = { ...fullState(), appRootId: null, unionPending: false };
+	assert.equal(applyAppRoot(noRoot, "root-1").unionPending, true, "records without an approot id force a merge");
+	assert.equal(applyAppRoot({ ...emptyState("d"), unionPending: false }, "root-1").unionPending, false);
 	const changed = applyAppRoot(s, "root-2");
 	assert.equal(changed.appRootId, "root-2");
 	assert.equal(changed.unionPending, true);

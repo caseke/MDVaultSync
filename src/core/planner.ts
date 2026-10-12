@@ -13,7 +13,7 @@
 import { conflictCopyPath } from "./conflict-name.ts";
 import { exclusionReason } from "./exclude.ts";
 import { caseKey, containmentProblem, findCollisions, toVaultPath, validatePath } from "./paths.ts";
-import type { FileRecord, Plan, PlanOp, RemoteItem, SkipReason, SyncState, VaultPath } from "./ports.ts";
+import type { FileRecord, PendingConflict, Plan, PlanOp, RemoteItem, SkipReason, SyncState, VaultPath } from "./ports.ts";
 import { buildRemoteTree } from "./remote-tree.ts";
 
 /** One entry from the local scan (M6). `path` is as the vault reported it, before NFC. */
@@ -104,7 +104,8 @@ export function exceedsDeleteGuard(plan: Plan, thresholdPct: number): boolean {
 
 export function plan(state: SyncState, local: readonly ScannedEntry[], remoteIndex: Readonly<Record<string, RemoteItem>>, settings: PlanSettings): Plan {
 	const { configDir, excludePatterns, maxFileSize, pathPrefixLen } = settings;
-	const union = state.unionPending || !state.firstSyncCompleted;
+	// Without an approot id the remote view is empty; acting on that could only delete (security review).
+	const union = state.unionPending || !state.firstSyncCompleted || state.appRootId === null;
 
 	const skips: Emitted[] = [];
 	const ops: Emitted[] = [];
@@ -185,8 +186,13 @@ export function plan(state: SyncState, local: readonly ScannedEntry[], remoteInd
 	// ---------- 1c. bases ----------
 	const fileBases = new Map<string, Base>();
 	const folderBases = new Map<string, FolderBase>();
+	// A live item the tree couldn't place (parent missing from the index, or a cycle) isn't known to be deleted:
+	// its base is blocked, never trashed (security review). It is outside the approot tree as far as we know.
 	const baseProblem = (path: VaultPath, isFolder: boolean, remoteId: string): SkipReason | null =>
-		exclusionReason(path, configDir, excludePatterns, isFolder) ?? validatePath(path, pathPrefixLen, isFolder) ?? skippedRemoteIds.get(remoteId) ?? null;
+		exclusionReason(path, configDir, excludePatterns, isFolder) ??
+		validatePath(path, pathPrefixLen, isFolder) ??
+		skippedRemoteIds.get(remoteId) ??
+		(tree.unresolvedIds.has(remoteId) ? "outside-vault" : null);
 	for (const rec of Object.values(state.files)) {
 		const key = keyOf(rec.path);
 		const reason = baseProblem(rec.path, false, rec.remoteId);
@@ -370,8 +376,21 @@ export function plan(state: SyncState, local: readonly ScannedEntry[], remoteInd
 	for (const e of local) taken.add(keyOf(e.path));
 	for (const r of tree.byId.values()) taken.add(keyOf(r.path));
 	for (const s of tree.skipped) taken.add(keyOf(s.displayPath));
+	// A crash mid-conflict leaves pendingConflicts[path] (design §5.5 step 1). Its copy path is reused only for the
+	// same pair, and only if nothing but that copy can be there: the state file is untrusted (T-T6), and a stale
+	// or forged copyPath must never point the copy write at another file (security review).
+	const pendingCopyUsable = (pc: PendingConflict, l: Local, r: Remote): boolean => {
+		const ck = keyOf(pc.copyPath);
+		if (pc.localHash !== l.localHash || pc.remoteId !== r.item.id || ck === keyOf(l.path)) return false;
+		if (exclusionReason(pc.copyPath, configDir, excludePatterns, false) || validatePath(pc.copyPath, pathPrefixLen, false)) return false;
+		if (fileBases.has(ck) || remoteFiles.has(ck) || localFolders.has(ck) || remoteFolders.has(ck) || blocked.has(ck)) return false;
+		const there = localFiles.get(ck);
+		return there === undefined || there.localHash === pc.localHash;
+	};
 	const conflict = (l: Local, r: Remote, noHistory: boolean) => {
-		let copyPath = own(state.pendingConflicts, l.path) ? state.pendingConflicts[l.path]?.copyPath : undefined;
+		let copyPath: VaultPath | undefined;
+		const pending = own(state.pendingConflicts, l.path) ? state.pendingConflicts[l.path] : undefined;
+		if (pending && pendingCopyUsable(pending, l, r)) copyPath = pending.copyPath;
 		if (copyPath === undefined) {
 			try {
 				copyPath = conflictCopyPath(l.path, settings.deviceName, settings.now, (p) => taken.has(keyOf(p)), pathPrefixLen);
@@ -493,10 +512,14 @@ export function plan(state: SyncState, local: readonly ScannedEntry[], remoteInd
 	}
 
 	const fileKeys = new Set<string>([...localFiles.keys(), ...remoteFiles.keys(), ...fileBases.keys()]);
+	// A skipped local file (a case-collision loser) shares its key with the tracked keeper. Once the keeper has
+	// moved away, nothing may be written at that key: it would land on the skipped file (property test).
+	const localSkipKeys = new Set(localSkips.map((x) => x.key));
 	for (const k of [...fileKeys].sort()) {
 		if (blocked.has(k)) continue;
 		const b = doneBase.has(k) ? undefined : fileBases.get(k);
 		const l = doneLocal.has(k) ? undefined : localFiles.get(k);
+		if (!l && localSkipKeys.has(k)) continue;
 		const rr = remoteFiles.get(k);
 		const r = rr && !doneRemote.has(rr.item.id) ? rr : undefined;
 		if (b || l || r) decideFile(b, l, r);
@@ -531,8 +554,12 @@ export function plan(state: SyncState, local: readonly ScannedEntry[], remoteInd
 	}
 
 	const order = (a: Emitted, b: Emitted) => (a.sort < b.sort ? -1 : a.sort > b.sort ? 1 : a.seq - b.seq);
+	// Moves come before every other op: a write at a move's source or destination must never run before the
+	// move (security review: a new remote item at a vacated path would otherwise be downloaded over the file
+	// that is about to move away, with its unsynced edit).
+	const isMove = (e: Emitted) => e.op.kind === "local-move" || e.op.kind === "remote-move";
 	return {
-		ops: [...skips.sort(order), ...ops.sort(order)].map((e) => e.op),
+		ops: [...skips.sort(order), ...ops.filter(isMove).sort(order), ...ops.filter((e) => !isMove(e)).sort(order)].map((e) => e.op),
 		deleteCount,
 		trackedCount: Object.keys(state.files).length,
 		unionMode: union,

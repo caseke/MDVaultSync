@@ -236,8 +236,8 @@ test("local rename from a vault event: remote-move by id with If-Match (R-MOVE-1
 test("local rename found by a unique hash and size match (startup, no event)", async () => {
 	const w = world({ "a.md": "A" });
 	w.vault.rename("a.md", "dir/b.md");
-	// The new folder is created first (M6 runs folder creation shallowest first).
-	assert.deepEqual(lines(await run(w)), ["upload-new dir", "remote-move a.md -> dir/b.md"]);
+	// Moves come first; M6 creates the missing parent folder on demand (and the folder op then adopts it).
+	assert.deepEqual(lines(await run(w)), ["remote-move a.md -> dir/b.md", "upload-new dir"]);
 });
 
 test("ambiguous hash matches are not treated as renames", async () => {
@@ -347,6 +347,48 @@ test("remote folder rename collapses into one local-move of the folder", async (
 	w.remote.rename("D", "E");
 	w.remote.putFile("E/b.md", "B2");
 	assert.deepEqual(lines(await run(w)), ["local-move D -> E", "download E/b.md"]);
+});
+
+test("a new remote item at a path vacated by a remote rename waits for the move (review: no overwrite of a local edit)", async () => {
+	const w = world({ "daily.md": "D" });
+	w.remote.rename("daily.md", "daily-old.md");
+	w.remote.putFile("daily.md", "new day");
+	w.vault.write("daily.md", "unsynced edit");
+	const p = lines(await run(w));
+	assert.deepEqual(p, ["local-move daily.md -> daily-old.md", "upload-replace daily-old.md", "download daily.md"]);
+});
+
+test("every move precedes every other op on its source or destination", async () => {
+	const w = world({ "D/a.md": "A", "x.md": "X" });
+	w.remote.rename("D", "E");
+	w.remote.putFile("D/new.md", "N");
+	w.remote.rename("x.md", "y.md");
+	w.remote.putFile("x.md", "X2");
+	const ops = (await run(w)).ops;
+	const firstOther = ops.findIndex((o) => o.kind !== "skip" && o.kind !== "local-move" && o.kind !== "remote-move");
+	const lastMove = ops.map((o) => o.kind === "local-move" || o.kind === "remote-move").lastIndexOf(true);
+	assert.ok(lastMove >= 0 && lastMove < firstOther, lines(await run(w)).join("\n"));
+});
+
+test("a tracked file whose remote item can't be placed (missing parent) is not trashed (review)", () => {
+	const s = syncedState();
+	const it = item("f1", "missing-parent", "a.md");
+	s.files[vp("a.md")] = { path: vp("a.md"), remoteId: "f1", eTag: it.eTag, cTag: it.cTag, size: 5, mtime: 1, localHash: hashOf("f1"), remoteHash: hashOf("f1"), transformId: "identity" };
+	const local = [{ path: "a.md", isFolder: false, size: 5, mtime: 1, localHash: hashOf("f1"), storedHash: hashOf("f1") }];
+	const p = plan(s, local, rootIndex(it), SETTINGS);
+	noDeletes(p.ops);
+	assert.deepEqual(lines(p), ["skip a.md (outside-vault)"]);
+	// A real remote delete (the item is gone from the index) still trashes.
+	assert.deepEqual(lines(plan(s, local, rootIndex(), SETTINGS)), ["local-trash a.md"]);
+});
+
+test("a state with records but no approot id plans a union merge, never deletes (review, T-T6)", async () => {
+	const w = world({ "a.md": "A" });
+	w.state.appRootId = null;
+	const p = await run(w);
+	assert.equal(p.unionMode, true);
+	noDeletes(p.ops);
+	assert.equal(applyAppRoot(w.state, APPROOT_ID).unionPending, true);
 });
 
 // ---------- folders ----------
@@ -525,9 +567,38 @@ test("conflict copy names avoid existing paths and reuse a pending conflict's co
 	const p = await run(w);
 	assert.ok(lines(p).includes(`conflict a.md => a (conflict iPad ${STAMP}) 2.md`), lines(p).join("\n"));
 
+	// A crash mid-procedure: the same pair reuses its copy path, even with the copy already written.
+	const remoteId = w.remote.itemAt("a.md")?.id ?? "";
 	const pending = vp("a (conflict iPad 2025-12-31 235959).md");
-	w.state.pendingConflicts = { [vp("a.md")]: { path: vp("a.md"), copyPath: pending, localHash: hashOf("local"), remoteId: "x" } };
+	w.state.pendingConflicts = { [vp("a.md")]: { path: vp("a.md"), copyPath: pending, localHash: hashOf("local"), remoteId } };
 	assert.equal(opOf((await run(w)).ops, "conflict").copyPath, pending);
+	w.vault.write(pending, "local");
+	assert.equal(opOf((await run(w)).ops, "conflict").copyPath, pending);
+});
+
+test("a stale or forged pending conflict never points the copy at another file (review, T-T6)", async () => {
+	const w = world({ "a.md": "A", "b.md": "B" });
+	w.vault.write("a.md", "local");
+	w.remote.putFile("a.md", "remote");
+	const remoteId = w.remote.itemAt("a.md")?.id ?? "";
+	const fresh = `a (conflict iPad ${STAMP}).md`;
+	const cases: [string, Partial<{ copyPath: string; localHash: string; remoteId: string }>][] = [
+		["another tracked note", { copyPath: "b.md" }],
+		["the original itself, other case", { copyPath: "A.md" }],
+		["a remote file", { copyPath: "r.md" }],
+		["an excluded path", { copyPath: "tmp/x.md" }],
+		["a local file with other bytes", { copyPath: "l.md" }],
+		["a different local version", { localHash: hashOf("older") }],
+		["a different remote item", { remoteId: "other" }],
+	];
+	w.remote.putFile("r.md", "R");
+	w.vault.write("l.md", "L");
+	for (const [name, over] of cases) {
+		w.state.pendingConflicts = {
+			[vp("a.md")]: { path: vp("a.md"), copyPath: vp(over.copyPath ?? "a (conflict iPad 2025-12-31 235959).md"), localHash: over.localHash ?? hashOf("local"), remoteId: over.remoteId ?? remoteId },
+		};
+		assert.equal(opOf((await run(w, { excludePatterns: ["tmp/"] })).ops, "conflict").copyPath, fresh, name);
+	}
 });
 
 test("a conflict whose copy name can't fit is skipped, leaving both sides untouched", async () => {
@@ -658,6 +729,15 @@ test("a skipped local collision loser never deletes the tracked file's remote co
 	w.vault.write("Note.md", "N");
 	const p = await run(w);
 	assert.deepEqual(lines(p), ["skip note.md (case-collision)"]);
+});
+
+test("when a tracked collision keeper moves away, nothing is written over the skipped loser (property-test find)", async () => {
+	const w = world({ "Note.md": "N" });
+	w.vault.write("note.md", "loser bytes");
+	w.remote.rename("Note.md", "moved.md");
+	w.remote.putFile("note.md", "new remote file");
+	const p = await run(w);
+	assert.deepEqual(lines(p), ["skip note.md (case-collision)", "local-move Note.md -> moved.md"]);
 });
 
 test("rejects a scanned file without hashes", () => {

@@ -27,6 +27,11 @@ export interface RemoteTree {
 	skippedIds: Map<string, SkipReason>;
 	/** Live children per folder id, skipped ones included (R-DEL-3). */
 	childCount: Map<string, number>;
+	/**
+	 * Live items whose parent chain doesn't reach the approot (a parent missing from the index, or a cycle). They
+	 * are not known to be deleted, so the planner must not treat their absence from the tree as a delete.
+	 */
+	unresolvedIds: Set<string>;
 }
 
 interface Pending {
@@ -41,7 +46,7 @@ interface Pending {
  * `caseKey` (`case-collision`) are all skipped (M4 carry-in); a skipped folder takes its descendants with it.
  */
 export function buildRemoteTree(index: Readonly<Record<string, RemoteItem>>, appRootId: string | null, configDir: string, pathPrefixLen: number): RemoteTree {
-	const tree: RemoteTree = { byId: new Map(), skipped: [], skippedIds: new Map(), childCount: new Map() };
+	const tree: RemoteTree = { byId: new Map(), skipped: [], skippedIds: new Map(), childCount: new Map(), unresolvedIds: new Set() };
 	const children = new Map<string, RemoteItem[]>();
 	for (const it of Object.values(index)) {
 		if (it.deleted || it.parentId === null || it.id === appRootId) continue;
@@ -50,7 +55,11 @@ export function buildRemoteTree(index: Readonly<Record<string, RemoteItem>>, app
 		children.set(it.parentId, list);
 	}
 	for (const [parentId, list] of children) tree.childCount.set(parentId, list.length);
-	if (appRootId === null) return tree;
+	const live = Object.values(index).filter((it) => !it.deleted && it.id !== appRootId);
+	if (appRootId === null) {
+		for (const it of live) tree.unresolvedIds.add(it.id);
+		return tree;
+	}
 
 	const skip = (p: Pending, reason: SkipReason, mapped: VaultPath | null) => {
 		tree.skipped.push({ id: p.item.id, displayPath: p.segments.join("/") as VaultPath, reason, isFolder: p.item.isFolder, mapped });
@@ -100,5 +109,6 @@ export function buildRemoteTree(index: Readonly<Record<string, RemoteItem>>, app
 		}
 		level = next;
 	}
+	for (const it of live) if (!seen.has(it.id)) tree.unresolvedIds.add(it.id);
 	return tree;
 }

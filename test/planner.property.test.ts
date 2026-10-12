@@ -4,7 +4,9 @@
 //  (a) bytes that only one side has are never deleted or overwritten;
 //  (b) union mode never deletes;
 //  (c) a conflict happens only when both sides changed (or there is no base) and the contents differ;
-//  (d) nothing at a skipped path is transferred or deleted.
+//  (d) nothing at a skipped path is transferred or deleted;
+//  (e) every move comes before any other op on its source or destination path.
+// Some cases also move a tracked remote item to a new name (same id), sometimes with a new item at the old name.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { plan, type ScannedEntry } from "../src/core/planner.ts";
@@ -26,6 +28,7 @@ function prng(seed: number): () => number {
 }
 
 const PATHS = ["a.md", "A.md", "b.md", "d/e.md", "d/f.md", "x y.md", `${CFG}/p.js`];
+const MOVE_TARGETS = ["m.md", "d/m.md"];
 const CONTENTS = ["x", "y", "z", "", "0123456789-long"];
 const ROOT = "approot";
 const FOLDER_ID = "folder-d";
@@ -33,7 +36,7 @@ const FOLDER_ID = "folder-d";
 interface Case {
 	base: Map<string, string>; // path → content at last sync
 	local: Map<string, string>;
-	remote: Map<string, { content: string; id: string; sameItem: boolean }>;
+	remote: Map<string, { content: string; id: string; sameItem: boolean; movedFrom?: string }>;
 	union: boolean;
 	cap: number;
 	patterns: string[];
@@ -57,6 +60,16 @@ function genCase(rnd: () => number): Case {
 			const sameItem = hasBase && rnd() < 0.9;
 			c.remote.set(p, { content, id: sameItem ? idFor(p) : idFor(p) + "-new", sameItem });
 		}
+	}
+	// Remote moves by id: a tracked item renamed on another device, sometimes replaced at its old name.
+	for (const target of MOVE_TARGETS) {
+		if (rnd() >= 0.3) continue;
+		const candidates = [...c.remote].filter(([p, r]) => r.sameItem && !r.movedFrom && c.base.has(p));
+		if (candidates.length === 0) continue;
+		const [from, r] = pick(candidates);
+		c.remote.delete(from);
+		c.remote.set(target, { ...r, movedFrom: from, content: rnd() < 0.7 ? r.content : pick(CONTENTS) });
+		if (rnd() < 0.5) c.remote.set(from, { content: pick(CONTENTS), id: idFor(from) + "-new", sameItem: false });
 	}
 	return c;
 }
@@ -97,7 +110,7 @@ function build(c: Case): { p: Plan; c: Case } {
 	}
 	for (const [p, r] of c.remote) {
 		const segs = p.split("/");
-		const base = c.base.get(p);
+		const base = c.base.get(r.movedFrom ?? p);
 		const unchanged = r.sameItem && base === r.content;
 		index[r.id] = {
 			id: r.id,
@@ -141,8 +154,20 @@ function check(p: Plan, c: Case, label: string): void {
 	const sameKey = <T>(m: Map<string, T>, path: string) => [...m].filter(([p]) => caseKey(p) === caseKey(path));
 	const localAt = (path: string) => c.local.get(path) ?? sameKey(c.local, path).find(([p]) => !skipped.has(p))?.[1];
 	const oneAt = <T>(m: Map<string, T>, path: string) => m.get(path) ?? sameKey(m, path)[0]?.[1];
+	// (e) moves first, relative to every op on their paths.
+	p.ops.forEach((op, i) => {
+		if (op.kind !== "local-move" && op.kind !== "remote-move") return;
+		const ends = new Set([caseKey(op.from), caseKey(op.to)]);
+		const early = p.ops.slice(0, i).find((o) => o.kind !== "skip" && o.kind !== "local-move" && o.kind !== "remote-move" && ends.has(caseKey(o.path)));
+		assert.equal(early, undefined, `op before a move on its path\n${show()}`);
+	});
+
+	// Paths a move touches carry another file's history; (a) and (c) are checked on the others.
+	const moved = new Set<string>();
+	for (const [path, r] of c.remote) if (r.movedFrom) moved.add(caseKey(path)).add(caseKey(r.movedFrom));
 	for (const op of p.ops) {
 		if (op.kind === "skip" || op.kind === "remote-move" || op.kind === "local-move") continue;
+		if (moved.has(caseKey(op.path))) continue;
 		const b = oneAt(c.base, op.path);
 		const l = localAt(op.path);
 		const r = oneAt(c.remote, op.path);
@@ -164,15 +189,18 @@ test("5,000 random three-way states keep every invariant", () => {
 	const rnd = prng(0x5eed_2026);
 	let conflicts = 0;
 	let deletes = 0;
+	let moves = 0;
 	for (let i = 0; i < 5000; i++) {
 		const { p, c } = build(genCase(rnd));
 		check(p, c, `case ${i}`);
 		conflicts += p.ops.filter((o) => o.kind === "conflict").length;
 		deletes += p.deleteCount;
+		moves += p.ops.filter((o) => o.kind === "local-move").length;
 	}
 	// The generator must actually reach the interesting rows.
 	assert.ok(conflicts > 100, `only ${conflicts} conflicts generated`);
 	assert.ok(deletes > 100, `only ${deletes} deletes generated`);
+	assert.ok(moves > 100, `only ${moves} moves generated`);
 });
 
 test("the planner is deterministic", () => {

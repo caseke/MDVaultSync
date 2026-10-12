@@ -1,7 +1,7 @@
 // Persisted sync state (design §2 `SyncState`, §6.2). The state file is untrusted: another plugin can edit it
 // (T-T6). Every field is checked here, and a malformed file is treated as "no state", which forces a union
 // merge that deletes nothing (R-FIRST-1, T-D1). Pure: no Obsidian import.
-import { containmentProblem, toVaultPath } from "./paths.ts";
+import { caseKey, containmentProblem, toVaultPath } from "./paths.ts";
 import type {
 	FileRecord,
 	PendingConflict,
@@ -210,7 +210,10 @@ function uploadSession(v: unknown, key: VaultPath, configDir: string): UploadSes
 function pendingConflict(v: unknown, key: VaultPath, configDir: string): PendingConflict {
 	const o = obj(v);
 	if (path(o["path"], configDir) !== key) fail();
-	return { path: key, copyPath: path(o["copyPath"], configDir), localHash: hash(o["localHash"]), remoteId: id(o["remoteId"]) };
+	const copyPath = path(o["copyPath"], configDir);
+	// The copy must be a different file: writing it must never touch the original (R-CONF-1).
+	if (caseKey(copyPath) === caseKey(key)) fail();
+	return { path: key, copyPath, localHash: hash(o["localHash"]), remoteId: id(o["remoteId"]) };
 }
 
 function pendingLocal(v: unknown, configDir: string): PendingLocalOp {
@@ -342,7 +345,8 @@ export function loadState(raw: unknown, configDir: string, newDeviceId: string):
  */
 export function applyAppRoot(state: SyncState, appRootId: string): SyncState {
 	if (state.appRootId === appRootId) return state;
-	if (state.appRootId === null) return { ...state, appRootId };
+	// No recorded approot but records exist: the state can't say which App Folder they belong to, so merge (T-T6).
+	if (state.appRootId === null) return { ...state, appRootId, unionPending: state.unionPending || Object.keys(state.files).length > 0 };
 	return {
 		...state,
 		appRootId,

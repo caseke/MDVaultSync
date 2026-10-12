@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Milestone 4: the sync engine's building blocks. Sync isn't wired up yet, so nothing changes in the app.
+Milestone 5: the sync planner, which decides what each sync will do. Sync isn't wired up yet, so nothing changes in the app.
+
+### Added
+
+- The sync plan: for every file it compares the last synced version with this device and OneDrive, then decides to upload, download, move, delete, keep both as a conflict copy, or skip with a reason.
+- Edits always win over deletes, and the first sync on a device (or after the OneDrive folder is recreated) only adds files, never deletes.
+- Renames and moves on either side are applied as moves, including whole folders, so OneDrive's version history is kept.
+- Files skipped for any reason (name rules, size, exclusions, clashing names) never cause a delete on the other side, and an OneDrive folder is deleted only when it is truly empty.
+- The deletes count toward the "confirm large deletes" check, and deletes you declined aren't proposed again until the file changes or you press "Sync now".
+- The saved sync state is checked when it is loaded; a damaged or edited file makes the next sync a safe merge that deletes nothing.
+- A per-sync report of every file touched, conflicts, skips and errors.
+
+Milestone 4: the sync engine's building blocks.
 
 ### Added
 

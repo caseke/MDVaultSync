@@ -37,11 +37,13 @@ test("drops deleted items, orphans and cycles", () => {
 	);
 	assert.deepEqual(paths(t), {});
 	assert.deepEqual(t.skipped, []);
+	assert.deepEqual([...t.unresolvedIds].sort(), ["c1", "c2", "k", "o"], "live but unplaceable items are not deletes");
 });
 
-test("no approot id means no tree", () => {
+test("no approot id means no tree, and every live item is unresolved", () => {
 	const t = buildRemoteTree(index(it("f", ROOT, "a.md")), null, CFG, PREFIX);
 	assert.equal(t.byId.size, 0);
+	assert.ok(t.unresolvedIds.has("f"));
 	assert.equal(t.childCount.get(ROOT), 1);
 });
 

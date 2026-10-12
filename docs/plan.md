@@ -790,7 +790,7 @@ $ npm audit --audit-level=high
 ---
 
 ## M5: Sync planner and state (pure)
-**Status:** not started
+**Status:** done (2026-10-12). Implementation in the "M5: sync planner…" commit, security-review fixes and close-out in the next one. No manual checks.
 
 **Goal.** `plan(state, local, remoteIndex, settings) → Plan` implements design §5.4 exactly, proven with fakes.
 
@@ -831,10 +831,65 @@ npm run lint && npm run typecheck && npm test && npm run build
 node --test --experimental-test-coverage "test/**/*.test.ts" 2>&1 | grep -E "planner|state|remote-tree"
 ```
 
-**Verification output**
+**Verification output** (2026-10-12, after the security-review fixes; Node 22.22, container)
 ```
-(paste here)
+$ npm run lint
+✖ 4 problems (0 errors, 4 warnings)
+  (unchanged since M4: 2 in src/ui/settings-tab.ts, 2 `.obsidian` fixture constants in test/paths.test.ts and
+   test/exclude.test.ts. The M5 fixtures use a renamed configDir, "obs-config", so they add none.)
+$ npm run typecheck
+> tsc --noEmit                        (exit 0)
+$ npm test
+# tests 634
+# suites 8
+# pass 634
+# fail 0
+$ npm run build
+> tsc --noEmit && node esbuild.config.mjs production   (exit 0)
+$ node --test --experimental-test-coverage "test/**/*.test.ts" 2>&1 | grep -E "planner|state|remote-tree"
+#   planner.ts                    |  98.59 |    97.45 |   94.23 | 222-225 467-470
+#   remote-tree.ts                | 100.00 |    96.23 |  100.00 |
+#   state.ts                      |  98.90 |    94.59 |   97.62 | 245-246 325-326
+#   (report.ts 100.00 | 100.00 | 100.00; planner line coverage 98.59 % ≥ 95 %)
+$ npm audit --audit-level=high
+3 moderate severity vulnerabilities   (exit 0; none high; lockfile unchanged)
 ```
+
+**What was built** (`src/core/`, no `obsidian` or `src/remote` import, no dependency):
+- `planner.ts`: `plan(state, local, remoteIndex, settings)` and `exceedsDeleteGuard(plan, pct)`. Planner-local input types `ScannedEntry` (raw path, size, mtime, `localHash`, `storedHash`) and `PlanSettings`. Filters, blocked keys, folder-rename collapse, file renames by id / event / unique hash, the §5.4 table, folders, declined deletes, deterministic order (skips, moves, then the rest).
+- `remote-tree.ts`: `buildRemoteTree(index, appRootId, configDir, pathPrefixLen)`: paths from parentId chains, every chain through `remoteToVaultPath`, sibling unicode/case collisions skipped with descendants, `childCount` including skipped children, `unresolvedIds` for live items it can't place.
+- `state.ts`: `emptyState`, `parseSyncState` (every field guarded; keys equal records; containment on every path; a replace session without If-Match rejected; a bad `lastReport` dropped), `loadState` (malformed → fresh union state, valid deviceId kept), `applyAppRoot` (D-18).
+- `report.ts`: `buildReport` and `opPath` (T-R1; codes filtered with `LOG_CODE_RE`).
+
+**Tests added:** `test/planner.test.ts` (65: one per §5.4 row, every rename case, folder collapse both ways, folders, union with and without bases, approot change, R-DEL-3 with a too-large child, guard boundary, declined deletes, null hash, every SkipReason, the carry-ins and the review regressions), `test/planner.property.test.ts` (5,000 seeded cases with remote moves; invariants (a)–(e); determinism), `test/state.test.ts`, `test/remote-tree.test.ts`, `test/report.test.ts`, `test/fake-remote.test.ts`. Fakes: `test/fakes/fake-remote.ts` (OneDrive rules), `fake-vault.ts`, `plan-fixtures.ts`. Two mutations (union upload removed, move order reverted) were confirmed to fail the property test.
+
+**Deviations and clarifications** (recorded in design.md §5.4 "M5 implementation"):
+- Case-only remote renames keep the *local* spelling in the record and emit nothing (the design said the record takes the remote spelling; on ext4 that path doesn't exist locally). Local case-only renames still go out as `remote-move`. No loop.
+- `deleteCount` counts file deletes only (R-GUARD-1 is a share of tracked files). Folder deletes are still only planned when empty.
+- Both sides renamed to the same target → `adopt` (record update). No new PlanOp kind; `ports.ts` is unchanged.
+- New folders are emitted even when not empty, so M6 can create folders explicitly.
+- A tracked file renamed to a name or size we skip blocks its record (no remote delete); moving into a hidden or excluded folder (Obsidian's `.trash`) is still a delete.
+- `applyAppRoot` also clears `pendingConflicts` and `declinedDeletes`.
+
+**Security review** (`security-reviewer` agent; base 38e03fd plus the uncommitted M5 files):
+- Fixed, high: a move was sorted by its destination, so a write at its source could run first. A remote "archive" rename (`daily.md` → `daily-old.md` plus a new `daily.md`) would have downloaded the new file over an unsynced local edit before the move. All moves now come before all other ops; a test covers the scenario, and the property test now generates remote moves and new items at vacated paths and checks the order.
+- Fixed, medium: a pending conflict's `copyPath` was reused unchecked; a stale or forged one could point the copy write at another note or at the original. It is now reused only for the same pair and only where nothing else lives; the parser rejects a copy path equal to its original.
+- Fixed, medium: a live remote item whose parent chain doesn't reach the approot was treated as deleted (`local-trash`). It is now `unresolved` and its base is blocked.
+- Fixed, low: a state with records but no `appRootId` saw an empty remote. It now plans in union mode, and `applyAppRoot` from null with records sets `unionPending`.
+- Fixed, low: the property test didn't cover moves (see the high finding).
+- Found by the extended property test while fixing the above: once a tracked case-collision keeper moved away, a new remote file at that key was downloaded onto the skipped loser. Keys that hold a skipped local file now get no transfers.
+- Carried to M6 (below): hashing name-skipped files in the scan, `__proto__`-safe state maps, eTag chaining after a move. Info for M7: list folder deletes in the guard modal; render report paths with `createEl` only.
+- Re-review of the fix diff: (pending)
+
+**Notes for M6 and later** (carry-ins from the build and the review):
+- **Order:** keep moves before every other op on their paths within a side, and create a missing parent folder on demand for a move or upload (a planned folder `upload-new` then adopts).
+- **eTag chaining:** an `upload-replace` (or any If-Match op) on an id that a `remote-move` in the same run just moved must use the eTag the move returned; the planned `ifMatch` is the base eTag.
+- **Folder moves:** a folder `remote-move` or `local-move` rewrites the paths of every record (`files`, `folders`) under it.
+- **Folder ops:** `local-trash` on a folder means `removeEmptyFolder`; `upload-new` / `download` on a folder path means create.
+- **Scan:** hash every file skipped for a *name* reason (invalid, reserved, path too long, collision), so a tracked file renamed to such a name without a vault event still matches its record (review, low). Pass `storedHash` from `RemoteContent.storedHashOf`. Confirm the Obsidian vault reports NFC paths, or map them: the planner's VaultPaths are NFC.
+- **State maps:** when M6 writes `state.files[path]` or `state.remoteIndex[id]`, a note named `__proto__` (a valid name) must stay data: write with `Object.defineProperty` or build the objects with `Object.fromEntries`, and add a round-trip test (review, low).
+- **Pending conflicts:** a resumed conflict's copy file is also seen by the scan as a new local file; don't upload it twice.
+- **M7:** list folder deletes in the confirm modal even though they don't count toward the threshold; render report paths only with `createEl`/`setText` (state is untrusted).
 
 ---
 
@@ -1052,18 +1107,18 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 |---|---|---|
 | R-ENV-1…4 | M1, M2 | ☐ (M2 part done 2026-10-12: personal accounts only via /consumers, iPad and Ubuntu sign-in verified, minAppVersion 1.11.4) |
 | R-AUTH-1…8 | M2 | ☑ (M2, 2026-10-12; R-AUTH-3 withdrawn. R-AUTH-7 token clear verified on Ubuntu; clearing real sync state is verified with the M6 StateStore) |
-| R-SCOPE-1…4 | M4, M5, M7 | ☐ (M4 part done 2026-10-12: configDir, hidden and user-glob exclusion (R-SCOPE-2); `remoteToVaultPath` returns the skip reason for hidden or excluded remote paths (R-SCOPE-4 rules)) |
+| R-SCOPE-1…4 | M4, M5, M7 | ☐ (M4 part done 2026-10-12: configDir, hidden and user-glob exclusion (R-SCOPE-2); `remoteToVaultPath` returns the skip reason for hidden or excluded remote paths (R-SCOPE-4 rules). M5 part done 2026-10-12: size cap skips `too-large` (R-SCOPE-3), excluded or hidden remote items are skipped and reported, never downloaded (R-SCOPE-4)) |
 | R-TRIG-1…4 | M6 (lock), M7 | ☐ |
-| R-CD-1 | M3, M5 | ☐ (M3 part done 2026-10-12: delta with paging to deltaLink; probe chose `items-id` on both devices) |
+| R-CD-1 | M3, M5 | ☑ (M3 2026-10-12: delta with paging to deltaLink, `items-id`; M5 2026-10-12: remote paths rebuilt from parentId chains, orphans and cycles never read as deletes) |
 | R-CD-2 | M5, M7 | ☐ |
-| R-CD-3, R-CD-4 | M4, M5 | ☐ (M4 part done 2026-10-12: QuickXorHash, matching OneDrive's probe hashes and rclone's vectors) |
+| R-CD-3, R-CD-4 | M4, M5 | ☑ (M4 2026-10-12: QuickXorHash; M5 2026-10-12: FileRecord validated, change detection by hash → cTag → size/eTag, unchanged content never planned for transfer) |
 | R-ORDER | M6 | ☐ |
 | R-CC-1, R-CC-2 | M3, M6 | ☐ (M3 part done 2026-10-12: If-Match on replace, move, delete and replace sessions; conflictBehavior=fail on new files and folders; 412 → GraphError) |
-| R-CONF-1…4 | M4, M5, M6, M7 | ☐ (M4 part done 2026-10-12: conflict-copy naming for R-CONF-1) |
-| R-DEL-1…3 | M5, M6 | ☐ |
-| R-MOVE-1 | M5, M6 | ☐ |
-| R-FIRST-1, R-FIRST-2 | M5, M7 | ☐ |
-| R-GUARD-1 | M5, M7 | ☐ |
+| R-CONF-1…4 | M4, M5, M6, M7 | ☐ (M4 part done 2026-10-12: conflict-copy naming for R-CONF-1; M5 part done 2026-10-12: conflicts only when both sides differ (R-CONF-3, property-tested), no-history pairs counted in `differsNoHistory`, report conflicts list) |
+| R-DEL-1…3 | M5, M6 | ☐ (M5 part done 2026-10-12: deletes planned both ways with If-Match, edits beat deletes (R-DEL-2), folder deletes only with zero children incl. skipped (R-DEL-3)) |
+| R-MOVE-1 | M5, M6 | ☐ (M5 part done 2026-10-12: renames detected by id, event or unique hash; folder renames collapse to one move) |
+| R-FIRST-1, R-FIRST-2 | M5, M7 | ☐ (M5 part done 2026-10-12: union mode never deletes (property-tested); malformed state, approot change and a missing approot id all force it) |
+| R-GUARD-1 | M5, M7 | ☐ (M5 part done 2026-10-12: `deleteCount`, `exceedsDeleteGuard` boundary, declined deletes suppressed until either side changes or "Sync now") |
 | R-PATH-1…4 | M4, M6 | ☐ (M4 part done 2026-10-12: NFC and collision detection, naming rules, 400-character limit and containment rules, unit tested; the pre-write re-check is M6) |
 | R-IO-1, R-IO-2 | M6 | ☐ |
 | R-NET-1 | M2, M3 | ☑ (M2 and M3, 2026-10-12: auth and Graph go only through the requestUrl transport; lint and the CI script enforce it) |
