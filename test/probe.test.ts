@@ -217,7 +217,7 @@ test("an unlisted download host is reported by hostname and not contacted", asyn
 	assert.ok(!fake.requests.some((q) => q.url.startsWith("https://cdn.unlisted.example")));
 });
 
-test("the observed upload host (my.microsoftpersonalcontent.com) completes the round trip without the token (0.3.2 Ubuntu result)", async () => {
+test("the upload host observed on 0.3.2 (my.microsoftpersonalcontent.com) completes the round trip without the token", async () => {
 	const { fake, deps } = setup({ rejectFileSize: true, uploadHost: "https://my.microsoftpersonalcontent.com" });
 	const r = await runProbe(deps);
 	assert.equal(r.largeFile.ok, true);
