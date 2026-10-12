@@ -1040,7 +1040,7 @@ Manual rename results: Ubuntu and iPad both `threw` / fallback works / cleaned u
 ---
 
 ## M7: Obsidian integration and UI
-**Status:** not started
+**Status:** awaiting-owner (2026-10-12). Session work done and verified: lint with no warnings, typecheck, 801 tests and the build pass, and two security-review rounds (plus a focused third pass) are fixed. Manual checks 1–11 below need the owner on both devices with 0.5.0. M8 may start on its unit-test work (sentinel test, notice table, quota mapping), but its device matrix needs M7's checks first.
 
 **Goal.** A usable plugin: triggers, events, settings, status and notices (design §3, §10).
 
@@ -1072,10 +1072,93 @@ Manual rename results: Ubuntu and iPad both `threw` / fallback works / cleaned u
 npm run lint && npm run typecheck && npm test && npm run build
 ```
 
-**Verification output**
+**Manual checks: owner steps and results**
+
+**Owner steps (0.5.0).** Use a *test vault* on both devices, not the real one, and the same Client ID on both.
+1. Push tag `0.5.0` from this branch (or after merging) so `release.yml` drafts the release; publish it. Install 0.5.0 with BRAT on Ubuntu and on the iPad (BRAT → **Check for updates to all beta plugins**). Sign in on both devices if needed.
+2. Run checks 1–8 below, then the extra checks 9–11. Record pass/fail per device under **Results**; for check 8, copy the log (Settings → MDVaultSync → Diagnostics → **Copy log**) and paste the `sync.run` lines.
+
+| # | Steps | Pass when |
+|---|---|---|
+| 1 | Fresh test vault with a few notes. Wait about 5 seconds after Obsidian opens (or run **MDVaultSync: Sync now**). In the preview, select **Cancel**. Then run **MDVaultSync: Preview sync** and select **Run**. | The first sync shows **Preview sync** with the planned uploads. Cancel changes nothing (OneDrive's app folder stays empty). Run uploads them. |
+| 2 | Set **Sync interval** to 1 minute on both devices. Edit a note on Ubuntu. Wait up to 2 minutes; on the iPad wait for its timer or tap the ribbon button. | Ubuntu uploads it without any action; the iPad shows the edit. |
+| 3 | On Ubuntu, rename a note and move another into a folder. Sync both devices. In OneDrive on the web, open the moved file's version history. | The iPad shows the same rename and move (not a new file plus a delete). OneDrive shows the earlier versions. |
+| 4 | Delete a note on Ubuntu. Sync both devices. | The iPad puts it where its Obsidian "Deleted files" setting says (system trash or `.trash`). OneDrive web shows it in the recycle bin. |
+| 5 | Put both devices offline (airplane mode on the iPad, network off on Ubuntu). Edit the same note differently on each. Reconnect, sync Ubuntu, then the iPad, then Ubuntu again. | One conflict copy named `<note> (conflict iPad <date time>).md` (the iPad's version); a notice on the iPad lists it and stays until dismissed; both versions are on both devices. |
+| 6 | With 10 or more notes synced, delete 30 % of them on Ubuntu. Sync. Choose **Skip deletes this time**. Then run **Sync now** and choose **Delete N files**. | The confirm window lists the deletes. Skipping leaves them in OneDrive (and the next interval run doesn't ask again); Sync now asks again and then deletes them. |
+| 7 | Watch the status bar on Ubuntu and hover or long-press the ribbon icon on the iPad during and after a sync. | Ubuntu: "MDVaultSync: Syncing…", then "MDVaultSync: Synced HH:MM". iPad tooltip: "Sync now. Synced HH:MM". Clicking the status bar opens **Last sync**. |
+| 8 | Add a 20 MB file, start a sync, and while it runs run **Sync now** five times. Copy the log. | The log shows `sync.run` entries one after another (never two starting before one ends), and at most one extra run after the first. |
+| 9 | (M6 carry-in) Sync a file over 10 MB, edit it (for example, replace it with another file over 10 MB under the same name), sync again. | It uploads; no conflict copy appears. |
+| 10 | (M6 carry-in) On the iPad, with the note list visible, add a note on Ubuntu and sync both. | The note appears in the iPad's file list without restarting Obsidian. |
+| 11 | Open Settings → MDVaultSync on both devices; record the Obsidian version (Settings → General). Change each Sync field, close and reopen settings. Type "exclude" in the settings search box. | Every R-UI-1 field is there (account, sign in/out, client ID, device name, interval, size, exclude patterns, preview toggle, delete threshold, last sync report, probe, copy log), values persist, invalid values show a red explanation and aren't saved, and the search finds **Exclude patterns** on Obsidian 1.13 or later. |
+
+**Results** (owner; per device: pass/fail and notes)
+- Ubuntu (Obsidian version: ____): 1 ☐ 2 ☐ 3 ☐ 4 ☐ 5 ☐ 6 ☐ 7 ☐ 8 ☐ 9 ☐ 10 n/a 11 ☐
+- iPad (Obsidian version: ____): 1 ☐ 2 ☐ 3 ☐ 4 ☐ 5 ☐ 6 ☐ 7 ☐ 8 ☐ 9 ☐ 10 ☐ 11 ☐
+
+**Verification output** (2026-10-12, after both review rounds; Node 22.22, container)
 ```
-(paste here, plus manual check results 1–8)
+$ npm run lint
+> eslint .                              (exit 0, no problems: 0 errors, 0 warnings)
+$ npm run typecheck
+> tsc --noEmit                          (exit 0)
+$ npm test
+# tests 801
+# suites 8
+# pass 801
+# fail 0
+$ npm run build
+> tsc --noEmit && node esbuild.config.mjs production   (exit 0)
+$ npm audit --audit-level=high
+3 moderate severity vulnerabilities   (exit 0; none high; unchanged since M6)
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+$ node --test --experimental-test-coverage "test/**/*.test.ts"   (line % | branch % | funcs %, before the second-round fixes)
+#   engine.ts 97.7 | 89.0 | 100   upload-resume.ts 97.8 | 95.0 | 100   vault-events.ts 100 | 96.0 | 100
+#   settings.ts 100 | 97.6 | 100   display.ts 100 | 75.0 | 100   notices.ts 100 | 91.7 | 100
+#   plan-groups.ts 100 | 97.4 | 100   status.ts 100 | 100 | 100   triggers.ts 100 | 100 | 100
 ```
+The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidian` at runtime and can't run under `node --test`; every decision they make is in a pure module above, and the manual checks cover the rendering.
+
+**What was built**
+- `src/main.ts`: the `Engine` wired with `ObsidianVault` (through `instanceof`-checked adapters for Vault and FileManager), `TransformedRemoteContent(graph, IdentityTransform, PUT_HONORS_IF_MATCH, classifyError)`, `PluginStateStore`, `ensureSignedIn`, `resetBudget` and the hooks. `onLayoutReady`: vault events, the startup sync 5 s later, the interval timer (restarted when the setting changes). Commands `sync-now` and `sync-preview` (no hotkeys), the ribbon button with the state in its tooltip, the status bar on desktop only (click opens **Last sync**). Notices come from the engine's new `onReport` hook. Sign-out passes the engine to `clearSession` and closes open prompts; unload closes prompts, refuses new ones and resets the engine. `persist()` serializes every data.json write.
+- `src/ui/`: `settings-tab.ts` (every R-UI-1 field; one row list for `getSettingDefinitions()` on 1.13+ and the `display()` fallback through `SettingGroup` on 1.11.4–1.12; invalid input isn't saved and says why; after a sync only the report re-renders), `plan-preview-modal.ts`, `confirm-deletes-modal.ts`, `prompt-modal.ts` (answers no on close, closes itself after 10 minutes), `report-view.ts`, `report-modal.ts`; pure: `display.ts`, `status.ts`, `notices.ts`, `plan-groups.ts`, `triggers.ts`.
+- `src/platform/vault-events.ts`: events to hints; hidden, configDir and excluded paths ignored; renames into or out of them become a delete or a new file.
+- `src/settings.ts`: the sync settings with range checks (T-T6), the device-name rules, the interval floor for the listing fallback, `toEngineSettings`, the fail-closed pattern check and `snapshotForSave`.
+- `src/core/engine.ts`: the rerun keeps the strongest trigger and the Sync now re-offer; no rerun after `reset()` and a fresh run for a request after it; a cancelled preview drops timer reruns; `onReport`; `pathPrefixLen`; the scan consumes `expectedWrites`; bounded hints with the full re-hash past the cap. `upload-resume.ts` stops between sessions after a reset. Conflict ops carry `noHistory` (planner, ports).
+- `styles.css`; `eslint.config.mjs` turns `obsidianmd/hardcoded-config-path` off for tests only (fixtures use `.obsidian` on purpose; inline disables of that rule are banned). Version 0.5.0.
+
+**Tests added:** `test/settings.test.ts` (rewritten, 16), `display.test.ts` (5), `status.test.ts` (5), `notices.test.ts` (8), `plan-groups.test.ts` (6), `triggers.test.ts` (3), `vault-events.test.ts` (6), 14 engine tests (rerun trigger, Sync now re-offer, echo filter for writes, moves and trashes, edit after download, `pathPrefixLen`, `onReport`, reset with a queued rerun, cancel, preview plus Sync now, the hint cap and re-hash, rename hints over the cap, the hint boundary, a request after reset), a planner assertion pair for `noHistory`, and an upload-resume test for `live`. Each review-fix test was checked to fail with its fix reverted.
+
+**Acceptance**
+- Lint passes with no warnings from `obsidianmd` rules (no warnings at all).
+- Manual checks 1–8, plus 9–11: pending (owner).
+
+**Carry-ins closed**
+- Exclude-setting help: the help text says `!` lines and backslash escapes aren't supported and never match, and that matching is case-sensitive, with the iPad case. (The literal `PRIVATE/` example was reworded: the sentence-case lint rule flags it.)
+- Showing names: every name in the preview, report and notices passes `displayPath`.
+- M6 notes: the engine is wired as listed; vault events call `noteLocalChange`, and the scan consumes `expectedWrites`; `confirmPlan` and `confirmDeletes` resolve false on Cancel or close; statuses map to text, and the M6 codes to notice text; the two M6 manual checks are checks 9 and 10.
+
+**Deviations and clarifications** (recorded in design.md §2, §3, §10, threat-model T-D8)
+- Vault events are kept in memory and saved with the run, not per event (owner-approved with the plan).
+- `SyncHooks.onReport` (optional) and `PlanOp` conflict `noHistory` (optional) added to `ports.ts`.
+- `expectedWrites` isn't needed for the echo decision: echoes are resolved by comparing with the sync record. The map is kept and cleared by each scan.
+- The device-name default is "iPad" on iOS and "Ubuntu" on Linux, as design §11 says (other platforms get their OS name).
+
+**Security review** (`security-reviewer` agent; base 7b874b1 plus the M7 work):
+- No high findings in any round.
+- Fixed, medium: a queued rerun survived `engine.reset()`, so a sync could run after the plugin was unloaded (a BRAT update) or start alongside a reloaded copy. `reset()` clears it and the loop stops on an epoch change.
+- Fixed, medium: unreadable `excludePatterns` in data.json silently became "no exclusions" (T-I6). Sync now pauses with a persistent notice until the patterns are saved again.
+- Fixed, low: unbounded `pendingLocal` (now deduplicated and capped); Cancel re-prompting from a queued timer run; racing data.json writes that could put a removed fallback token back (one serialized queue); upload resume ignoring a reset; invisible characters missing from the display escaping; status lines without the last sync time. Fixed, info: prompts close on sign-out and never open after unload; the design §3 and T-D8 echo wording; `refresh()` only while the tab is on screen; Sync now's re-offer survives a preview outranking it.
+- **Re-review of the fixes** (base c1a35ae): all of the above confirmed fixed. Two new mediums came from the fixes, both **fixed**: the dedupe could drop a hint the running sync would then clear, losing an edit made right after a download (the dedupe now only looks at hints newer than the run's snapshot); and the pause didn't survive another save plus a restart (every save writes the unreadable value back until the patterns are saved). Fixed lows: the pause cleared on the first keystroke (now only **Save and resume sync**); early hints bypassed the cap; dropping hints over the cap could lose an edit or a rename hint (now a full re-hash until an ok run, and rename hints are kept up to 50,000); more default-ignorable characters escaped (`\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}`). Fixed info: a request after `reset()` joined the dead loop.
+- Declined, low (owner's call): checking `live()` between fragments inside `RemoteContent.resume`. After a reset, a session already resuming sends its remaining fragments (up to about ten 10 MiB fragments at the 100 MiB cap). They carry no token (T-I4), nothing is saved afterwards, and the executor also stops only between ops; the check would need a `RemoteContent` port change.
+- **Third pass** on the second-round fixes (commit 0329a38): pending.
+
+**Notes for M8 and later** (carry-ins)
+- **Notice table:** `src/ui/notices.ts` `ERROR_TEXT` holds the M6 codes and the run-level codes; M8 adds every `GraphError` code and the test that each maps to a message. `quota` text exists; 507 → `quota` mapping is already in `classify.ts`.
+- **Sentinel test:** the new UI shows paths only in the report, preview and notices, never in logs; `Copy log` copies only the ring buffer. The sentinel test should cover a full fake sync through `Engine` with the M7 hooks attached.
+- **Optional (owner):** the per-fragment `live()` check above; `recordDownload` trusts a same-size stat taken right after the write, so an edit landing in that window depends on its vault event (now always kept); re-hashing after the write would remove the dependency at the cost of one extra read per download.
+- **Unverified offline:** whether Obsidian 1.13+ re-renders declarative settings on `update()` and detaches `containerEl` when settings close. Manual check 11 covers the rendering; if the account rows don't update after sign-in with settings open, `refresh()` needs another trigger.
 
 ---
 
@@ -1194,24 +1277,24 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-ENV-1…4 | M1, M2 | ☐ (M2 part done 2026-10-12: personal accounts only via /consumers, iPad and Ubuntu sign-in verified, minAppVersion 1.11.4) |
 | R-AUTH-9 | M6 (follow-up) | ☑ (2026-10-12: a token in SecretStorage is cleared at load, with a notice, only when the plugin folder holds neither data.json nor sync-state.json (checked on disk); unit tested. Owner checks 2026-10-12: reinstall passed on Ubuntu and the iPad (0.4.1); a corrupt data.json keeps the sign-in and the file (Ubuntu)) |
 | R-AUTH-1…8 | M2 | ☑ (M2, 2026-10-12; R-AUTH-3 withdrawn. R-AUTH-7 token clear verified on Ubuntu; clearing real sync state is verified with the M6 StateStore; M6 2026-10-12: sign-out clears sync-state.json through PluginStateStore and a running sync can't write it back; tested) |
-| R-SCOPE-1…4 | M4, M5, M7 | ☐ (M4 part done 2026-10-12: configDir, hidden and user-glob exclusion (R-SCOPE-2); `remoteToVaultPath` returns the skip reason for hidden or excluded remote paths (R-SCOPE-4 rules). M5 part done 2026-10-12: size cap skips `too-large` (R-SCOPE-3), excluded or hidden remote items are skipped and reported, never downloaded (R-SCOPE-4)) |
-| R-TRIG-1…4 | M6 (lock), M7 | ☐ (M6 part done 2026-10-12: single-flight lock with at most one rerun, R-TRIG-4, tested) |
+| R-SCOPE-1…4 | M4, M5, M7 | ☐ (M7 part: maximum file size and exclude patterns settings, validated; unreadable patterns pause sync instead of excluding nothing. M4 part done 2026-10-12: configDir, hidden and user-glob exclusion (R-SCOPE-2); `remoteToVaultPath` returns the skip reason for hidden or excluded remote paths (R-SCOPE-4 rules). M5 part done 2026-10-12: size cap skips `too-large` (R-SCOPE-3), excluded or hidden remote items are skipped and reported, never downloaded (R-SCOPE-4)) |
+| R-TRIG-1…4 | M6 (lock), M7 | ☐ (M6 part done 2026-10-12: single-flight lock with at most one rerun, R-TRIG-4, tested. M7 part done 2026-10-12 (session; owner checks pending, see M7): startup sync 5 s after layout-ready, interval timer 0/1–1440, Sync now command and ribbon button through one path; the rerun keeps the strongest trigger, none after reset; tested) |
 | R-CD-1 | M3, M5 | ☑ (M3 part done 2026-10-12: delta with paging to deltaLink, `items-id`; M5 part done 2026-10-12: remote paths rebuilt from parentId chains; children of a deleted folder are deletes, orphans and cycles never are. Merging delta pages into `remoteIndex` is M6; M6 part done 2026-10-12: delta pages merged into `remoteIndex`, last occurrence wins, a deleted folder drops its descendants, saved with the deltaLink; resync re-enumerates in union mode) |
-| R-CD-2 | M5, M7 | ☐ |
+| R-CD-2 | M5, M7 | ☐ (M7 part done 2026-10-12 (session; owner checks pending, see M7): create, modify, delete and rename events registered in onLayoutReady and recorded as hints; startup full reconcile scan; tested) |
 | R-CD-3, R-CD-4 | M4, M5 | ☑ (M4 2026-10-12: QuickXorHash; M5 2026-10-12: FileRecord validated, change detection by hash → cTag → size/eTag, unchanged content never planned for transfer) |
 | R-ORDER | M6 | ☑ (M6, 2026-10-12: pull side before push side, moves first; tested) |
 | R-CC-1, R-CC-2 | M3, M6 | ☑ (M3 part done 2026-10-12: If-Match on replace, move, delete and replace sessions; conflictBehavior=fail on new files and folders; 412 → GraphError; M6 part done 2026-10-12: PUT with If-Match per the probe, sessions above 10 MiB with the commit-time eTag re-check, 412 re-read: metadata-only retry, else conflict; tested) |
-| R-CONF-1…4 | M4, M5, M6, M7 | ☐ (M4 part done 2026-10-12: conflict-copy naming for R-CONF-1; M5 part done 2026-10-12: conflicts only when both sides differ (R-CONF-3, property-tested), no-history pairs counted in `differsNoHistory`, report conflicts list; M6 part done 2026-10-12: conflict procedure with pendingConflicts and crash reuse, copy uploaded, pre-write re-check (R-CONF-4); the notice is M7) |
+| R-CONF-1…4 | M4, M5, M6, M7 | ☐ (M4 part done 2026-10-12: conflict-copy naming for R-CONF-1; M5 part done 2026-10-12: conflicts only when both sides differ (R-CONF-3, property-tested), no-history pairs counted in `differsNoHistory`, report conflicts list; M6 part done 2026-10-12: conflict procedure with pendingConflicts and crash reuse, copy uploaded, pre-write re-check (R-CONF-4); the notice is M7. M7 part done 2026-10-12 (session; owner checks pending, see M7): one persistent notice lists every conflict copy (R-CONF-2); the preview groups no-history conflicts (R-CONF-3); tested) |
 | R-DEL-1…3 | M5, M6 | ☑ (M5 part done 2026-10-12: deletes planned both ways with If-Match, edits beat deletes (R-DEL-2), folder deletes only with zero children incl. skipped (R-DEL-3); M6 part done 2026-10-12: remote delete with If-Match (404 forget, 412 download back), local delete via FileManager.trashFile, folders only when empty; tested with fakes) |
 | R-MOVE-1 | M5, M6 | ☑ (M5 part done 2026-10-12: renames detected by id, event or unique hash; folder renames collapse to one move; M6 part done 2026-10-12: PATCH by id with If-Match and eTag chaining, Vault.rename locally, folder moves re-path records; tested with fakes) |
-| R-FIRST-1, R-FIRST-2 | M5, M7 | ☐ (M5 part done 2026-10-12: union mode never deletes (property-tested); malformed state, approot change and a missing approot id all force it) |
-| R-GUARD-1 | M5, M7 | ☐ (M5 part done 2026-10-12: `deleteCount`, `exceedsDeleteGuard` boundary, declined deletes suppressed until either side changes or "Sync now") |
+| R-FIRST-1, R-FIRST-2 | M5, M7 | ☐ (M5 part done 2026-10-12: union mode never deletes (property-tested); malformed state, approot change and a missing approot id all force it. M7 part done 2026-10-12 (session; owner checks pending, see M7): preview modal before the first sync, on the Preview sync command and with the setting on; Cancel and timeout run nothing; tested) |
+| R-GUARD-1 | M5, M7 | ☐ (M5 part done 2026-10-12: `deleteCount`, `exceedsDeleteGuard` boundary, declined deletes suppressed until either side changes or "Sync now". M7 part done 2026-10-12 (session; owner checks pending, see M7): confirm modal with "Delete N files" / "Skip deletes this time", skip on close or timeout, threshold setting 1–100 %) |
 | R-PATH-1…4 | M4, M6 | ☑ (M4 part done 2026-10-12: NFC and collision detection, naming rules, 400-character limit and containment rules, unit tested; the pre-write re-check is M6; M6 part done 2026-10-12: containment and name rules re-checked before every local write, move, trash and mkdir, in the executor and in ObsidianVault) |
 | R-IO-1, R-IO-2 | M6 | ☑ (M6 2026-10-12: temp-then-rename and hash-before-write implemented and tested; adapter.rename refuses to overwrite on Ubuntu and the iPad, and the remove-then-rename fallback passed on both) |
 | R-NET-1 | M2, M3 | ☑ (M2 and M3, 2026-10-12: auth and Graph go only through the requestUrl transport; lint and the CI script enforce it) |
 | R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested) |
 | R-RES-2, R-RES-3 | M3, M6 | ☑ (M3 part done 2026-10-12: 10 MiB upload-session primitives, status and 404 handling; a 12 MiB two-fragment round trip passed on both devices; persistence and resume are M6; M6 part done 2026-10-12: sessions persisted before the first fragment and resumed from nextExpectedRanges, 404 restarts; saves at most 1 s after an op and before every destructive op; crash injection after every mutating call converges) |
-| R-UI-1…3 | M2, M7 | ☐ (M2 part done 2026-10-12: Account section) |
+| R-UI-1…3 | M2, M7 | ☐ (M2 part done 2026-10-12: Account section. M7 part done 2026-10-12 (session; owner checks pending, see M7): every R-UI-1 field; status bar on desktop and ribbon tooltip with the state and last sync time; notices for errors and conflicts only; tested in the pure modules) |
 | R-SEC-1, R-SEC-2 | M2 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 M2 part (SecretStorage observed on both devices, including a locked GNOME keyring) — README residual-risk text is owed in M9 |
 | R-SEC-3 | M3, M8 | ☐ (M3 part done 2026-10-12: typed redacting logger, unit tested; the sentinel test is M8) |
 | R-SEC-4 | M3, M4 | ☐ (M3 part done 2026-10-12: Graph JSON, ids, names, sizes, tags, hashes, links and transfer URLs validated; paths are M4) — M4 part done 2026-10-12: remote-derived paths validated by `remoteToVaultPath` |

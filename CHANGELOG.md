@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Milestone 7 (0.5.0): sync is switched on. The plugin now syncs by itself and can be used day to day; the owner's device checks are still to come.
+
+### Added
+
+- Sync runs about 5 seconds after Obsidian opens, then every 5 minutes (change it, or turn it off, in settings). **Sync now** (command or the ribbon button) syncs at once, and **Preview sync** shows what would change and does nothing unless you select Run.
+- The first sync on a device always shows the preview first, and you can turn on a preview before every sync. Files that differ on both sides with no sync history are listed in their own group, so the conflict copies they get are no surprise.
+- If a sync would delete more than 25 % of your synced files (adjustable), it asks first. "Skip deletes this time" syncs everything else and doesn't ask about those deletes again until a file changes or you select Sync now.
+- After a sync with conflicts, one notice lists every conflict copy and stays until you dismiss it. Errors raise a short notice; a sync with nothing wrong stays quiet, and a problem that repeats on its own doesn't notice again every few minutes.
+- The status bar (desktop) and the ribbon button's tooltip (iPad) show the sync state and the time of the last successful sync. Clicking the status bar opens the last sync report.
+- New settings: device name (used in conflict copy names), sync interval, maximum file size, exclude patterns, preview before every sync, and the delete threshold. Values that aren't valid aren't saved, and the setting says why. On Obsidian 1.13 and later they appear in the settings search.
+- The settings page shows the last sync report (what changed, conflicts, skipped files with the reason, problems), a **Sync now** button, the OneDrive capability probe and **Copy log**.
+- File names in the preview, report and notices show hidden or direction-changing characters as codes, so a name can't disguise itself.
+
+### Changed
+
+- If the saved exclude patterns can't be read (for example after a hand edit), sync pauses with a notice until you enter them again and select **Save and resume sync**, instead of syncing with no exclusions.
+- Signing out also closes any open sync preview or delete prompt, and disabling or updating the plugin during a sync stops it from starting anything new.
+
 Milestone 6 (0.4.0, 0.4.1): the part that carries out a sync plan, safely and so it can pick up where it stopped. Sync still isn't switched on in the app (that is milestone 7), so the only visible changes are a new diagnostics command and sign-out clearing the saved sync state.
 
 ### Added
