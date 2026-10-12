@@ -241,3 +241,16 @@ test("containmentProblem is the pre-write re-check on a joined path", () => {
 	assert.equal(containmentProblem("Cfg/x", "cfg"), "hidden");
 	assert.equal(containmentProblem("a/.git/x", CFG), "hidden");
 });
+
+// ---------- M4 security review regressions ----------
+test("names with U+00A0 or U+202F are skipped (normalizePath may map them to a space)", () => {
+	assert.equal(validateSegment("a\u00a0b.md", false), "invalid-name");
+	assert.equal(validateSegment("\u202fx.md", false), "invalid-name");
+	assert.deepEqual(remote(["a\u00a0b.md"]), { ok: false, reason: "invalid-name" });
+	assert.deepEqual(remote(["\u00a0x.md"]), { ok: false, reason: "invalid-name" });
+});
+test("configDir match also catches Unicode-fold variants (U+017F, U+212A)", () => {
+	assert.deepEqual(remote(["\u017fettings", "plugins", "x", "main.js"], "settings"), { ok: false, reason: "hidden" });
+	assert.deepEqual(remote(["\u212Aonfig", "a.md"], "konfig"), { ok: false, reason: "hidden" });
+	assert.equal(containmentProblem("\u017fettings/x", "settings"), "hidden");
+});

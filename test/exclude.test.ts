@@ -108,3 +108,12 @@ test("a pathological pattern finishes quickly (no exponential backtracking)", ()
 	assert.ok(!ex(path, ["*a*a*a*a*a*a*a*a*a*a*b", "**/**/**/**/**/**/b", "a*/**/*a*a*a*a*a*c"]));
 	assert.ok(performance.now() - start < 1000);
 });
+
+test("an NFD path is normalized before matching (review fix)", () => {
+	assert.ok(ex("cafe\u0301.md", ["caf\u00e9.md"]));
+	assert.ok(ex("cafe\u0301/x.md", ["caf\u00e9/"]));
+});
+
+test("configDir fold variants are hidden (review fix)", () => {
+	assert.equal(exclusionReason("\u017fettings/a.json", "settings", []), "hidden");
+});

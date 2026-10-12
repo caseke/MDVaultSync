@@ -11,7 +11,7 @@
 // - A trailing `/` matches folders only. A pattern that matches a folder excludes everything under it.
 // - Blank lines and lines starting with `#` are ignored. `!` negation is not supported and such lines are
 //   ignored; `[` has no special meaning. Matching is case-sensitive, on NFC-normalized text.
-import { caseKey } from "./paths.ts";
+import { isConfigDirName } from "./paths.ts";
 
 interface Rule {
 	segs: string[];
@@ -84,9 +84,9 @@ function matchSegments(pat: readonly string[], segs: readonly string[]): boolean
  * because the iPad's file system is) and any segment starting with `.`; `excluded` covers user patterns.
  */
 export function exclusionReason(path: string, configDir: string, patterns: readonly string[], isFolder = false): "hidden" | "excluded" | null {
-	const segs = path.split("/");
+	const segs = path.normalize("NFC").split("/");
 	if (segs.some((s) => s.startsWith("."))) return "hidden";
-	if (caseKey(segs[0] ?? "") === caseKey(configDir.normalize("NFC"))) return "hidden";
+	if (isConfigDirName(segs[0] ?? "", configDir)) return "hidden";
 	for (const line of patterns) {
 		const rule = parseRule(line);
 		if (!rule) continue;

@@ -21,12 +21,27 @@ const INVALID_CHAR = /["*:<>?/\\|\u0000-\u001f]/;
 // eslint-disable-next-line no-control-regex -- matching control characters is the point
 const CONTROL_OR_SEPARATOR = /[/\\\u0000-\u001f]/;
 // [G-NM-2]: reserved device names, with or without an extension, compared case-insensitively.
+// Obsidian's normalizePath is believed to map U+00A0 and U+202F to a space (undocumented in obsidian.d.ts; M4
+// security review). Two remote names that differ only there would then share one local file, and " x" would
+// gain a leading space, so such names are skipped on both sides rather than mapped.
+const NBSP = /[\u00a0\u202f]/;
 const RESERVED_DEVICE = /^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?$/i;
 const DRIVE_PREFIX = /^[A-Za-z]:/;
 
 /** Case-folded key for collision checks; OneDrive names are case-insensitive [G-NM-5] (design §7.5). */
 export function caseKey(path: string): string {
 	return path.toLocaleLowerCase("en-US");
+}
+
+/**
+ * True when `name` equals configDir under either fold. `toLocaleLowerCase` alone misses case-insensitive
+ * file systems that fold like Unicode case folding (U+017F "ſ" → "s"), so the upper-then-lower fold is
+ * checked too (T-E1, M4 security review). Used only for configDir; collision keys stay `caseKey`.
+ */
+export function isConfigDirName(name: string, configDir: string): boolean {
+	const a = nfc(name);
+	const b = nfc(configDir);
+	return caseKey(a) === caseKey(b) || a.toUpperCase().toLowerCase() === b.toUpperCase().toLowerCase();
 }
 
 function nfc(s: string): string {
@@ -47,7 +62,7 @@ export function toVaultPath(raw: string): VaultPath | null {
 /** OneDrive naming rules for one segment [G-NM-1]–[G-NM-3], [G-NM-6]. Never rewrites the name (D-17). */
 export function validateSegment(name: string, isFolder: boolean): NameProblem | null {
 	if (name.length === 0 || name.length > NAME_MAX) return "invalid-name";
-	if (INVALID_CHAR.test(name)) return "invalid-name";
+	if (INVALID_CHAR.test(name) || NBSP.test(name)) return "invalid-name";
 	if (name.startsWith(" ") || name.endsWith(" ")) return "invalid-name";
 	if (name.startsWith("~")) return "invalid-name"; // covers OneDrive personal's `~$` too
 	if (isFolder && name.endsWith(".")) return "invalid-name";
@@ -82,7 +97,7 @@ function containmentOfSegments(segs: readonly string[], configDir: string): Cont
 	if (segs.some((s) => s.startsWith("."))) return "hidden";
 	// configDir may be renamed and need not start with a dot. Compared case-insensitively: on a case-insensitive
 	// file system (the iPad), a remote "Config/" would land inside a configDir named "config" (T-E1).
-	if (caseKey(segs[0] ?? "") === caseKey(nfc(configDir))) return "hidden";
+	if (isConfigDirName(segs[0] ?? "", configDir)) return "hidden";
 	return null;
 }
 

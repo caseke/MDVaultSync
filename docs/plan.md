@@ -711,7 +711,7 @@ Responsive during the run: not reported
 ---
 
 ## M4: Pure helpers (hash, paths, exclude, transform)
-**Status:** not started
+**Status:** done (2026-10-12). Implementation 00d9dc0, plus the security-review fixes and close-out in the next commit. No manual checks.
 
 **Goal.** Deterministic building blocks with exhaustive tests.
 
@@ -733,10 +733,59 @@ Responsive during the run: not reported
 npm run lint && npm run typecheck && npm test && npm run build
 ```
 
-**Verification output**
+**Verification output** (2026-10-12, after the security-review fixes; Node 24, container)
 ```
-(paste here)
+$ npm run lint
+✖ 4 problems (0 errors, 4 warnings)
+  (2 pre-existing in src/ui/settings-tab.ts; 2 are the `.obsidian` test fixture constants in test/paths.test.ts and test/exclude.test.ts,
+   obsidianmd/hardcoded-config-path, deliberate: the acceptance criteria require testing the default configDir)
+$ npm run typecheck
+> tsc --noEmit                        (exit 0)
+$ npm test
+# quickXorHash 100 MiB: 145 ms        (logged, not asserted; criterion is < 3 s)
+# tests 501
+# suites 8
+# pass 501
+# fail 0
+$ npm run build
+> tsc --noEmit && node esbuild.config.mjs production   (exit 0)
+$ npm audit --audit-level=high
+3 moderate severity vulnerabilities   (exit 0; none high; lockfile unchanged since M3)
 ```
+
+**What was built** (`src/core/`, no `obsidian` import, no runtime dependency):
+- `quickxor.ts`: `QuickXorHasher` (incremental, chunk-independent) and `quickXorHash(data)`. It folds byte n into slot n mod 160 and applies the 160 shifts once in `digest()`; the length XOR uses 32-bit halves (no `BigInt`).
+- `paths.ts`: `NAME_MAX`, `PATH_MAX`, `caseKey`, `isConfigDirName`, `toVaultPath`, `validateSegment`, `validatePath`, `containmentProblem` (the M6 pre-write re-check), `remoteToVaultPath` and `findCollisions`.
+- `exclude.ts`: `exclusionReason` and `isExcluded`, implementing the gitignore subset written down in design §7.
+- `transform.ts`: `IdentityTransform`; re-exports the `ContentTransform` types from `ports.ts`, which stays the single definition.
+- `conflict-name.ts`: `conflictCopyPath(path, deviceName, date, exists, pathPrefixLen)` and `sanitizeDeviceName`.
+
+**Tests added:** `test/quickxor.test.ts` (the four OneDrive probe vectors, all 70 rclone vectors [G-HASH-3], chunk sizes 1–512 and across the 160-byte period, views, 100 MiB timing), `test/paths.test.ts`, `test/exclude.test.ts`, `test/transform.test.ts`, `test/conflict-name.test.ts`. Each acceptance criterion maps to named tests: every design §7 rule (each invalid character, U+0000–U+001F, each reserved name with and without an extension, trailing space or period, leading `~`, `_vti_`, 255/256–400-character names, 400 vs 401 with the `Apps/MDVaultSync` prefix, NFC/NFD, case collisions), every listed containment case, and configDir, hidden and user-glob exclusion.
+
+**Deviations from this milestone's text** (recorded in design.md §7 and §8):
+- `conflictCopyPath` takes a required `pathPrefixLen` (the 400-character budget needs it) and shortens the *copy's* stem when the name or path would be too long. The user's file is never renamed (D-17).
+- `findCollisions(rawPaths, tracked)` also compares folders, including implied ones. A losing folder takes its descendants with it, since OneDrive would merge the two folders.
+- `remoteToVaultPath(segments, configDir, pathPrefixLen, isFolder)` runs containment and then `validatePath`, so one call covers the M3 carry-in. `containmentProblem` was added for M6's pre-write check.
+- `exclusionReason` returns `"hidden" | "excluded" | null` (the skip reason); `isExcluded` is the boolean wrapper. Both take an optional `isFolder`.
+- configDir is compared case-insensitively under two folds (`isConfigDirName`).
+- Names containing U+00A0 or U+202F are `invalid-name` (security review, below).
+
+**Security review** (`security-reviewer` agent; base 0fa7f31):
+- No high findings. It found no input that makes `remoteToVaultPath` return a path outside the vault, inside configDir, or with a hidden segment.
+- Fixed, medium: Obsidian's `normalizePath` is believed to map U+00A0 and U+202F to a space; this is undocumented in `obsidian.d.ts`. Two remote names differing only there would then share one local file. `validateSegment` now rejects such names on both sides, so they are skipped and reported instead.
+- Fixed, low:
+  - The configDir check also uses an upper-then-lower fold, so `ſettings` (U+017F) can't land in a configDir named `settings`.
+  - `exclusionReason` NFC-normalizes the path.
+  - `sanitizeDeviceName` replaces `_vti_`, so the conflict copy stays uploadable.
+  - `pathPrefixLen` is required.
+- Re-review of the fixes: pending at the time of this commit; the result is recorded in the next commit.
+
+**Notes for M5 and later** (carry-ins from the review and the build):
+- **M5 must** call `remoteToVaultPath` for every remote item's rebuilt name chain and skip on `ok: false`. It must call `exclusionReason` with the real configDir, and `findCollisions` on the raw local paths with `tracked` = the NFC paths in `files`.
+- **M5 must** group remote-derived VaultPaths by path and by `caseKey`, and skip every member of a group as `unicode-collision` or `case-collision`. Remote names that differ only in normalization map to one VaultPath, and `findCollisions` sees only local paths (review, low). Test it.
+- **M5:** match remote and local by `caseKey` (design §5.4). `caseKey` deliberately stays `toLocaleLowerCase("en-US")`; the wider fold is used only for configDir.
+- **M6:** the `exists` callback for `conflictCopyPath` must be case-insensitive. A `RangeError` from it means "conflict not resolved, keep both sides untouched", never an overwrite (review, info). Call `containmentProblem` right before every local write.
+- **M7:** the exclude-setting help must say that `!` lines and backslash escapes are unsupported and that matching is case-sensitive, so on the iPad a remote `PRIVATE/` isn't excluded by `Private/` (review, info). Consider escaping or rejecting C1 controls, DEL and bidi overrides when names are shown in reports (review, info: they can't escape the vault, but they can spoof names).
 
 ---
 
@@ -982,19 +1031,19 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 |---|---|---|
 | R-ENV-1…4 | M1, M2 | ☐ (M2 part done 2026-10-12: personal accounts only via /consumers, iPad and Ubuntu sign-in verified, minAppVersion 1.11.4) |
 | R-AUTH-1…8 | M2 | ☑ (M2, 2026-10-12; R-AUTH-3 withdrawn. R-AUTH-7 token clear verified on Ubuntu; clearing real sync state is verified with the M6 StateStore) |
-| R-SCOPE-1…4 | M4, M5, M7 | ☐ |
+| R-SCOPE-1…4 | M4, M5, M7 | ☐ (M4 part done 2026-10-12: configDir, hidden and user-glob exclusion (R-SCOPE-2); `remoteToVaultPath` returns the skip reason for hidden or excluded remote paths (R-SCOPE-4 rules)) |
 | R-TRIG-1…4 | M6 (lock), M7 | ☐ |
 | R-CD-1 | M3, M5 | ☐ (M3 part done 2026-10-12: delta with paging to deltaLink; probe chose `items-id` on both devices) |
 | R-CD-2 | M5, M7 | ☐ |
-| R-CD-3, R-CD-4 | M4, M5 | ☐ |
+| R-CD-3, R-CD-4 | M4, M5 | ☐ (M4 part done 2026-10-12: QuickXorHash, matching OneDrive's probe hashes and rclone's vectors) |
 | R-ORDER | M6 | ☐ |
 | R-CC-1, R-CC-2 | M3, M6 | ☐ (M3 part done 2026-10-12: If-Match on replace, move, delete and replace sessions; conflictBehavior=fail on new files and folders; 412 → GraphError) |
-| R-CONF-1…4 | M4, M5, M6, M7 | ☐ |
+| R-CONF-1…4 | M4, M5, M6, M7 | ☐ (M4 part done 2026-10-12: conflict-copy naming for R-CONF-1) |
 | R-DEL-1…3 | M5, M6 | ☐ |
 | R-MOVE-1 | M5, M6 | ☐ |
 | R-FIRST-1, R-FIRST-2 | M5, M7 | ☐ |
 | R-GUARD-1 | M5, M7 | ☐ |
-| R-PATH-1…4 | M4, M6 | ☐ |
+| R-PATH-1…4 | M4, M6 | ☐ (M4 part done 2026-10-12: NFC and collision detection, naming rules, 400-character limit and containment rules, unit tested; the pre-write re-check is M6) |
 | R-IO-1, R-IO-2 | M6 | ☐ |
 | R-NET-1 | M2, M3 | ☑ (M2 and M3, 2026-10-12: auth and Graph go only through the requestUrl transport; lint and the CI script enforce it) |
 | R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested) |
@@ -1002,7 +1051,7 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-UI-1…3 | M2, M7 | ☐ (M2 part done 2026-10-12: Account section) |
 | R-SEC-1, R-SEC-2 | M2 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 M2 part (SecretStorage observed on both devices, including a locked GNOME keyring) — README residual-risk text is owed in M9 |
 | R-SEC-3 | M3, M8 | ☐ (M3 part done 2026-10-12: typed redacting logger, unit tested; the sentinel test is M8) |
-| R-SEC-4 | M3, M4 | ☐ (M3 part done 2026-10-12: Graph JSON, ids, names, sizes, tags, hashes, links and transfer URLs validated; paths are M4) |
+| R-SEC-4 | M3, M4 | ☐ (M3 part done 2026-10-12: Graph JSON, ids, names, sizes, tags, hashes, links and transfer URLs validated; paths are M4) — M4 part done 2026-10-12: remote-derived paths validated by `remoteToVaultPath` |
 | R-SEC-5 | M1, M9 | ☐ (M1 part done: lockfile, Dependabot, CodeQL, audit, SHA pins, and secret scanning and push protection verified 2026-10-12; release attestation is M9) |
 | R-SEC-6 | M1 | ☑ (M1, 2026-10-12) |
 | R-ENG-1…5 | M1 onward | ☐ |

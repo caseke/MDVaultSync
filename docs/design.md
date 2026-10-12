@@ -548,12 +548,13 @@ Vault path to remote name:
    - If two local paths become the same after NFC, skip both as `unicode-collision`. Example: Linux files `é` (precomposed) and `é` (decomposed).
 2. **Exclude.**
    - Any segment beginning with `.`. This covers `.obsidian`, `.trash`, `.git` and our own temp files.
-   - The first segment equal to `app.vault.configDir`, which may be renamed and not start with a dot. It is compared with `caseKey` (M4): the iPad's file system is case-insensitive, so `Config/` would land inside a configDir named `config`.
+   - The first segment equal to `app.vault.configDir`, which may be renamed and not start with a dot. It is compared case-insensitively (M4, `isConfigDirName`): the iPad's file system is case-insensitive, so `Config/` would land inside a configDir named `config`. Both `caseKey` and an upper-then-lower fold are checked, so a name like `ſettings` (U+017F) can't slip past a configDir named `settings` (M4 security review).
    - User exclude patterns: gitignore-style globs (`*`, `**`, `?`), matched case-sensitively against the vault path. This is our own matcher of about 60 lines with tests, not a dependency.
    - **M4 syntax (`core/exclude.ts`).** A pattern with no `/` except a trailing one matches a name at any depth; otherwise it is anchored to the vault root (a leading `/` is dropped). A trailing `/` matches folders only. A pattern that matches a folder excludes everything under it. `**` matches zero or more folders, but a trailing `/**` needs at least one segment, so it never matches the folder itself. Blank lines and `#` comments are ignored. `!` negation is not supported (those lines are ignored), and `[` is literal. Patterns are NFC-normalized. The matcher builds no RegExp from user input (a greedy wildcard matcher plus dynamic programming over segments), so a pattern can't cause catastrophic backtracking.
 3. **Validate each segment** [G-NM-1] … [G-NM-3]:
    - no `" * : < > ? \ |`, and no control characters U+0000–U+001F;
    - no leading or trailing space;
+   - no U+00A0 or U+202F (M4 security review). Obsidian's `normalizePath` is believed to map them to a space; that isn't documented in `obsidian.d.ts`, so names containing them are skipped on both sides instead of being mapped. Otherwise two remote names could share one local file;
    - folders must not end in `.`;
    - no leading `~` (OneDrive personal also rejects `~$`);
    - no reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM0-9`, `LPT0-9` with or without an extension, compared case-insensitively; `.lock`; `desktop.ini`; any name containing `_vti_`);

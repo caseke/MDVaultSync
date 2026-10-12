@@ -23,7 +23,9 @@ function truncate(s: string, max: number): string {
 
 /** Device name made safe for a file name with the §7 character rules: at most 40 units, never empty. */
 export function sanitizeDeviceName(name: string): string {
-	const cleaned = truncate(name.normalize("NFC").replace(DEVICE_BAD, "-").trim(), DEVICE_MAX).trim();
+	// `_vti_` anywhere makes a name reserved [G-NM-2]; the copy must stay uploadable (M4 security review).
+	const replaced = name.normalize("NFC").replace(DEVICE_BAD, "-").replace(/[\u00a0\u202f]/g, " ").replace(/_vti_/gi, "-vti-");
+	const cleaned = truncate(replaced.trim(), DEVICE_MAX).trim();
 	return cleaned === "" ? "device" : cleaned;
 }
 
@@ -39,9 +41,10 @@ function stamp(d: Date): string {
 /**
  * The conflict copy path for `path`. `exists` must compare case-insensitively (OneDrive names are
  * [G-NM-5]). If the name would break the 255-unit name or 400-character path limit [G-NM-4], the copy's stem
- * is shortened. Throws RangeError if the folder alone leaves no room, or after 1000 taken names.
+ * is shortened. `pathPrefixLen` is `AppRoot.pathPrefix` without its leading `/` (required, so the 400 budget
+ * can't be computed against the wrong prefix). Throws RangeError if the folder alone leaves no room, or after 1000 taken names.
  */
-export function conflictCopyPath(path: VaultPath, deviceName: string, date: Date, exists: (p: VaultPath) => boolean, pathPrefixLen = 0): VaultPath {
+export function conflictCopyPath(path: VaultPath, deviceName: string, date: Date, exists: (p: VaultPath) => boolean, pathPrefixLen: number): VaultPath {
 	const slash = path.lastIndexOf("/");
 	const dir = slash === -1 ? "" : path.slice(0, slash + 1);
 	const name = path.slice(slash + 1);

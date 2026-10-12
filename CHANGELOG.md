@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Milestone 4: the sync engine's building blocks. Sync isn't wired up yet, so nothing changes in the app.
+
+### Added
+
+- File fingerprints (QuickXorHash), the same ones OneDrive computes, so a later version can skip files that haven't changed. Checked against OneDrive's own values and an independent implementation.
+- File name rules: names OneDrive rejects, paths over 400 characters, names that clash by letter case or Unicode form, and remote paths that would land outside the vault, in Obsidian's settings folder, or in a hidden folder are all detected for skipping. Files are never renamed.
+- Exclude patterns in gitignore style (`*`, `**`, `?`, a trailing `/`) for keeping folders or file types out of sync.
+- Conflict copy names such as `Note (conflict iPad 2026-10-12 140203).md`.
+
 ## [0.3.6] - 2026-10-12
 
 Milestone 3 complete: the OneDrive connection is built and checked on both devices.
