@@ -412,6 +412,12 @@ test("download() failures carry a reason code, never data", async () => {
 	const m = b.fake.addFile("APPROOT", "m.bin", enc("12345"));
 	b.fake.intercept = (req) => (req.url.startsWith(DOWNLOAD_HOST) ? { status: 200, headers: {}, body: bytes("1234") } : null);
 	assert.equal(await reasonOf(b.g.download(m.id)), "download-length-mismatch");
+	const http = new FakeHttp();
+	const o = graphOver(http);
+	for (const bad of ["", 5]) {
+		http.enqueueJson(200, { id: "A", name: "a", eTag: "e", size: 1, file: {}, "@microsoft.graph.downloadUrl": bad });
+		assert.equal(await reasonOf(o.g.download("A")), "download-url-invalid");
+	}
 	const c = setupGraph({ downloadUrlPad: 9000 });
 	const l = c.fake.addFile("APPROOT", "l.bin", enc("x"));
 	assert.equal(await reasonOf(c.g.download(l.id)), "download-url-too-long");

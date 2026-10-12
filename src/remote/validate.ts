@@ -12,11 +12,20 @@ export interface TokenResponse {
 	expiresInSec: number;
 }
 
-export class InvalidResponse extends Error {
-	/** A fixed identifier for what failed (for example "download-url-missing"); never data from the response. */
-	readonly reason: string;
+/** Fixed identifiers only, so a reason can never carry a name, URL or token (T-I3). */
+export type InvalidReason =
+	| ""
+	| "not-a-file"
+	| "download-url-missing"
+	| "download-url-invalid"
+	| "download-url-too-long"
+	| "download-length-mismatch";
 
-	constructor(reason = "") {
+export class InvalidResponse extends Error {
+	/** What failed, as a fixed identifier; never data from the response. */
+	readonly reason: InvalidReason;
+
+	constructor(reason: InvalidReason = "") {
 		super("invalid-response");
 		this.name = "InvalidResponse";
 		this.reason = reason;
