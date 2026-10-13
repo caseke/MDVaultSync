@@ -1201,27 +1201,36 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 - Performance: a fake 5,000-file vault plans in under 2 s on desktop (logged).
 - Review every row of docs/threat-model.md and mark each one implemented, or record why not.
 
-**Manual end-to-end matrix** (owner; both devices; test vault):
-| # | Scenario | Expected |
-|---|---|---|
-| 1 | Fresh device joins an existing remote vault | Preview, union download, no deletes |
-| 2 | Airplane mode mid-sync, then reconnect | The next run resumes and the report is `partial` then `ok` |
-| 3 | Force-quit Obsidian on iPad during a 50 MiB upload | Upload resumes from `nextExpectedRanges` |
-| 4 | File at 101 MiB with a 100 MiB cap | Skipped, listed as `too-large` |
-| 5 | Ubuntu: `Note.md` and `note.md` in the same folder | One syncs, one is reported `case-collision` |
-| 6 | Ubuntu: a file named `a:b.md` | Reported `invalid-name` |
-| 7 | Delete `Apps/MDVaultSync` in OneDrive web | Next sync treats it as first sync and re-uploads; no local deletes |
-| 8 | Rename a file in OneDrive web | The local file is renamed; no conflict (metadata-only 412 path) |
-| 9 | Sign out, then sign in | State cleared; first-sync union; no deletes |
-| 10 | Revoke the app at account.microsoft.com | Next sync shows "Sign-in required" |
-| 11 | Stale device rejoins: sign out on Ubuntu, edit 3 notes on iPad and sync, edit 1 *other* note on Ubuntu, sign in on Ubuntu | Preview shows "Differs on both sides, no sync history (4)"; after Run there are 4 conflict copies and nothing is lost |
-| 12 | Type in a note continuously while a sync downloads a remote change to it | No keystrokes lost; conflict copy or deferred op (R-CONF-4) |
+**Manual end-to-end matrix** (owner; test vault, not the real one; same Client ID on both devices; 0.6.0)
+
+**Before you start.**
+1. Push tag `0.6.0` (from this branch or after merging) so `release.yml` drafts the release, and publish it. Update both devices with BRAT (**Check for updates to all beta plugins**). Settings → MDVaultSync → Account should show **OneDrive storage** with used, total and free space (T-D7).
+2. Run each row on the devices it names, and record pass or fail under **Results**. For rows 2, 3 and 10, copy the log (Settings → MDVaultSync → Diagnostics → **Copy log**) and paste the `sync.run` and `upload.resume` lines.
+
+| # | Scenario | Devices | Steps | Pass when |
+|---|---|---|---|---|
+| 1 | Fresh device joins an existing remote vault | iPad joins Ubuntu's vault | With a synced test vault on Ubuntu, create a new empty vault on the iPad, install 0.6.0 there with BRAT, enter the Client ID, sign in, and let the first sync start (or run **Sync now**). | **Preview sync** appears and lists only downloads (a union download): no deletes, no uploads. After **Run**, every note is on the iPad, and nothing in OneDrive is deleted. |
+| 2 | Airplane mode mid-sync, then reconnect | iPad (Ubuntu: turn the network off) | Add a file of about 30 MB and run **Sync now**. Turn on airplane mode while the status shows Syncing. Wait for the sync to end, turn airplane mode off, and run **Sync now**. | The first run's report (**Show sync status**) is `partial`, with a network or timeout error. The next run resumes it and ends `ok`. The file is in OneDrive once, with no conflict copy. |
+| 3 | Force-quit Obsidian on iPad during a 50 MiB upload | iPad | Add a 50 MB file and run **Sync now**. While it uploads (Syncing), swipe Obsidian away in the app switcher. Reopen Obsidian and let the startup sync run. | The upload resumes from `nextExpectedRanges`: the log after reopening has an `upload.resume` line (it continued, not restarted from zero). The file is in OneDrive once, with the right size. |
+| 4 | File at 101 MiB with a 100 MiB cap | Ubuntu (the file is easiest to make there) | Leave **Maximum file size** at 100 (the default, in megabytes). In the vault folder, run `head -c 105906176 /dev/urandom > big.bin` (101 MiB). Sync. | It isn't uploaded, and the last sync report lists it as skipped `too-large`. |
+| 5 | Ubuntu: `Note.md` and `note.md` in the same folder | Ubuntu | In a terminal, create `Note.md` and `note.md` with different text in the same vault folder. Sync. | One of them syncs. The report lists the other as `case-collision`. Nothing is overwritten. |
+| 6 | Ubuntu: a file named `a:b.md` | Ubuntu | In a terminal, create a file named `a:b.md` in the vault folder. Sync. | It isn't uploaded, and the report lists it as `invalid-name`. |
+| 7 | Delete `Apps/MDVaultSync` in OneDrive web | Ubuntu, then the iPad | In OneDrive on the web, delete the app folder (`Apps/MDVaultSync`). Run **Sync now** on Ubuntu, then on the iPad. | The next sync is treated as a first sync: the preview appears, and after Run every note is uploaded again. No local file is deleted or trashed on either device. |
+| 8 | Rename a file in OneDrive web | Ubuntu, then the iPad | In OneDrive on the web, rename a synced note (for example `x.md` → `y.md`). Sync both devices. | The local file is renamed to `y.md`, with its content. No conflict copy appears (the metadata-only 412 path), and no second file is downloaded. |
+| 9 | Sign out, then sign in | Both, one at a time | On one device, **Sign out**, then **Sign in** again with the same account, and let the sync run. Repeat on the other device. | Sign-out clears the sync state, so the next sync is a first-sync union: the preview appears. After Run, nothing is deleted on either side, and there are no conflict copies (the files are identical). |
+| 10 | Revoke the app at account.microsoft.com | Both | Remove the app at https://account.microsoft.com/privacy/app-access. Restart Obsidian on each device (this drops the in-memory access token; otherwise wait up to 90 minutes for it to expire), then run **Sync now**. Afterwards, sign in again. | The next sync shows "Sign-in required": a persistent notice, and the status says Sign-in required. Nothing is deleted. After you sign in again, sync works. |
+| 11 | Stale device rejoins: sign out on Ubuntu, edit 3 notes on iPad and sync, edit 1 *other* note on Ubuntu, sign in on Ubuntu | Both | Sign out on Ubuntu. On the iPad, edit notes A, B and C and sync. On Ubuntu (still signed out), edit note D. Sign in on Ubuntu, then sync the iPad. | The preview on Ubuntu shows **Differs on both sides, no sync history (4)**. After Run there are 4 conflict copies (A–D), on both devices once the iPad syncs, and nothing is lost. |
+| 12 | Type in a note continuously while a sync downloads a remote change to it | Ubuntu types; the iPad makes the remote change | Edit a note on the iPad and sync. On Ubuntu, open the same note and keep typing in it while you run **Sync now**. | No keystrokes are lost. Either the download is deferred (`changed-during-sync` in the report) and syncs on the next run, or a conflict copy holds one of the versions (R-CONF-4). |
+
+**Results** (owner)
+- **Ubuntu** (Obsidian version: …): …
+- **iPad** (Obsidian version: …): …
 
 **Carry-ins** (requirements handed over by earlier milestones; each names its source)
 - **Redirects** (M3 final review, O-API-2): `requestUrl` follows redirects from an allowlisted transfer host without re-checking the target. No token can go along, because the transfer transport is bare, and download bytes are length- and hash-checked. Cover this in the hardening review.
 
 **Acceptance criteria**
-- Every matrix row passes on both devices, with results recorded below.
+- Every matrix row passes on the devices its **Devices** column names, with results recorded under **Results**. (Some rows need one device by their scenario, such as the iPad force-quit or the Ubuntu-only file names.)
 - The sentinel test passes.
 - The notice-mapping test passes.
 - Every threat-model row is marked implemented, or has a recorded reason.
@@ -1231,31 +1240,6 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 ```bash
 npm run lint && npm run typecheck && npm test && npm run build && npm audit --audit-level=high
 ```
-
-**Manual end-to-end matrix: owner steps and results**
-
-**Owner steps (0.6.0).** Use a *test vault* on both devices, not the real one, and the same Client ID on both.
-1. Merge this branch (or push the tag from it) and push tag `0.6.0` so `release.yml` drafts the release; publish it. Update both devices with BRAT (**Check for updates to all beta plugins**). Confirm Settings → MDVaultSync shows **OneDrive storage** with used, total and free space (T-D7).
-2. Run rows 1–12 on both devices where the row applies, and record pass or fail per device under **Results**. For rows 2, 3 and 10, copy the log (Settings → MDVaultSync → Diagnostics → **Copy log**) and paste the `sync.run` lines.
-
-| # | Steps | Pass when |
-|---|---|---|
-| 1 | With a synced test vault on Ubuntu, create a new empty vault on the iPad, install 0.6.0 there with BRAT, enter the Client ID, sign in, and let the first sync start (or run **Sync now**). | **Preview sync** shows only downloads (no deletes, no uploads of files you didn't add); after **Run** every note is on the iPad and nothing on OneDrive is deleted. |
-| 2 | On the iPad, add a file of about 30 MB, run **Sync now**, and turn on airplane mode while the status shows Syncing. Wait for the sync to end, turn airplane mode off, run **Sync now**. | The first run's report (**Show sync status**) says `partial` with a network or timeout error; the second says `ok`; the file is in OneDrive once, with no conflict copy. |
-| 3 | On the iPad, add a 50 MB file and run **Sync now**. While it uploads (Syncing), swipe Obsidian away in the app switcher. Reopen Obsidian and let the startup sync run. | The file is in OneDrive once, with the right size; the log after reopening shows an `upload.resume` line (the upload continued from where it stopped, not from zero). |
-| 4 | Set **Maximum file size** to 100 MB. Add a 101 MB file (Ubuntu: `head -c 105906176 /dev/urandom > big.bin` in the vault folder). Sync. | The file isn't uploaded; the last sync report lists it as skipped `too-large`. |
-| 5 | Ubuntu: in a vault folder, create `Note.md` and `note.md` with different text (in a terminal). Sync. | One of them is uploaded; the report lists the other as `case-collision`; nothing is overwritten. |
-| 6 | Ubuntu: create a file named `a:b.md` in the vault folder (terminal). Sync. | Not uploaded; the report lists it as `invalid-name`. |
-| 7 | In OneDrive on the web, delete the folder `Apps/MDVaultSync` (or the app folder's name as shown). Run **Sync now** on Ubuntu. | The preview appears (first sync again); after Run every note is uploaded again; no local file is deleted or trashed. |
-| 8 | In OneDrive on the web, rename a synced note (for example `x.md` → `y.md`). Sync Ubuntu. | The local note is renamed to `y.md` with its content; no conflict copy; no download of a second file. |
-| 9 | On Ubuntu, **Sign out**, then **Sign in** again with the same account. Let the sync run. | The preview appears (first sync); after Run nothing is deleted on either side; no conflict copies (files are identical). |
-| 10 | Remove the app at https://account.microsoft.com/privacy/app-access. On Ubuntu, run **Sync now** (wait up to an hour if the access token is still cached, or restart Obsidian). Afterwards sign in again. | A persistent "sign-in required" notice; the status says Sign-in required; nothing is deleted. Signing in again restores sync. |
-| 11 | Sign out on Ubuntu. On the iPad edit notes A, B and C and sync. On Ubuntu (still signed out) edit note D. Sign in on Ubuntu. | The preview shows **Differs on both sides, no sync history (4)**; after Run there are 4 conflict copies (A–D) on both devices once the iPad syncs, and no edit is lost. |
-| 12 | Edit a note on the iPad and sync. On Ubuntu, open the same note and keep typing in it continuously while you run **Sync now**. | No typed characters are lost: either the run defers the download (`changed-during-sync` in the report) and syncs on the next run, or a conflict copy holds one of the versions (R-CONF-4). |
-
-**Results** (owner)
-- **Ubuntu** (Obsidian version: …): …
-- **iPad** (Obsidian version: …): …
 
 **Verification output** (2026-10-13, after both review passes; Node 22.22, container)
 ```
