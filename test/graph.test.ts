@@ -5,7 +5,7 @@ import { GraphError, ResyncRequired, UntrustedUrl } from "../src/remote/errors.t
 import { InvalidResponse } from "../src/remote/validate.ts";
 import { DOWNLOAD_HOST, GRAPH, UPLOAD_HOST, URL_SECRET } from "./fakes/fake-graph.ts";
 import { classifyError } from "../src/remote/classify.ts";
-import { timeoutFor } from "../src/remote/timeout.ts";
+import { NO_TIMEOUT, timeoutFor } from "../src/remote/timeout.ts";
 import { FakeHttp, bytes, jsonResponse } from "./fakes/fake-http.ts";
 import type { HttpTransport } from "../src/core/ports.ts";
 import { enc, graphOver, last, pattern, setupGraph, originOf } from "./graph-setup.ts";
@@ -369,6 +369,18 @@ test("quota: a 507 on an upload fragment classifies as quota", async () => {
 		(x: unknown) => x,
 	);
 	assert.deepEqual(classifyError(e), { kind: "quota", code: "quota" });
+});
+
+test("upload sessions: the final fragment (the commit) has no timeout; earlier fragments use the size-based one (review M8)", async () => {
+	const { g, fake } = setupGraph();
+	const s = await g.createUploadSession({ kind: "new", parentId: "APPROOT", name: "big.bin" }, null, 327_680 + 4);
+	assert.equal(await g.putFragment(s.uploadUrl, 0, 327_680 + 4, new ArrayBuffer(327_680)), null);
+	assert.ok(await g.putFragment(s.uploadUrl, 327_680, 327_680 + 4, enc("abcd").buffer));
+	const puts = fake.requests.filter((r) => originOf(r.url) === UPLOAD_HOST && r.method === "PUT");
+	assert.deepEqual(
+		puts.map((r) => r.timeoutMs),
+		[undefined, NO_TIMEOUT],
+	);
 });
 
 test("download: the transfer GET carries a size-scaled timeout; API calls carry none (design §6.1)", async () => {

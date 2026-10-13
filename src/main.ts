@@ -81,6 +81,8 @@ export default class MDVaultSyncPlugin extends Plugin {
 	engine!: Engine;
 	/** OneDrive storage for the settings tab (T-D7): one read per 5 minutes at most. */
 	quota!: QuotaCache;
+	/** Every request goes through it; its `stuck` count pauses unattended runs (ui/triggers.ts). */
+	private timeouts!: TimeoutTransport;
 	/** The latest sync report (design §5.6), for the settings tab, the report modal and repeat-notice checks. */
 	lastReport: SyncReport | null = null;
 	/** Device name used when the setting is empty: "iPad" or "Ubuntu" on the owner's devices (design §11). */
@@ -130,10 +132,10 @@ export default class MDVaultSyncPlugin extends Plugin {
 		// Before AuthClient reads the token: a sign-in left by an uninstalled copy is removed (R-AUTH-9).
 		await this.clearLeftoverSignIn(!(await isLeftoverInstall(this.app.vault.adapter, this.pluginDir)));
 		// requestUrl has no timeout: every request, the token endpoint's included, races a timer (design §6.1).
-		const transport = new TimeoutTransport(createRequestUrlTransport((p) => requestUrl(p)), (ms, fn) => {
+		const transport = (this.timeouts = new TimeoutTransport(createRequestUrlTransport((p) => requestUrl(p)), (ms, fn) => {
 			const id = window.setTimeout(fn, ms);
 			return () => window.clearTimeout(id);
-		});
+		}));
 		const clock: Clock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => window.setTimeout(r, ms)) };
 		this.auth = new AuthClient({
 			transport,
@@ -156,7 +158,16 @@ export default class MDVaultSyncPlugin extends Plugin {
 				...(deltaForm ? { deltaForm } : {}),
 			});
 		this.graph = graphFor();
-		this.quota = new QuotaCache(() => this.graph.quota(), () => Date.now());
+		// Quota reads have their own retry policy with one attempt: a settings render never waits on backoff or spends
+		// a sync run's budget or pause (M8 review).
+		const quotaGraph = new GraphClient({
+			transport: graphTransport,
+			transferTransport: transport,
+			retry: new RetryPolicy({ clock, logger: this.logger, maxAttempts: 1 }),
+			clock,
+			logger: this.logger,
+		});
+		this.quota = new QuotaCache(() => quotaGraph.quota(), () => Date.now());
 
 		// The sync engine (design §1): every byte passes the transform seam (R-ENG-4); v1 is the identity transform.
 		const transform = new IdentityTransform();
@@ -320,7 +331,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 
 	/** Every trigger comes here; the engine's single-flight lock keeps runs sequential (R-TRIG-4). */
 	async sync(trigger: Trigger): Promise<void> {
-		const d = triggerDecision(trigger, this.auth.status, isValidClientId(this.data.clientId), !this.patternsInvalid);
+		const d = triggerDecision(trigger, this.auth.status, isValidClientId(this.data.clientId), !this.patternsInvalid, this.timeouts.stuck);
 		if (d.action === "skip") return;
 		if (d.action === "notice") {
 			new Notice(d.text);

@@ -1,7 +1,7 @@
 // OneDrive storage in settings (T-D7, design §10) [G-QT-1]: the text and the cache behind it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { QUOTA_TTL_MS, QuotaCache, formatBytes, quotaText, type Quota } from "../src/ui/quota.ts";
+import { QUOTA_FAILURE_TTL_MS, QUOTA_TTL_MS, QuotaCache, formatBytes, quotaText, type Quota } from "../src/ui/quota.ts";
 import { deferred } from "./fakes/fake-http.ts";
 
 const GiB = 1024 ** 3;
@@ -70,12 +70,16 @@ test("QuotaCache: one request per 5 minutes; callers during a request share it",
 	assert.equal(calls(), 2, "fetched again after the TTL");
 });
 
-test("QuotaCache: a failure isn't cached; invalidate() forces a fresh read", async () => {
+test("QuotaCache: a failure is reused for a minute (offline settings don't call Graph per render); invalidate() forces a fresh read", async () => {
 	const now = { t: 0 };
 	let fail = true;
 	const { c, calls } = cache(() => (fail ? Promise.reject(new Error("x")) : Promise.resolve(Q)), now);
 	await assert.rejects(c.get());
 	fail = false;
+	now.t += QUOTA_FAILURE_TTL_MS - 1;
+	await assert.rejects(c.get());
+	assert.equal(calls(), 1, "the failure is reused");
+	now.t += 1;
 	assert.equal(await c.get(), Q);
 	assert.equal(calls(), 2);
 	c.invalidate();

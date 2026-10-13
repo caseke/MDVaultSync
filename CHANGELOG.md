@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+0.6.0: Milestone 8, hardening. The owner's end-to-end checks on both devices are still to come.
+
+### Added
+
+- Settings → Account shows **OneDrive storage**: used, total and free space. It warns when 10 % or less is free, and when the drive is full. The recycle bin counts toward it.
+- A full OneDrive now gives a clear notice: sync stops, and the notice says to free up space, including the recycle bin.
+- Every error a sync can meet now has a readable notice text.
+
+### Changed
+
+- A request that OneDrive doesn't answer now gives up after a while: 2 minutes, plus more for large files (a 10 MB piece of an upload gets about 5 minutes). Before, a stalled request could hold up syncing for as long as it hung (about 24 minutes once on the iPad). The sync ends as "partial" and the next one carries on. The last piece of a large upload is the exception: it always waits for OneDrive's answer, so a late answer can never overwrite a newer edit.
+- While two or more requests are still hanging after giving up, automatic syncs (startup and interval) wait. **Sync now** still runs.
+
+### Security
+
+- A new test runs whole syncs with marker text in file names, contents, sign-in tokens and server messages, and checks that none of it reaches the plugin's log or the developer console.
+
 0.5.1: the sync state on the iPad.
 
 Milestone 7 is complete: the owner's checks passed on the iPad and Ubuntu.

@@ -8,12 +8,18 @@ export type TriggerDecision = { action: "run" } | { action: "skip" } | { action:
 
 const UNATTENDED = new Set<Trigger>(["startup", "interval", "rerun"]);
 
+/**
+ * Timed-out requests still hanging (TimeoutTransport.stuck) at which unattended runs pause: each holds a body and
+ * a connection, and a new run would add more (M8 review, T-D6). A user action still runs.
+ */
+export const STUCK_LIMIT = 2;
+
 export const PATTERNS_TEXT =
 	"Sync is paused: the exclude patterns saved on this device couldn't be read. In the MDVaultSync settings, check Exclude patterns, then select Save and resume sync.";
 
 /** `patternsOk` false: data.json held unusable exclude patterns; nothing syncs until they're saved again (T-I6). */
-export function triggerDecision(trigger: Trigger, auth: AuthStatus, hasClientId: boolean, patternsOk: boolean): TriggerDecision {
-	if (auth === "signed-in" && patternsOk) return { action: "run" };
+export function triggerDecision(trigger: Trigger, auth: AuthStatus, hasClientId: boolean, patternsOk: boolean, stuckRequests = 0): TriggerDecision {
+	if (auth === "signed-in" && patternsOk) return UNATTENDED.has(trigger) && stuckRequests >= STUCK_LIMIT ? { action: "skip" } : { action: "run" };
 	if (UNATTENDED.has(trigger)) return { action: "skip" };
 	if (!patternsOk) return { action: "notice", text: PATTERNS_TEXT };
 	if (auth === "sign-in-required") return { action: "notice", text: AUTH_ERROR_MESSAGES["sign-in-required"] };

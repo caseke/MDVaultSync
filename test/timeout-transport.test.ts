@@ -6,7 +6,7 @@ import type { HttpRequest, HttpResponse, HttpTransport } from "../src/core/ports
 import { classifyError } from "../src/remote/classify.ts";
 import { NetworkError } from "../src/remote/errors.ts";
 import { RetryPolicy } from "../src/remote/retry.ts";
-import { API_TIMEOUT_MS, RequestTimeout, TimeoutTransport, timeoutFor, type SetTimer } from "../src/remote/timeout.ts";
+import { API_TIMEOUT_MS, NO_TIMEOUT, RequestTimeout, TimeoutTransport, timeoutFor, type SetTimer } from "../src/remote/timeout.ts";
 import { runOutcome } from "../src/core/failure.ts";
 import { FakeClock, deferred } from "./fakes/fake-http.ts";
 
@@ -154,4 +154,36 @@ test("RequestTimeout carries no URL", async () => {
 	assert.ok(e instanceof RequestTimeout);
 	assert.equal(e.message, "timeout");
 	assert.ok(!JSON.stringify({ m: e.message, n: e.name, s: e.stack ?? "" }).includes("SECRET"));
+});
+
+test("NO_TIMEOUT: no timer at all; the request waits as long as it takes (the session commit, review M8)", async () => {
+	const h = hanging();
+	const timers = new FakeTimers();
+	const p = new TimeoutTransport(h.transport, timers.set).send({ url: "https://x.example/", method: "PUT", body: new ArrayBuffer(10), timeoutMs: NO_TIMEOUT });
+	await tick();
+	assert.equal(timers.timers.length, 0);
+	h.answer(ok);
+	assert.equal(await p, ok);
+});
+
+test("stuck: counts timed-out requests until their late answer or failure arrives", async () => {
+	const a = hanging();
+	const b = hanging();
+	const timers = new FakeTimers();
+	let which = 0;
+	const t = new TimeoutTransport({ send: (req) => (which++ === 0 ? a.transport : b.transport).send(req) }, timers.set);
+	const pa = t.send({ url: "https://x.example/a", method: "GET" });
+	const pb = t.send({ url: "https://x.example/b", method: "GET" });
+	await tick();
+	assert.equal(t.stuck, 0, "in flight, not yet timed out");
+	timers.fireAll();
+	await assert.rejects(pa, RequestTimeout);
+	await assert.rejects(pb, RequestTimeout);
+	assert.equal(t.stuck, 2);
+	a.answer(ok);
+	await tick();
+	assert.equal(t.stuck, 1, "a late answer releases it");
+	b.fail(new NetworkError());
+	await tick();
+	assert.equal(t.stuck, 0, "so does a late failure");
 });

@@ -3,6 +3,7 @@
 // AuthorizingTransport also strips it for any non-Graph host (T-I4, T-T5).
 import type { HttpRequest, HttpResponse, RemoteItem, UploadSessionInfo, UploadStatus } from "../core/ports.ts";
 import { toGraphError } from "./errors.ts";
+import { NO_TIMEOUT } from "./timeout.ts";
 import { checkTransferUrl, parseDriveItem, parseJsonObject, parseUploadSession, parseUploadStatus, MAX_JSON_BODY } from "./validate.ts";
 
 /** Fragments must be multiples of 320 KiB [G-UP-6]. */
@@ -46,6 +47,9 @@ export async function putFragment(call: Call, uploadUrl: string, start: number, 
 		method: "PUT",
 		headers: { "Content-Range": `bytes ${start}-${start + len - 1}/${total}` },
 		body: bytes,
+		// The final fragment commits the file without If-Match [G-UP-5]: it is never abandoned, so a late commit
+		// can't overwrite a newer upload from the next run (src/remote/timeout.ts).
+		...(start + len === total ? { timeoutMs: NO_TIMEOUT } : {}),
 	});
 	if (res.status === 202) return null;
 	if (res.status === 200 || res.status === 201) return parseDriveItem(parseJsonObject(res.body, MAX_JSON_BODY));
