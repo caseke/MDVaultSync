@@ -33,7 +33,7 @@ import { ReportModal } from "./ui/report-modal.ts";
 import { MDVaultSyncSettingTab } from "./ui/settings-tab.ts";
 import { SignInModal } from "./ui/sign-in-modal.ts";
 import { DEFAULT_ICON, statusIcon, statusText } from "./ui/status.ts";
-import { PATTERNS_TEXT, triggerDecision } from "./ui/triggers.ts";
+import { PATTERNS_TEXT, STUCK_TEXT, triggerDecision } from "./ui/triggers.ts";
 
 /**
  * ObsidianVault's structural view of app.vault and app.fileManager. It only ever hands back the TFile and TFolder
@@ -83,6 +83,8 @@ export default class MDVaultSyncPlugin extends Plugin {
 	quota!: QuotaCache;
 	/** Every request goes through it; its `stuck` count pauses unattended runs (ui/triggers.ts). */
 	private timeouts!: TimeoutTransport;
+	/** The stuck-requests notice showed during the current pause (reset once a trigger runs again). */
+	private stuckNoticeShown = false;
 	/** The latest sync report (design §5.6), for the settings tab, the report modal and repeat-notice checks. */
 	lastReport: SyncReport | null = null;
 	/** Device name used when the setting is empty: "iPad" or "Ubuntu" on the owner's devices (design §11). */
@@ -158,12 +160,12 @@ export default class MDVaultSyncPlugin extends Plugin {
 				...(deltaForm ? { deltaForm } : {}),
 			});
 		this.graph = graphFor();
-		// Quota reads have their own retry policy with one attempt: a settings render never waits on backoff or spends
-		// a sync run's budget or pause (M8 review).
+		// Quota reads send once (no backoff, no Retry-After wait, no pause, no budget): a settings render never stalls
+		// or throttles a sync (M8 review). A failure is reused for a minute by QuotaCache.
 		const quotaGraph = new GraphClient({
 			transport: graphTransport,
 			transferTransport: transport,
-			retry: new RetryPolicy({ clock, logger: this.logger, maxAttempts: 1 }),
+			retry: new RetryPolicy({ clock, logger: this.logger, singleAttempt: true }),
 			clock,
 			logger: this.logger,
 		});
@@ -332,7 +334,14 @@ export default class MDVaultSyncPlugin extends Plugin {
 	/** Every trigger comes here; the engine's single-flight lock keeps runs sequential (R-TRIG-4). */
 	async sync(trigger: Trigger): Promise<void> {
 		const d = triggerDecision(trigger, this.auth.status, isValidClientId(this.data.clientId), !this.patternsInvalid, this.timeouts.stuck);
-		if (d.action === "skip") return;
+		if (d.action === "skip") {
+			if (d.reason === "stuck" && !this.stuckNoticeShown) {
+				this.stuckNoticeShown = true;
+				new Notice(STUCK_TEXT, 0);
+			}
+			return;
+		}
+		if (d.action === "run") this.stuckNoticeShown = false;
 		if (d.action === "notice") {
 			new Notice(d.text);
 			return;

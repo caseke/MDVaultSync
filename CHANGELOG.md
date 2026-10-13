@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - A request that OneDrive doesn't answer now gives up after a while: 2 minutes, plus more for large files (a 10 MB piece of an upload gets about 5 minutes). Before, a stalled request could hold up syncing for as long as it hung (about 24 minutes once on the iPad). The sync ends as "partial" and the next one carries on. The last piece of a large upload is the exception: it always waits for OneDrive's answer, so a late answer can never overwrite a newer edit.
-- While two or more requests are still hanging after giving up, automatic syncs (startup and interval) wait. **Sync now** still runs.
+- While two or more requests are still hanging after giving up, automatic syncs (startup and interval) wait, and a notice says so once. **Sync now** still runs, and restarting Obsidian clears it.
 
 ### Security
 

@@ -18,6 +18,11 @@ export interface RetryOptions {
 	capMs?: number;
 	/** Total backoff allowed per sync run before it ends `partial`. */
 	budgetMs?: number;
+	/**
+	 * Send once and hand back whatever comes, even a 429 with Retry-After: no wait, no global pause, no budget.
+	 * For reads a settings render makes (quota), which must never stall or throttle a sync (M8 review).
+	 */
+	singleAttempt?: boolean;
 }
 
 /** Retry-After as delta-seconds or an HTTP date, in ms clamped to 1–300 s; null if absent or unparseable. */
@@ -52,6 +57,7 @@ export class RetryPolicy {
 	private readonly baseMs: number;
 	private readonly capMs: number;
 	private readonly budgetMs: number;
+	private readonly singleAttempt: boolean;
 	private spent = 0;
 	private pauseUntil = 0;
 
@@ -63,6 +69,7 @@ export class RetryPolicy {
 		this.baseMs = opts.baseMs ?? 1_000;
 		this.capMs = opts.capMs ?? 60_000;
 		this.budgetMs = opts.budgetMs ?? 600_000;
+		this.singleAttempt = opts.singleAttempt ?? false;
 	}
 
 	/** Backoff spent in this run, in ms. */
@@ -85,6 +92,7 @@ export class RetryPolicy {
 	 * last NetworkError, and any other error at once. Throws RetryBudgetExceeded when the next wait would pass the run budget.
 	 */
 	async execute(send: () => Promise<HttpResponse>): Promise<HttpResponse> {
+		if (this.singleAttempt) return send();
 		for (let attempt = 1; ; attempt++) {
 			await this.waitForPause();
 			let res: HttpResponse | null = null;

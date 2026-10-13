@@ -214,3 +214,21 @@ test("errors other than NetworkError are rethrown at once, without backoff", asy
 	assert.deepEqual(sleeps, []);
 	assert.equal(log.entries().length, 0);
 });
+
+test("singleAttempt: one send, no Retry-After wait, no pause, no budget (quota reads, M8 review)", async () => {
+	const clock = new FakeClock();
+	const p = new RetryPolicy({ clock, singleAttempt: true });
+	let calls = 0;
+	const t0 = clock.now();
+	const r = await p.execute(() => {
+		calls++;
+		return Promise.resolve(res(429, { "retry-after": "300" }));
+	});
+	assert.equal(r.status, 429, "the throttled answer goes back to the caller");
+	assert.equal(calls, 1);
+	assert.equal(clock.now(), t0, "no wait");
+	assert.equal(p.pausedUntil, 0, "no global pause");
+	assert.equal(p.spentMs, 0);
+	await assert.rejects(p.execute(() => Promise.reject(new NetworkError())), NetworkError);
+	assert.equal((await p.execute(() => Promise.resolve(res(503)))).status, 503);
+});

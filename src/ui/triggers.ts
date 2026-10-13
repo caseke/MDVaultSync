@@ -4,7 +4,7 @@ import type { Trigger } from "../core/ports.ts";
 import type { AuthStatus } from "../remote/auth.ts";
 import { AUTH_ERROR_MESSAGES } from "./auth-messages.ts";
 
-export type TriggerDecision = { action: "run" } | { action: "skip" } | { action: "notice"; text: string };
+export type TriggerDecision = { action: "run" } | { action: "skip"; reason?: "stuck" } | { action: "notice"; text: string };
 
 const UNATTENDED = new Set<Trigger>(["startup", "interval", "rerun"]);
 
@@ -14,12 +14,16 @@ const UNATTENDED = new Set<Trigger>(["startup", "interval", "rerun"]);
  */
 export const STUCK_LIMIT = 2;
 
+/** Shown once when automatic sync first pauses for hanging requests (main.ts), so the pause is never silent. */
+export const STUCK_TEXT =
+	"Automatic sync is paused: OneDrive hasn't answered some requests. Sync now still works, and restarting Obsidian clears it.";
+
 export const PATTERNS_TEXT =
 	"Sync is paused: the exclude patterns saved on this device couldn't be read. In the MDVaultSync settings, check Exclude patterns, then select Save and resume sync.";
 
 /** `patternsOk` false: data.json held unusable exclude patterns; nothing syncs until they're saved again (T-I6). */
 export function triggerDecision(trigger: Trigger, auth: AuthStatus, hasClientId: boolean, patternsOk: boolean, stuckRequests = 0): TriggerDecision {
-	if (auth === "signed-in" && patternsOk) return UNATTENDED.has(trigger) && stuckRequests >= STUCK_LIMIT ? { action: "skip" } : { action: "run" };
+	if (auth === "signed-in" && patternsOk) return UNATTENDED.has(trigger) && stuckRequests >= STUCK_LIMIT ? { action: "skip", reason: "stuck" } : { action: "run" };
 	if (UNATTENDED.has(trigger)) return { action: "skip" };
 	if (!patternsOk) return { action: "notice", text: PATTERNS_TEXT };
 	if (auth === "sign-in-required") return { action: "notice", text: AUTH_ERROR_MESSAGES["sign-in-required"] };

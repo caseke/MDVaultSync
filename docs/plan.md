@@ -1183,7 +1183,7 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 ---
 
 ## M8: Hardening and end-to-end test matrix
-**Status:** not started
+**Status:** awaiting-owner (2026-10-13). The session work is done: lint, typecheck, 833 tests, build and audit pass (see **Verification output**), the sentinel and notice-mapping tests pass, every threat-model row has a status, and the security-review passes are done and their findings fixed. Open: the 12-row device matrix on 0.6.0 (owner), and the owner's sign-off on the S5 redirect acceptance. M9 depends on this matrix.
 
 **Goal.** Close the remaining threat-model rows and prove v1 on real devices.
 
@@ -1232,10 +1232,85 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 npm run lint && npm run typecheck && npm test && npm run build && npm audit --audit-level=high
 ```
 
-**Verification output**
+**Manual end-to-end matrix: owner steps and results**
+
+**Owner steps (0.6.0).** Use a *test vault* on both devices, not the real one, and the same Client ID on both.
+1. Merge this branch (or push the tag from it) and push tag `0.6.0` so `release.yml` drafts the release; publish it. Update both devices with BRAT (**Check for updates to all beta plugins**). Confirm Settings → MDVaultSync shows **OneDrive storage** with used, total and free space (T-D7).
+2. Run rows 1–12 on both devices where the row applies, and record pass or fail per device under **Results**. For rows 2, 3 and 10, copy the log (Settings → MDVaultSync → Diagnostics → **Copy log**) and paste the `sync.run` lines.
+
+| # | Steps | Pass when |
+|---|---|---|
+| 1 | With a synced test vault on Ubuntu, create a new empty vault on the iPad, install 0.6.0 there with BRAT, enter the Client ID, sign in, and let the first sync start (or run **Sync now**). | **Preview sync** shows only downloads (no deletes, no uploads of files you didn't add); after **Run** every note is on the iPad and nothing on OneDrive is deleted. |
+| 2 | On the iPad, add a file of about 30 MB, run **Sync now**, and turn on airplane mode while the status shows Syncing. Wait for the sync to end, turn airplane mode off, run **Sync now**. | The first run's report (**Show sync status**) says `partial` with a network or timeout error; the second says `ok`; the file is in OneDrive once, with no conflict copy. |
+| 3 | On the iPad, add a 50 MB file and run **Sync now**. While it uploads (Syncing), swipe Obsidian away in the app switcher. Reopen Obsidian and let the startup sync run. | The file is in OneDrive once, with the right size; the log after reopening shows an `upload.resume` line (the upload continued from where it stopped, not from zero). |
+| 4 | Set **Maximum file size** to 100 MB. Add a 101 MB file (Ubuntu: `head -c 105906176 /dev/urandom > big.bin` in the vault folder). Sync. | The file isn't uploaded; the last sync report lists it as skipped `too-large`. |
+| 5 | Ubuntu: in a vault folder, create `Note.md` and `note.md` with different text (in a terminal). Sync. | One of them is uploaded; the report lists the other as `case-collision`; nothing is overwritten. |
+| 6 | Ubuntu: create a file named `a:b.md` in the vault folder (terminal). Sync. | Not uploaded; the report lists it as `invalid-name`. |
+| 7 | In OneDrive on the web, delete the folder `Apps/MDVaultSync` (or the app folder's name as shown). Run **Sync now** on Ubuntu. | The preview appears (first sync again); after Run every note is uploaded again; no local file is deleted or trashed. |
+| 8 | In OneDrive on the web, rename a synced note (for example `x.md` → `y.md`). Sync Ubuntu. | The local note is renamed to `y.md` with its content; no conflict copy; no download of a second file. |
+| 9 | On Ubuntu, **Sign out**, then **Sign in** again with the same account. Let the sync run. | The preview appears (first sync); after Run nothing is deleted on either side; no conflict copies (files are identical). |
+| 10 | Remove the app at https://account.microsoft.com/privacy/app-access. On Ubuntu, run **Sync now** (wait up to an hour if the access token is still cached, or restart Obsidian). Afterwards sign in again. | A persistent "sign-in required" notice; the status says Sign-in required; nothing is deleted. Signing in again restores sync. |
+| 11 | Sign out on Ubuntu. On the iPad edit notes A, B and C and sync. On Ubuntu (still signed out) edit note D. Sign in on Ubuntu. | The preview shows **Differs on both sides, no sync history (4)**; after Run there are 4 conflict copies (A–D) on both devices once the iPad syncs, and no edit is lost. |
+| 12 | Edit a note on the iPad and sync. On Ubuntu, open the same note and keep typing in it continuously while you run **Sync now**. | No typed characters are lost: either the run defers the download (`changed-during-sync` in the report) and syncs on the next run, or a conflict copy holds one of the versions (R-CONF-4). |
+
+**Results** (owner)
+- **Ubuntu** (Obsidian version: …): …
+- **iPad** (Obsidian version: …): …
+
+**Verification output** (2026-10-13, after both review passes; Node 22.22, container)
 ```
-(paste here, plus matrix results)
+$ npm run lint                  (exit 0; 0 errors, 0 warnings)
+$ npm run typecheck             (exit 0)
+$ npm test
+# first sync (union): 664.9 ms, 7000 ops
+# steady state: 693.5 ms, 0 ops
+# busy day: 677.7 ms, 1252 ops (local-move 50, upload-replace 500, remote-delete 50, local-trash 50, download 501, upload-new 101)
+# tests 833
+# suites 8
+# pass 833
+# fail 0
+$ npm run build                 (exit 0)
+$ npm audit --audit-level=high  (exit 0; 3 moderate, dev-only, unchanged since M6)
+$ scripts/check-network-apis.sh
+no forbidden network APIs
 ```
+The planning times are the slowest of 3 runs of `plan()` on a 5,000-file, 250-folder fake vault (`test/planner.perf.test.ts`); the limit is 2,000 ms. The engine's `sync.plan` log event now carries `durationMs`, so the time on a real vault shows in **Copy log**.
+
+**What was built**
+- `src/remote/timeout.ts` (new): `TimeoutTransport` wraps the requestUrl transport once in `main.ts`, under both the authorizing and the transfer transport. 120 s, plus 1 s per started 64 KiB of body; `GraphClient.download` sets `HttpRequest.timeoutMs` (new optional field, `ports.ts`) from the item size. `RequestTimeout` (no URL) isn't retried; `classify.ts` maps it to `network`/`timeout`, so the run ends `partial`. An upload session's final fragment carries `NO_TIMEOUT` (see **Security review**). `stuck` counts timed-out requests still hanging; at 2, unattended triggers skip, with a one-time notice (`ui/triggers.ts`).
+- `src/ui/quota.ts` (new): `quotaText` and `QuotaCache` (5 min success, 1 min failure, shared in flight, cleared on sign-out and after a `quota` failure). Settings → Account → **OneDrive storage** (signed in only). Quota reads use their own `GraphClient` with `RetryPolicy({ singleAttempt: true })` (new option).
+- `src/ui/notices.ts`: `ERROR_TEXT` covers every classifier and core code (`timeout`, `name-exists`, `range`, `resync`, `range-error`, `no-approot`, `cancelled`, `other`), `graph-<status>` families (5xx, 429, other 4xx), and sign-in codes via `AUTH_ERROR_MESSAGES`; `isAuthCode`. The quota text points to **OneDrive storage**.
+- The 507 / `quotaLimitReached` → `quota` mapping already existed in `src/remote/classify.ts` (M6); M8 proves it per write call and through the engine rather than moving it into `graph.ts` (clarification of the **Files** list).
+- `docs/threat-model.md`: a **Status** column on every row. `docs/design.md` §2, §6.1, §9 and §10 updated. Version 0.6.0.
+
+**Tests added:** `test/logging.sentinel.test.ts` (1; full stack; checked to catch a URL written to the console and a path logged as `code`), `timeout-transport.test.ts` (10), `quota.test.ts` (6), `planner.perf.test.ts` (1), and in existing files: notices (4: every classified and core code, HTTP families, sign-in codes, quota notice), graph (4: quota per write call, quota on a fragment, the download timeout, no timeout on the commit fragment), engine (1: a 507 mid-run), triggers (1), retry (1). The commit-fragment test was checked to fail with its fix reverted; the other new tests were written before their code and failed first. The quota-mapping tests passed at once: they pin behavior M6 built. `FakeGraph` gained `realHashes` for end-to-end runs through `RemoteContent`; `Device` gained `concurrency`.
+
+**Acceptance**
+- Matrix rows: pending (owner, 0.6.0).
+- The sentinel test passes. The notice-mapping test passes. Every threat-model row is marked implemented, accepted with a reason, or owed in M9. `npm audit --audit-level=high` is clean.
+
+**Carry-ins closed**
+- **Long requests (M7):** timeouts as above; the owner chose "timeout, no retry" in the plan approval.
+- **Notice table (M7):** done, with the mapping test.
+- **Sentinel test (M7):** it runs a full fake sync through `Engine` with the M7 hooks (`onStatus` → `statusText`, `onReport` → `noticesFor`) attached.
+- **Redirects (M3):** reviewed under threat-model S5/T5: accepted, because the transfer transport is bare (no token can go along), downloads are length- and hash-checked, and the redirect comes from Microsoft's own host. **Owner sign-off needed.**
+- Not done (optional, owner's call, unchanged from M7): the per-fragment `live()` check in `RemoteContent.resume`; re-hashing after a download write. Settings re-render on 1.13+ (`update()`) was covered by M7 check 11.
+
+**Security review** (`security-reviewer` agent; base 4b14335, then 1b8482a):
+- **First pass.** No high findings.
+  - Fixed, medium: an upload session's final fragment commits the file with no If-Match [G-UP-5]. With timeouts, a timed-out commit could land after the next run had uploaded a newer version, and the run after that would download the old bytes over the edit. The final fragment now carries `NO_TIMEOUT` and keeps the single-flight lock, as before M8. The timeout.ts header, design §6.1 and threat-model D4 were corrected.
+  - Fixed, low: requests hung past their timeout piled up (each holds a body of up to 10 MiB and a connection). Now they are counted, and unattended runs pause at 2.
+  - Fixed, low: quota reads shared the sync's `RetryPolicy` (backoff, budget, pause), and failures weren't cached.
+  - Fixed, info: the iOS timer wording in design §6.1; the I3 status wording; the `fetch` field in `QuotaCache` renamed `read`.
+  - Open, info: the S5 redirect acceptance needs the owner's sign-off.
+- **Re-review of the fixes.** The medium is confirmed fixed, and `stuck` can't drift below zero. No high or medium findings.
+  - Fixed, low: a request that never answers kept the pause on silently. The first skip now shows a persistent notice.
+  - Fixed, low: `maxAttempts: 1` still waited on Retry-After. Quota reads now use `singleAttempt` (no wait, pause or budget).
+  - Open, info (no action): an engine rerun already queued isn't re-checked against `stuck` (at most one more run). A commit fragment that never answers holds the lock until a restart (the pre-M8 behavior, now limited to the commit; the probe's last fragment too). The commit-fragment test checks the flag, not a simulated late commit. A plugin reload while a commit is on the wire can still race the new instance (pre-M8, unchanged).
+
+**Notes for M9**
+- README: the residual risks (threat-model §4), the T-T3 and T-I5 statements, revoking access (T-I1), `gh attestation verify` (T-T7); the tag ruleset (T-T8, owner).
+- Request timeouts and the stuck-request pause are new user-visible behavior; the settings reference should mention **OneDrive storage**.
 
 ---
 
@@ -1316,7 +1391,7 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-RES-2, R-RES-3 | M3, M6 | ☑ (M3 part done 2026-10-12: 10 MiB upload-session primitives, status and 404 handling; a 12 MiB two-fragment round trip passed on both devices; persistence and resume are M6; M6 part done 2026-10-12: sessions persisted before the first fragment and resumed from nextExpectedRanges, 404 restarts; saves at most 1 s after an op and before every destructive op; crash injection after every mutating call converges) |
 | R-UI-1…3 | M2, M7 | ☑ (M2 part done 2026-10-12: Account section. M7 part done 2026-10-12 (owner checks passed 2026-10-12): every R-UI-1 field; status bar on desktop with the state and last sync time; on mobile the ribbon icon shows the state and Show sync status the time (R-UI-2 amended 2026-10-12, 0.5.1); notices for errors and conflicts only; tested in the pure modules) |
 | R-SEC-1, R-SEC-2 | M2 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 M2 part (SecretStorage observed on both devices, including a locked GNOME keyring) — README residual-risk text is owed in M9 |
-| R-SEC-3 | M3, M8 | ☐ (M3 part done 2026-10-12: typed redacting logger, unit tested; the sentinel test is M8) |
+| R-SEC-3 | M3, M8 | ☑ (M3 part done 2026-10-12: typed redacting logger, unit tested; M8 part done 2026-10-13: the sentinel test runs full syncs over the production stack and finds no name, content, token, URL or server message in the ring buffer or any console call) |
 | R-SEC-4 | M3, M4 | ☐ (M3 part done 2026-10-12: Graph JSON, ids, names, sizes, tags, hashes, links and transfer URLs validated; paths are M4) — M4 part done 2026-10-12: remote-derived paths validated by `remoteToVaultPath` |
 | R-SEC-5 | M1, M9 | ☐ (M1 part done: lockfile, Dependabot, CodeQL, audit, SHA pins, and secret scanning and push protection verified 2026-10-12; release attestation is M9) |
 | R-SEC-6 | M1 | ☑ (M1, 2026-10-12) |
