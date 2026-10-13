@@ -126,7 +126,11 @@ export interface TokenStore {
 export interface AccessTokenProvider { getAccessToken(): Promise<string>; } // single-flight refresh
 
 // ---------- HTTP ----------
-export interface HttpRequest { url: string; method: string; headers?: Record<string, string>; body?: ArrayBuffer | string; }
+export interface HttpRequest {
+  url: string; method: string; headers?: Record<string, string>; body?: ArrayBuffer | string;
+  /** Overrides the size-based default of the timeout decorator (src/remote/timeout.ts); downloads set it from the item size. */
+  timeoutMs?: number;
+}
 export interface HttpResponse { status: number; headers: Record<string, string>; body: ArrayBuffer; }
 export interface HttpTransport { send(req: HttpRequest): Promise<HttpResponse>; } // never throws on status; throws on network failure
 

@@ -310,6 +310,7 @@ export class Engine implements SyncEngine {
 			rehashGen = this.overflowGen;
 			const scan = await this.scan(state, settings, rehashGen !== this.clearedGen);
 
+			const tPlan = deps.clock.now();
 			plan = makePlan(state, scan, state.remoteIndex, {
 				configDir: deps.configDir,
 				excludePatterns: settings.excludePatterns,
@@ -320,7 +321,8 @@ export class Engine implements SyncEngine {
 				// "Sync now" (command or ribbon) re-offers deletes the user declined (R-GUARD-1).
 				reofferDeclined: reoffer || trigger === "command" || trigger === "ribbon",
 			});
-			this.logger.event("sync.plan", { count: plan.ops.length });
+			// The plan time is logged so a slow planner shows in Copy log (plan M8: 5,000 files in under 2 s).
+			this.logger.event("sync.plan", { count: plan.ops.length, durationMs: deps.clock.now() - tPlan });
 
 			// Preview (R-FIRST-2): on request, when the setting is on, and always in union mode, even unattended.
 			if (trigger === "preview" || settings.previewEveryRun || plan.unionMode) {

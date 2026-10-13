@@ -3,6 +3,7 @@
 import { coreFailure, type RemoteFailure } from "../core/failure.ts";
 import { AuthError } from "./auth.ts";
 import { GraphError, NetworkError, ResyncRequired, RetryBudgetExceeded, UntrustedUrl } from "./errors.ts";
+import { RequestTimeout } from "./timeout.ts";
 import { InvalidResponse } from "./validate.ts";
 
 const AUTH_NETWORK = new Set(["network", "token-request-failed"]);
@@ -23,6 +24,8 @@ export function classifyError(e: unknown): RemoteFailure {
 		return { kind: "other", code: `graph-${e.status}` };
 	}
 	if (e instanceof NetworkError) return { kind: "network", code: "network" };
+	// Not retried within the run (design §6.1): the run ends partial and the next one continues.
+	if (e instanceof RequestTimeout) return { kind: "network", code: "timeout" };
 	if (e instanceof RetryBudgetExceeded) return { kind: "budget", code: "retry-budget-exceeded" };
 	if (e instanceof AuthError) return AUTH_NETWORK.has(e.code) ? { kind: "network", code: e.code } : { kind: "auth", code: e.code };
 	if (e instanceof UntrustedUrl) return { kind: "other", code: "untrusted-url" };

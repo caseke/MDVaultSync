@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { MAX_PENDING_HINTS, PROMPT_TIMEOUT_MS } from "../src/core/engine.ts";
 import type { DeltaPage, PlanOp, VaultPath } from "../src/core/ports.ts";
 import { AuthError } from "../src/remote/auth.ts";
-import { ResyncRequired } from "../src/remote/errors.ts";
+import { GraphError, ResyncRequired } from "../src/remote/errors.ts";
 import { FakeRemote } from "./fakes/fake-remote.ts";
 import { CrashSwitch, Device, UNIT, remoteFiles, vaultFiles } from "./fakes/device.ts";
 import { STAMP } from "./fakes/plan-fixtures.ts";
@@ -811,4 +811,37 @@ test("the full re-hash after a hint overflow stays pending through a cancelled r
 	const r = await a.sync("interval");
 	assert.equal(r.counts["upload-replace"], 1, "still re-hashed after the cancel and the reset");
 	assert.equal(remote.contentAt("m.md"), "SAME SIZE");
+});
+
+// ---------- M8 hardening ----------
+
+test("a full drive (507) mid-run fails the run as quota, keeps what was done, and retries cleanly after space is freed (T-D7)", async () => {
+	const remote = new FakeRemote();
+	let full = false;
+	let uploads = 0;
+	const a = new Device(remote, {
+		concurrency: 1,
+		remote: (r) =>
+			withOverrides(r, {
+				uploadNew: (parentId: string, name: string, data: ArrayBuffer) => {
+					if (full && ++uploads > 1) return Promise.reject(new GraphError(507, "quotaLimitReached"));
+					return r.uploadNew(parentId, name, data);
+				},
+			}),
+	});
+	a.vault.write("first.md", "1");
+	await a.sync("startup");
+	full = true;
+	for (const n of ["b", "c", "d"]) a.vault.write(`${n}.md`, n);
+	const r = await a.sync("interval");
+	assert.equal(r.result, "failed");
+	assert.equal(r.errors[0]?.code, "quota");
+	assert.deepEqual(a.engine.status, { state: "error", code: "quota" });
+	const uploaded = Object.keys(remoteFiles(remote)).filter((p) => p !== "first.md");
+	assert.equal(uploaded.length, 1, "the upload before the 507 landed");
+	assert.ok(a.store.state?.files[uploaded[0] as VaultPath], "and its record was saved");
+	full = false;
+	const again = await a.sync("interval");
+	assert.equal(again.result, "ok");
+	assert.deepEqual(Object.keys(remoteFiles(remote)).sort(), ["b.md", "c.md", "d.md", "first.md"]);
 });

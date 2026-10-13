@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { CHILDREN_WALK_LINK, GRAPH_BASE, SIMPLE_UPLOAD_MAX, encodeSegment } from "../src/remote/graph.ts";
 import { GraphError, ResyncRequired, UntrustedUrl } from "../src/remote/errors.ts";
 import { InvalidResponse } from "../src/remote/validate.ts";
-import { DOWNLOAD_HOST, GRAPH, URL_SECRET } from "./fakes/fake-graph.ts";
+import { DOWNLOAD_HOST, GRAPH, UPLOAD_HOST, URL_SECRET } from "./fakes/fake-graph.ts";
+import { classifyError } from "../src/remote/classify.ts";
+import { timeoutFor } from "../src/remote/timeout.ts";
 import { FakeHttp, bytes, jsonResponse } from "./fakes/fake-http.ts";
 import type { HttpTransport } from "../src/core/ports.ts";
 import { enc, graphOver, last, pattern, setupGraph, originOf } from "./graph-setup.ts";
@@ -321,6 +323,61 @@ test("quota: null when the scope forbids it, numbers when readable [G-QT-1]", as
 	const { g } = graphOver(http);
 	http.enqueueJson(400, { error: { code: "invalidRequest" } });
 	await assert.rejects(g.quota(), GraphError);
+});
+
+test("quota: 507 and quotaLimitReached from any write classify as quota and are not retried (T-D7) [G-ERR-1]", async () => {
+	const cases: [number, Record<string, unknown>][] = [
+		[507, { error: { code: "insufficientStorage" } }],
+		[507, {}],
+		[403, { error: { code: "quotaLimitReached" } }],
+		[400, { error: { code: "invalidRequest", innerError: { code: "quotaLimitReached" } } }],
+	];
+	for (const [status, body] of cases) {
+		const { g, fake } = setupGraph();
+		const existing = fake.addFile("APPROOT", "e.md", enc("e"));
+		let hits = 0;
+		fake.intercept = (req) => {
+			if (req.method === "GET") return null;
+			hits++;
+			return jsonResponse(status, body);
+		};
+		const etag = fake.eTag(existing);
+		const calls: (() => Promise<unknown>)[] = [
+			() => g.uploadNew("APPROOT", "n.md", enc("n").buffer),
+			() => g.uploadReplace(existing.id, etag, enc("r").buffer),
+			() => g.createFolder("APPROOT", "dir"),
+			() => g.createUploadSession({ kind: "new", parentId: "APPROOT", name: "big.bin" }, null, 4),
+		];
+		for (const call of calls) {
+			const before = hits;
+			const e = await call().then(
+				() => assert.fail("expected a quota error"),
+				(x: unknown) => x,
+			);
+			assert.deepEqual(classifyError(e), { kind: "quota", code: "quota" }, `${status} ${JSON.stringify(body)}`);
+			assert.equal(hits - before, 1, "a full drive isn't retried");
+		}
+	}
+});
+
+test("quota: a 507 on an upload fragment classifies as quota", async () => {
+	const { g, fake } = setupGraph();
+	const s = await g.createUploadSession({ kind: "new", parentId: "APPROOT", name: "big.bin" }, null, 4);
+	fake.intercept = (req) => (originOf(req.url) === UPLOAD_HOST && req.method === "PUT" ? jsonResponse(507, { error: { code: "quotaLimitReached" } }) : null);
+	const e = await g.putFragment(s.uploadUrl, 0, 4, enc("abcd").buffer).then(
+		() => assert.fail("expected a quota error"),
+		(x: unknown) => x,
+	);
+	assert.deepEqual(classifyError(e), { kind: "quota", code: "quota" });
+});
+
+test("download: the transfer GET carries a size-scaled timeout; API calls carry none (design §6.1)", async () => {
+	const { g, fake } = setupGraph();
+	const n = fake.addFile("APPROOT", "a.bin", new Uint8Array(pattern(200_000)));
+	await g.download(n.id, 200_000);
+	const get = fake.requests.find((r) => originOf(r.url) === DOWNLOAD_HOST);
+	assert.equal(get?.timeoutMs, timeoutFor(200_000));
+	assert.ok(fake.requests.filter((r) => originOf(r.url) !== DOWNLOAD_HOST).every((r) => r.timeoutMs === undefined));
 });
 
 test("throttling: 503 with Retry-After is retried transparently and logged without URLs or names", async () => {

@@ -61,6 +61,7 @@ export interface DeviceOptions {
 	remote?: (r: RemotePort) => RemotePort;
 	crash?: CrashSwitch | undefined;
 	putHonorsIfMatch?: boolean;
+	concurrency?: number;
 }
 
 export class Device {
@@ -124,6 +125,7 @@ export class Device {
 			resetBudget: () => {},
 			settings: () => ({ ...DEFAULT_ENGINE_SETTINGS, deviceName: o.name ?? "iPad", ...o.settings }),
 			newDeviceId: () => "device-" + (o.name ?? "iPad"),
+			...(o.concurrency !== undefined ? { concurrency: o.concurrency } : {}),
 		});
 		return this.engine;
 	}

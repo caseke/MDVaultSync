@@ -2,7 +2,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { SyncReport, Trigger, VaultPath } from "../src/core/ports.ts";
-import { ERROR_TEXT, errorText, noticesFor } from "../src/ui/notices.ts";
+import { ERROR_TEXT, errorText, isAuthCode, noticesFor } from "../src/ui/notices.ts";
+import { HashMismatch, ReplaceRaced, UnsafePath } from "../src/core/failure.ts";
+import { AUTH_ERROR_CODES, AuthError } from "../src/remote/auth.ts";
+import { classifyError } from "../src/remote/classify.ts";
+import { GraphError, NetworkError, ResyncRequired, RetryBudgetExceeded, UntrustedUrl } from "../src/remote/errors.ts";
+import { InvalidUrl } from "../src/remote/http.ts";
+import { RequestTimeout } from "../src/remote/timeout.ts";
+import { InvalidResponse, type InvalidReason } from "../src/remote/validate.ts";
 
 const vp = (p: string) => p as VaultPath;
 
@@ -67,7 +74,7 @@ test("every M6 carry-in code and run-level failure has its own text", () => {
 		assert.ok(ERROR_TEXT[code], code);
 		assert.equal(errorText(code), ERROR_TEXT[code]);
 	}
-	assert.equal(errorText("graph-500"), "Sync error (graph-500).");
+	assert.equal(errorText("graph-999"), "Sync error (graph-999).", "not an HTTP error status");
 	assert.equal(errorText("<script>"), "Sync error (other).");
 	assert.equal(errorText("__proto__"), "Sync error (__proto__).");
 });
@@ -95,4 +102,62 @@ test("at most 10 error lines are listed", () => {
 	const errors = Array.from({ length: 15 }, (_, i) => ({ path: vp(`f${i}.md`), code: "type-clash" }));
 	const n = noticesFor(report({ trigger: "command", result: "partial", errors }), null);
 	assert.equal(n[0]?.lines.length, 10);
+});
+
+/** Every error the classifier can be handed during a sync (M8: "every GraphError code maps to a message"). */
+function everyError(): unknown[] {
+	const out: unknown[] = [];
+	const graphCodes = ["other", "invalidRequest", "itemNotFound", "nameAlreadyExists", "resourceModified", "resyncRequired", "quotaLimitReached", "activityLimitReached", "malwareDetected", "accessDenied", "generalException"];
+	const inner = [[], ["quotaLimitReached"], ["nameAlreadyExists"], ["resyncRequired"], ["entityTagDoesNotMatch"], ["pathIsTooLong"], ["fragmentOverlap"]];
+	for (let status = 400; status <= 599; status++) {
+		for (const code of graphCodes) for (const i of inner) out.push(new GraphError(status, code, i));
+	}
+	out.push(new ResyncRequired(410, "resyncRequired"));
+	for (const c of AUTH_ERROR_CODES) out.push(new AuthError(c));
+	const reasons: InvalidReason[] = ["", "not-a-file", "download-url-missing", "download-url-invalid", "download-url-too-long", "download-length-mismatch"];
+	for (const r of reasons) out.push(new InvalidResponse(r));
+	out.push(new NetworkError(), new RequestTimeout(), new RetryBudgetExceeded(), new UntrustedUrl(), new InvalidUrl(), new RangeError("invalid-id"));
+	out.push(new HashMismatch(), new ReplaceRaced(), new UnsafePath(), new Error("x"), "a string", null);
+	return out;
+}
+
+/** Codes the executor and the engine raise themselves (src/core: OpFailed, fail(), RunStop). */
+const CORE_CODES = ["cancelled", "changed-during-sync", "conflict-name", "delta-no-link", "delta-too-many-pages", "hash-mismatch", "no-approot", "not-found", "path-too-long", "replace-raced", "signed-out", "too-large", "type-clash", "unsafe-path"];
+
+const GENERIC = /^Sync error \(/;
+
+test("every classified error code and every core code maps to a message or the sign-in notice (M8)", () => {
+	const codes = new Set<string>(CORE_CODES);
+	for (const e of everyError()) codes.add(classifyError(e).code);
+	assert.ok(codes.size > 40, `the matrix reached ${codes.size} codes`);
+	for (const code of codes) {
+		if (isAuthCode(code)) continue;
+		const text = errorText(code);
+		assert.doesNotMatch(text, GENERIC, `no message for ${code}`);
+		assert.ok(text.length > 10 && text.endsWith("."), code);
+	}
+});
+
+test("HTTP status families: server errors, throttling and refusals get their own text with the status", () => {
+	assert.match(errorText("graph-500"), /^OneDrive had a server problem \(HTTP 500\)/);
+	assert.match(errorText("graph-503"), /^OneDrive had a server problem \(HTTP 503\)/);
+	assert.equal(errorText("graph-429"), ERROR_TEXT["retry-budget-exceeded"]);
+	assert.match(errorText("graph-400"), /^OneDrive refused a request \(HTTP 400\)/);
+	assert.match(errorText("graph-409"), /HTTP 409/);
+});
+
+test("sign-in codes: the session-ending ones raise the sign-in notice; the rest have their own text", () => {
+	for (const c of ["signed-out", "sign-in-required", "unauthorized", "no-client-id", "expired"]) assert.ok(isAuthCode(c), c);
+	assert.ok(!isAuthCode("network"));
+	assert.ok(!isAuthCode("token-request-failed"));
+	assert.doesNotMatch(errorText("token-request-failed"), GENERIC);
+	assert.doesNotMatch(errorText("provider-error"), GENERIC);
+});
+
+test("a full drive is a quota notice that points at the storage line in settings (T-D7)", () => {
+	const n = noticesFor(report({ trigger: "interval", result: "failed", errors: [{ path: null, code: classifyError(new GraphError(507, "other")).code }] }), null);
+	assert.equal(n.length, 1);
+	assert.match(n[0]?.message ?? "", /OneDrive is full/);
+	assert.match(n[0]?.message ?? "", /OneDrive storage/);
+	assert.match(errorText("timeout"), /stopped answering/);
 });

@@ -20,12 +20,14 @@ import { classifyError } from "./remote/classify.ts";
 import { GraphClient } from "./remote/graph.ts";
 import { AuthorizingTransport } from "./remote/http.ts";
 import { RetryPolicy } from "./remote/retry.ts";
+import { TimeoutTransport } from "./remote/timeout.ts";
 import { defaultDeviceName, isValidClientId, pauseFromData, parseData, snapshotForSave, toEngineSettings, type PluginData } from "./settings.ts";
 import { AUTH_ERROR_MESSAGES, authErrorText } from "./ui/auth-messages.ts";
 import { ConfirmDeletesModal } from "./ui/confirm-deletes-modal.ts";
 import { DiagnosticsModal, FILE_REPLACE_TEXT } from "./ui/diagnostics-modal.ts";
 import { noticesFor, type NoticeSpec } from "./ui/notices.ts";
 import { PlanPreviewModal } from "./ui/plan-preview-modal.ts";
+import { QuotaCache } from "./ui/quota.ts";
 import type { PromptModal } from "./ui/prompt-modal.ts";
 import { ReportModal } from "./ui/report-modal.ts";
 import { MDVaultSyncSettingTab } from "./ui/settings-tab.ts";
@@ -77,6 +79,8 @@ export default class MDVaultSyncPlugin extends Plugin {
 	/** `sync-state.json` in the plugin folder (design §12). */
 	stateStore!: StateStore;
 	engine!: Engine;
+	/** OneDrive storage for the settings tab (T-D7): one read per 5 minutes at most. */
+	quota!: QuotaCache;
 	/** The latest sync report (design §5.6), for the settings tab, the report modal and repeat-notice checks. */
 	lastReport: SyncReport | null = null;
 	/** Device name used when the setting is empty: "iPad" or "Ubuntu" on the owner's devices (design §11). */
@@ -125,7 +129,11 @@ export default class MDVaultSyncPlugin extends Plugin {
 		});
 		// Before AuthClient reads the token: a sign-in left by an uninstalled copy is removed (R-AUTH-9).
 		await this.clearLeftoverSignIn(!(await isLeftoverInstall(this.app.vault.adapter, this.pluginDir)));
-		const transport = createRequestUrlTransport((p) => requestUrl(p));
+		// requestUrl has no timeout: every request, the token endpoint's included, races a timer (design §6.1).
+		const transport = new TimeoutTransport(createRequestUrlTransport((p) => requestUrl(p)), (ms, fn) => {
+			const id = window.setTimeout(fn, ms);
+			return () => window.clearTimeout(id);
+		});
 		const clock: Clock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => window.setTimeout(r, ms)) };
 		this.auth = new AuthClient({
 			transport,
@@ -148,6 +156,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 				...(deltaForm ? { deltaForm } : {}),
 			});
 		this.graph = graphFor();
+		this.quota = new QuotaCache(() => this.graph.quota(), () => Date.now());
 
 		// The sync engine (design §1): every byte passes the transform seam (R-ENG-4); v1 is the identity transform.
 		const transform = new IdentityTransform();
@@ -368,6 +377,8 @@ export default class MDVaultSyncPlugin extends Plugin {
 	private onReport(report: SyncReport): void {
 		const previous = this.lastReport;
 		this.lastReport = report;
+		// A full drive: the storage line in settings reads again rather than showing a stale figure.
+		if (report.errors.some((e) => e.code === "quota")) this.quota.invalidate();
 		for (const n of noticesFor(report, previous)) this.showNotice(n);
 		this.settingTab.refreshReport();
 	}
@@ -472,6 +483,8 @@ export default class MDVaultSyncPlugin extends Plugin {
 		// The engine is reset first, so a running sync can't save state after the clear.
 		const { tokenCleared, stateCleared } = await clearSession({ engine: this.engine, signOut: () => this.auth.signOut(), store: this.stateStore });
 		this.lastReport = null;
+		// The next sign-in may be another account.
+		this.quota.invalidate();
 		this.settingTab.refresh();
 		this.updateStatus();
 		if (!tokenCleared) {

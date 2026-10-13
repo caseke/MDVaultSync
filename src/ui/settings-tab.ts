@@ -17,6 +17,7 @@ import {
 	parseThreshold,
 	type PluginData,
 } from "../settings.ts";
+import { quotaText } from "./quota.ts";
 import { renderReport } from "./report-view.ts";
 
 const STATUS_TEXT: Record<AuthStatus, string> = {
@@ -164,6 +165,10 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 		];
 		if (signedIn) {
 			rows.push({
+				name: "OneDrive storage",
+				render: (s) => this.renderQuota(s),
+			});
+			rows.push({
 				name: "Sign out",
 				desc: "Removes the stored sign-in and sync state from this device. Local files are untouched.",
 				render: (s) => {
@@ -195,6 +200,19 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 			},
 		});
 		return rows;
+	}
+
+	/** Used and free space (T-D7) [G-QT-1]. Read at most every 5 minutes (QuotaCache); a failure shows no detail. */
+	private renderQuota(setting: Setting): void {
+		setting.setDesc("Loading…");
+		this.plugin.quota.get().then(
+			(q) => {
+				const { text, warn } = quotaText(q);
+				if (warn) setDescError(setting, text);
+				else setting.setDesc(text);
+			},
+			() => setting.setDesc("Couldn't read the storage figures. They're read again when settings reopen."),
+		);
 	}
 
 	/**
