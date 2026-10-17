@@ -1307,11 +1307,36 @@ no forbidden network APIs
   - The visibility test checks the predicate, not each row's key.
   - The Sync rows capture the data object when the definitions are built. That is safe while `data` is only ever changed in place.
 
-**Re-run on 0.6.3** (owner, 2026-10-17): the tab **no longer freezes**. New problem: every time the tab opened while signed in, a notice said "You're already signed in. Sign out first to use a different account." Cause (traced): Obsidian 1.14 calls `render` for rows whose `visible` is false. The hidden **Sign in** row ran its prepare, which rejected `already-signed-in`, and the settings tab reported it. **0.6.4:** each state-dependent row checks its own predicate at the top of `render` and renders nothing when hidden; `already-signed-in` and `superseded` prepare rejections stay quiet (`isQuietPrepareError`, tested). design §10 updated.
+**Re-run on 0.6.3** (owner, 2026-10-17): the tab **no longer freezes**. New problem: every time the tab opened while signed in, a notice said "You're already signed in. Sign out first to use a different account." Cause (inferred from the notice, the only path that runs when the tab opens; the 0.6.4 breadcrumb check confirms it): Obsidian 1.14 calls `render` for rows whose `visible` is false. The hidden **Sign in** row ran its prepare, which rejected `already-signed-in`, and the settings tab reported it. **0.6.4:** each state-dependent row checks its own predicate at the top of `render` and renders nothing when hidden; `already-signed-in` and `superseded` prepare rejections stay quiet (`isQuietPrepareError`, tested). design §10 updated.
 
 **Re-run on 0.6.4** (owner):
 - **Signed in:** open settings several times. No notice; **OneDrive storage** and **Sign out** show, **Sign in** doesn't. With Verbose logging on, no `signin-prepare` line appears.
+- **Sign out with settings open:** while signed in, with the tab open, click **Sign out**. Without reopening settings, the **Sign in** row shows an active **Sign in** link, and storage and Sign out disappear.
+- **Sign in with settings open:** while signed out, with the tab open, sign in through the link. When you return, **OneDrive storage** (with figures) and **Sign out** appear and **Sign in** disappears, without reopening.
 - **10a and 10b:** as below.
+
+**Verification output, 0.6.4** (2026-10-17; Node 22.22, container)
+```
+$ npm run lint                  (exit 0; 0 errors, 0 warnings)
+$ npm run typecheck             (exit 0)
+$ npm test
+# tests 852
+# suites 8
+# pass 852
+# fail 0
+$ npm run build                 (exit 0)
+$ npm audit --audit-level=high  (exit 0; 3 moderate, dev-only, unchanged)
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+```
+
+**0.6.4 security review** (`security-reviewer` agent; diff a7edba3..8be176c): no high finding and no security regression. A hidden row now prepares nothing and claims nothing, and the cleanup contract holds whatever order Obsidian runs render and cleanup in. Quieting `already-signed-in` is correct: it is thrown only when the user is signed in, and the Sign in command and a link tap still report it.
+- Fixed, medium: the status line claimed verification and review results before they were recorded. Both are now recorded here.
+- Fixed, low:
+  - "Cause (traced)" and "observed" are now worded as inferred.
+  - The re-run now checks a sign-out and a sign-in with settings open, since a row that rendered hidden is empty and must re-render when it becomes visible.
+- Open, low: no unit test covers the hidden-row early return itself (it lives in the Obsidian-facing file). The breadcrumb check (no `signin-prepare` while signed in) covers it on the device.
+
 
 **Re-run on 0.6.3 steps** (kept for 0.6.4): 10a and 10b, Ubuntu then the iPad.
 - **10a pass:** the tab opens and shows **Sign in**, with no **OneDrive storage** or **Sign out**.
