@@ -1460,7 +1460,7 @@ Planning times on this host were 0.97–1.29 s, against 0.66–0.80 s on 0.6.0. 
 ---
 
 ## M9: BRAT release 1.0.0 and README with the Entra guide
-**Status:** awaiting-owner (2026-10-17, 1.0.0). The session part is done: README, community checklist, version 1.0.0 and CHANGELOG; lint, typecheck, 863 tests, build and audit pass (**Verification output**, after the owner-notes follow-up). The release itself (tag, draft, publish, `gh attestation verify`), the tag ruleset, the BRAT installs and the round trip are owner steps 1–7 below; M9 is `done` when they pass.
+**Status:** awaiting-owner (2026-10-17, 1.0.0). The session part is done: README, community checklist, version 1.0.0 and CHANGELOG; lint, typecheck, 872 tests, build and audit pass (**Verification output**, after the owner-notes follow-up and its review). The release itself (tag, draft, publish, `gh attestation verify`), the tag ruleset, the BRAT installs and the round trip are owner steps 1–7 below; M9 is `done` when they pass.
 
 **Goal.** A first release, attested and built in CI, installable through BRAT on both devices.
 
@@ -1565,24 +1565,24 @@ npm version 1.0.0 --no-git-tag-version   # done in the session: version-bump.mjs
 ```
 *Changed in M9:* the plan had `npm version 1.0.0` and `git push --follow-tags` on `main` after the merge. The version is bumped in the branch instead, as for 0.6.x, so the pull request carries the 1.0.0 manifest and CHANGELOG; `npm version 1.0.0` on `main` would then fail ("Version not changed"). The owner tags the merge commit (step 3).
 
-**Verification output** (2026-10-17, Node 22.22, container; after the owner-notes follow-up)
+**Verification output** (2026-10-17, Node 22.22, container; after the owner-notes follow-up and its review fixes)
 ```
 $ npm run lint                  (exit 0; 0 errors, 0 warnings)
 $ npm run typecheck             (exit 0)
 $ npm test
-# tests 863
+# tests 872
 # suites 8
-# pass 863
+# pass 872
 # fail 0
 $ npm run build                 (exit 0)
 $ npm audit --audit-level=high  (exit 0; 3 moderate, dev-only, unchanged)
 $ scripts/check-network-apis.sh
 no forbidden network APIs
 $ npm run build; sha256sum main.js   (twice)
-6ba661c5b6236b8d92e3ebd32ec3e3925684cd8a5b04b7f24201609fdc799d65  main.js
-6ba661c5b6236b8d92e3ebd32ec3e3925684cd8a5b04b7f24201609fdc799d65  main.js
+1d473fb238fcb8b15df362b81db4708c167faae9e57ab92231d96a2a89b6d5b6  main.js
+1d473fb238fcb8b15df362b81db4708c167faae9e57ab92231d96a2a89b6d5b6  main.js
 ```
-Before the follow-up (after the first review fixes): 868 tests passing, `main.js` sha256 `d36b5900…77f6e` both times. The count fell by the removed probe tests and rose by the new token, copy and README tests.
+Before the follow-up (after the first review fixes): 868 tests passing, `main.js` sha256 `d36b5900…77f6e` both times. The count fell by the removed probe tests and rose by the new token, migration, copy and README tests.
 The two builds give the same `main.js`, which the community directory's build verification relies on [O-SUB-5].
 
 **What was built**
@@ -1610,6 +1610,20 @@ Triage of the 9 notes: 1, 2, 3, 4a, 5 and 7 before the tag; 4b, 6 and 8 after (b
 - **Copy log (note 7; owner: on Ubuntu nothing happened, no notice):** the old handler gave no answer when `navigator.clipboard.writeText` threw before returning a promise or never settled. **Show log** now opens `LogModal`, and `copyText` (`src/ui/copy-text.ts`) always settles: copied, or manual after a throw, a rejection, a missing API or a 2-second timeout, which selects the text. Tests: `test/copy-text.test.ts` (6). The real cause on Ubuntu isn't known; step 7a records what each device does.
 - **README (notes 1, 2):** rewritten shorter. Old portal labels, old layouts, the paste-fallback history and research IDs are gone. One **Troubleshooting** section holds the sign-in errors and sync symptoms. `test/readme.test.ts` (+2) checks the single troubleshooting section, the memory-only text and that no removed diagnostic is mentioned.
 - CHANGELOG `[1.0.0]` updated (Removed, Fixed, Security). The version stays 1.0.0 (not tagged yet).
+- **Security review of the follow-up** (`security-reviewer` agent; commit f219554 against 5244dfd). No high or medium. Every save path keeps the token off disk.
+  - Fixed, low:
+    - A failed save during the migration left the plaintext token in data.json, and the flag stayed set in memory without being saved. Now `migrateLegacyToken` (`token-store.ts`, tested) saves even if adopting fails and reports a failed save; `main.ts` then shows a persistent notice with the app-access page. `setFlag` puts the flag back when its save fails.
+    - The migration had no test; it has 5 now.
+    - When SecretStorage keeps an older token it won't overwrite, `staleSecret` makes the settings warning say so (tested).
+    - `copyText` settles even when `writeText` returns no promise (tested).
+    - The log modal sets the selection range and, if the selection didn't take (iPadOS outside a tap), says to select it by hand.
+    - README: the Live SDK advice now says to set it back to No; the files-outside-the-vault disclosure no longer contradicts itself and names the hidden temporary file; a warning against going back to a 0.x build, also in the CHANGELOG.
+  - Fixed, info:
+    - The launch notice says "closed or the plugin reloaded" and shows for 15 seconds, not until dismissed.
+    - A failed flag save no longer makes sign-out report a removed token as still there.
+    - Stale comments in `main.ts` and `capabilities.ts`, and design §1 and §10.
+    - SPEC R-AUTH-5 covers a write SecretStorage doesn't keep.
+    - Threat-model D3 notes the removed file-replace test.
 
 **Open after 1.0.0** (owner's choice; the M7 and M8 review items, plus owner notes 4b, 6 and 8)
 - **Duplicate device names (note 4b).** No data-safety effect: copies carry a timestamp to the second and get ` 2` on a clash. Detecting duplicates needs a shared registry file in the app folder (new remote data, validation and threat-model rows).

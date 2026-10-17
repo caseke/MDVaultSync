@@ -3,7 +3,7 @@
 // records that, so the next launch can say why a sign-in is needed. SecretStorage and data access are injected so
 // this runs under node --test.
 import type { TokenStore } from "../core/ports.ts";
-import type { PluginData } from "../settings.ts";
+import { legacyRefreshToken, type PluginData } from "../settings.ts";
 
 /** Lowercase alphanumeric plus dashes, or setSecret throws [O-API-4]. */
 export const SECRET_ID = "mdvaultsync-refresh-token";
@@ -57,6 +57,14 @@ export class PluginTokenStore implements TokenStore {
 		}
 	}
 
+	/**
+	 * SecretStorage still holds an older token that it wouldn't overwrite, while this session's lives in memory. The
+	 * next launch would read that older one, so settings says so (M9 review).
+	 */
+	get staleSecret(): boolean {
+		return this.current === "memory" && !!this.readSecret();
+	}
+
 	/** Tries SecretStorage first on every write, so a keyring that starts working takes the token over. */
 	async set(refreshToken: string): Promise<void> {
 		if (this.trySecret(refreshToken) && this.readSecret() === refreshToken) {
@@ -89,7 +97,11 @@ export class PluginTokenStore implements TokenStore {
 		this.trySecret("");
 		this.memory = null;
 		this.current = "secret-storage";
-		await this.setFlag(false);
+		try {
+			await this.setFlag(false);
+		} catch {
+			// The flag isn't secret: failing to save it must not make sign-out report a token it removed.
+		}
 		if (this.readSecret()) throw new TokenClearError();
 	}
 
@@ -109,7 +121,12 @@ export class PluginTokenStore implements TokenStore {
 		const data = this.data.get();
 		if (data.sessionOnlySignIn === on) return;
 		data.sessionOnlySignIn = on;
-		await this.data.save();
+		try {
+			await this.data.save();
+		} catch (e) {
+			data.sessionOnlySignIn = !on; // so the next set tries to save it again
+			throw e;
+		}
 	}
 
 	private trySecret(value: string): boolean {
@@ -127,5 +144,30 @@ export class PluginTokenStore implements TokenStore {
 		} catch {
 			return null;
 		}
+	}
+}
+
+/**
+ * 0.x versions kept the refresh token in plaintext in data.json when SecretStorage failed. D-5 (changed in M9)
+ * never writes a token to disk: move it into SecretStorage, or into memory for this session, then save data.json
+ * without it (`parseData` never keeps the field, so any save drops it). The save runs even if adopting fails.
+ */
+export async function migrateLegacyToken(
+	raw: unknown,
+	store: Pick<PluginTokenStore, "adoptLegacy">,
+	persist: () => Promise<void>,
+): Promise<"none" | "removed" | "save-failed"> {
+	const legacy = legacyRefreshToken(raw);
+	if (legacy === null) return "none";
+	try {
+		await store.adoptLegacy(legacy);
+	} catch {
+		// Only the flag save can fail here; the strip below is what matters.
+	}
+	try {
+		await persist();
+		return "removed";
+	} catch {
+		return "save-failed";
 	}
 }

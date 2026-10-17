@@ -273,7 +273,10 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 						setDescError(
 							s,
 							"Obsidian secret storage isn't working on this device, so your sign-in is kept in memory only, " +
-								"never on disk. You'll need to sign in again each time Obsidian starts.",
+								"never on disk. You'll need to sign in again each time Obsidian starts." +
+								(this.plugin.tokenStore.staleSecret
+									? " An older sign-in is still in secret storage and couldn't be replaced; Sign out removes it once secret storage works, or remove this app's access at your Microsoft account."
+									: ""),
 						);
 					} else {
 						s.setDesc("Stored in Obsidian secret storage. Encryption depends on your device's keyring.");

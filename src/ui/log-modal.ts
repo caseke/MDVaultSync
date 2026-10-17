@@ -7,6 +7,8 @@ import { copyText } from "./copy-text.ts";
 
 export const MANUAL_COPY_TEXT =
 	"Couldn't copy automatically. The log is selected: press Ctrl+C (Cmd+C on a Mac), or touch and hold it and choose Copy.";
+/** When the selection didn't take (iPadOS may ignore it outside a tap). */
+export const SELECT_YOURSELF_TEXT = "Couldn't copy automatically. Touch and hold the log, choose Select All, then Copy.";
 
 export class LogModal extends Modal {
 	private readonly text: string;
@@ -33,9 +35,10 @@ export class LogModal extends Modal {
 					new Notice("Log copied.");
 					return;
 				}
-				hint.setText(MANUAL_COPY_TEXT);
 				area.focus();
 				area.select();
+				area.setSelectionRange(0, area.value.length);
+				hint.setText(area.selectionEnd > 0 ? MANUAL_COPY_TEXT : SELECT_YOURSELF_TEXT);
 			});
 		});
 		buttons.createEl("button", { text: "Close" }).addEventListener("click", () => this.close());

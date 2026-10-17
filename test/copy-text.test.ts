@@ -70,3 +70,8 @@ test("a late success after the timeout doesn't change the answer", async () => {
 	resolve();
 	assert.equal(await out, "manual");
 });
+
+test("a writeText that returns no promise still settles", async () => {
+	const clip = { writeText: () => undefined } as unknown as ClipboardLike;
+	assert.equal(await copyText("LOG", clip, manualTimer().timer), "copied");
+});

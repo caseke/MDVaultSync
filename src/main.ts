@@ -12,7 +12,7 @@ import { PluginStateStore } from "./platform/plugin-state-store.ts";
 import { clearSession } from "./platform/sign-out.ts";
 import { isLeftoverInstall } from "./platform/leftover-install.ts";
 import { createRequestUrlTransport } from "./platform/request-url-transport.ts";
-import { PluginTokenStore, TokenClearError } from "./platform/token-store.ts";
+import { migrateLegacyToken, PluginTokenStore, TokenClearError } from "./platform/token-store.ts";
 import { AuthClient, AuthError } from "./remote/auth.ts";
 import { PUT_HONORS_IF_MATCH } from "./remote/capabilities.ts";
 import { classifyError } from "./remote/classify.ts";
@@ -20,7 +20,7 @@ import { GraphClient } from "./remote/graph.ts";
 import { AuthorizingTransport } from "./remote/http.ts";
 import { RetryPolicy } from "./remote/retry.ts";
 import { TimeoutTransport } from "./remote/timeout.ts";
-import { defaultDeviceName, isValidClientId, legacyRefreshToken, pauseFromData, parseData, snapshotForSave, toEngineSettings, type PluginData } from "./settings.ts";
+import { defaultDeviceName, isValidClientId, pauseFromData, parseData, snapshotForSave, toEngineSettings, type PluginData } from "./settings.ts";
 import { AUTH_ERROR_MESSAGES, authErrorText } from "./ui/auth-messages.ts";
 import { ConfirmDeletesModal } from "./ui/confirm-deletes-modal.ts";
 import { noticesFor, type NoticeSpec } from "./ui/notices.ts";
@@ -63,10 +63,13 @@ function vaultPorts(app: App): { vault: VaultLike; fileManager: FileManagerLike 
 	};
 }
 
-/** Where a personal account removes an app's access [C-MSA-1]. */
 /** Shown at load after a memory-only sign-in ended with the previous session (D-5). */
 const SESSION_ONLY_TEXT =
-	"MDVaultSync: sign in again to sync. Obsidian's secret storage isn't working on this device, so your sign-in is kept only until Obsidian closes, never on disk.";
+	"MDVaultSync: sign in again to sync. The last sign-in couldn't be saved in Obsidian's secret storage on this device, so it was kept only until Obsidian closed or the plugin reloaded, never on disk.";
+/** Shown when a 0.x plaintext token couldn't be removed from data.json (D-5). */
+const LEGACY_SAVE_FAILED_TEXT =
+	"MDVaultSync couldn't remove an unencrypted sign-in that an earlier test version saved in its data file. It tries again at the next start. To end that sign-in now, remove this app's access at ";
+/** Where a personal account removes an app's access [C-MSA-1]. */
 const APP_ACCESS_URL = "https://account.microsoft.com/privacy/app-access";
 
 export default class MDVaultSyncPlugin extends Plugin {
@@ -88,7 +91,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 	private stuckNoticeShown = false;
 	/** The latest sync report (design §5.6), for the settings tab, the report modal and repeat-notice checks. */
 	lastReport: SyncReport | null = null;
-	/** Device name used when the setting is empty: "iPad" or "Ubuntu" on the owner's devices (design §11). */
+	/** Device name used when the setting is empty: the platform, such as "iOS" or "Linux" (design §11). */
 	defaultDeviceName = "Device";
 	private pluginDir = "";
 	private statusBarEl: HTMLElement | null = null;
@@ -133,10 +136,18 @@ export default class MDVaultSyncPlugin extends Plugin {
 		});
 		// Before AuthClient reads the token: a 0.x plaintext token leaves data.json (D-5), and a sign-in left by an
 		// uninstalled copy is removed (R-AUTH-9).
-		await this.migrateLegacyToken(raw);
+		if ((await migrateLegacyToken(raw, this.tokenStore, () => this.persist())) === "save-failed") {
+			console.error("MDVaultSync: could not remove the old sign-in from data.json");
+			const msg = createFragment((f) => {
+				f.appendText(LEGACY_SAVE_FAILED_TEXT);
+				f.createEl("a", { text: APP_ACCESS_URL, href: APP_ACCESS_URL });
+				f.appendText(".");
+			});
+			new Notice(msg, 0);
+		}
 		await this.clearLeftoverSignIn(!(await isLeftoverInstall(this.app.vault.adapter, this.pluginDir)));
 		// The last sign-in lived in memory only (D-5), so it ended when Obsidian closed: say why one is needed.
-		if (this.tokenStore.sessionOnly && this.tokenStore.get() === null) new Notice(SESSION_ONLY_TEXT, 0);
+		if (this.tokenStore.sessionOnly && this.tokenStore.get() === null) new Notice(SESSION_ONLY_TEXT, 15_000);
 		// requestUrl has no timeout: every request, the token endpoint's included, races a timer (design §6.1).
 		const transport = (this.timeouts = new TimeoutTransport(createRequestUrlTransport((p) => requestUrl(p)), (ms, fn) => {
 			const id = window.setTimeout(fn, ms);
@@ -345,8 +356,8 @@ export default class MDVaultSyncPlugin extends Plugin {
 
 	/**
 	 * Applies `patch` and writes data.json. Writes are serialized, and each one snapshots `data` when it runs, so
-	 * an older snapshot can never land after a newer one; for example, a settings save can't put back a fallback
-	 * token that sign-out just removed (R-AUTH-7). Memory is updated only after the write, so a client ID is on
+	 * an older snapshot can never land after a newer one; for example, a settings save can't put back a
+	 * sessionOnlySignIn flag that sign-out just cleared (R-AUTH-7). Memory is updated only after the write, so a client ID is on
 	 * disk before it can be used (R-AUTH-9).
 	 */
 	persist(patch: Partial<PluginData> = {}): Promise<void> {
@@ -434,22 +445,6 @@ export default class MDVaultSyncPlugin extends Plugin {
 			this.signInModal.open();
 		} catch (e) {
 			this.reportAuthError(e);
-		}
-	}
-
-	/**
-	 * 0.x versions kept the refresh token in plaintext in data.json when SecretStorage failed. D-5 (changed in M9)
-	 * never writes a token to disk: move it into SecretStorage, or into memory for this session, then save data.json
-	 * without it. `data` never held it (parseData drops it), so any save removes it; this one does it at once.
-	 */
-	private async migrateLegacyToken(raw: unknown): Promise<void> {
-		const legacy = legacyRefreshToken(raw);
-		if (legacy === null) return;
-		try {
-			await this.tokenStore.adoptLegacy(legacy);
-			await this.persist();
-		} catch (e) {
-			console.error(`MDVaultSync: could not remove the old sign-in from data.json (${e instanceof Error ? e.name : "unknown"})`);
 		}
 	}
 

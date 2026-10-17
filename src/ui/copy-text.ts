@@ -17,7 +17,8 @@ export async function copyText(text: string, clipboard: ClipboardLike | undefine
 	if (typeof clipboard?.writeText !== "function") return "manual";
 	let write: Promise<void>;
 	try {
-		write = clipboard.writeText(text);
+		// Promise.resolve: a writeText that returns no promise must not break the race below.
+		write = Promise.resolve(clipboard.writeText(text));
 	} catch {
 		return "manual";
 	}

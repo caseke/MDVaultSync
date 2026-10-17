@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PluginTokenStore, SECRET_ID, TokenClearError, type SecretStorageLike } from "../src/platform/token-store.ts";
+import { migrateLegacyToken, PluginTokenStore, SECRET_ID, TokenClearError, type SecretStorageLike } from "../src/platform/token-store.ts";
 import { DEFAULT_DATA, type PluginData } from "../src/settings.ts";
 
 class FakeSecrets implements SecretStorageLike {
@@ -191,4 +191,88 @@ test("a leftover token that can't be cleared surfaces TokenClearError", async ()
 	secrets.map.set(SECRET_ID, "rt");
 	secrets.dropWrites = true;
 	await assert.rejects(store.clearOrphan(false), TokenClearError);
+});
+
+test("a failed flag save puts the flag back, so the next set saves again", async () => {
+	const secrets = new FakeSecrets();
+	secrets.failSet = true;
+	const data: PluginData = { ...DEFAULT_DATA };
+	let fail = true;
+	let saves = 0;
+	const store = new PluginTokenStore(secrets, {
+		get: () => data,
+		save: () => {
+			saves++;
+			return fail ? Promise.reject(new Error("disk")) : Promise.resolve();
+		},
+	});
+	await assert.rejects(store.set("RT1"));
+	assert.equal(data.sessionOnlySignIn, false);
+	fail = false;
+	await store.set("RT2");
+	assert.equal(data.sessionOnlySignIn, true);
+	assert.equal(saves, 2);
+});
+
+test("clear succeeds when only the flag save fails: the token is gone either way", async () => {
+	const secrets = new FakeSecrets();
+	secrets.map.set(SECRET_ID, "RT");
+	const data: PluginData = { ...DEFAULT_DATA, sessionOnlySignIn: true };
+	const store = new PluginTokenStore(secrets, { get: () => data, save: () => Promise.reject(new Error("disk")) });
+	await store.clear();
+	assert.equal(store.get(), null);
+});
+
+test("an older token SecretStorage won't overwrite is reported as stale", async () => {
+	const { secrets, store } = setup();
+	secrets.map.set(SECRET_ID, "OLD");
+	secrets.dropWrites = true;
+	await store.set("RT1");
+	assert.equal(store.backend, "memory");
+	assert.equal(store.get(), "RT1");
+	assert.equal(store.staleSecret, true);
+	const fresh = setup();
+	fresh.secrets.failSet = true;
+	await fresh.store.set("RT1");
+	assert.equal(fresh.store.staleSecret, false);
+});
+
+// D-5 migration: the step that removes a 0.x plaintext token from data.json, whatever SecretStorage does.
+function migrationSetup(failSecret: boolean, failSave: boolean) {
+	const { secrets, data, store } = setup();
+	secrets.failSet = failSecret;
+	const written: Record<string, unknown>[] = [];
+	const persist = () => {
+		if (failSave) return Promise.reject(new Error("disk"));
+		written.push({ ...data });
+		return Promise.resolve();
+	};
+	return { secrets, data, store, written, persist };
+}
+
+test("migration: no legacy field, nothing happens", async () => {
+	const m = migrationSetup(false, false);
+	assert.equal(await migrateLegacyToken({ clientId: "x" }, m.store, m.persist), "none");
+	assert.equal(m.written.length, 0);
+});
+
+for (const failSecret of [false, true]) {
+	test(`migration removes the plaintext token from data.json (SecretStorage ${failSecret ? "fails" : "works"})`, async () => {
+		const m = migrationSetup(failSecret, false);
+		assert.equal(await migrateLegacyToken({ fallbackRefreshToken: "OLD" }, m.store, m.persist), "removed");
+		assert.ok(m.written.length >= 1);
+		for (const w of m.written) assert.ok(!JSON.stringify(w).includes("OLD"));
+		assert.equal(m.store.get(), "OLD");
+	});
+}
+
+test("migration removes an unusable legacy field too", async () => {
+	const m = migrationSetup(false, false);
+	assert.equal(await migrateLegacyToken({ fallbackRefreshToken: "" }, m.store, m.persist), "removed");
+	assert.equal(m.written.length, 1);
+});
+
+test("migration reports a failed save, so the caller can warn", async () => {
+	const m = migrationSetup(true, true);
+	assert.equal(await migrateLegacyToken({ fallbackRefreshToken: "OLD" }, m.store, m.persist), "save-failed");
 });

@@ -48,7 +48,7 @@ The first stable release: MDVaultSync now syncs a vault between your devices thr
 
 ### Security
 
-- Your sign-in is never written to a plain file. If Obsidian's secret storage doesn't work on a device, the sign-in is kept in memory until Obsidian closes, with a warning in settings, and you sign in again at the next start. Before, it was saved unencrypted in the plugin's data file. A sign-in saved that way by a test build is moved into secret storage (or memory) and deleted from the file at startup.
+- Your sign-in is never written to a plain file. If Obsidian's secret storage doesn't work on a device, the sign-in is kept in memory until Obsidian closes, with a warning in settings, and you sign in again at the next start. Before, it was saved unencrypted in the plugin's data file. A sign-in saved that way by a test build is moved into secret storage (or memory) and deleted from the file at startup. Don't go back to a 0.x test build afterwards: it could save the sign-in unencrypted again.
 - File names in the preview, report and notices show hidden or direction-changing characters as codes, so a name can't disguise itself.
 - A test runs whole syncs with marker text in file names, contents, tokens and server messages, and checks that none of it reaches the plugin's log or the developer console.
 

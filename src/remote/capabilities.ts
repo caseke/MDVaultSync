@@ -1,5 +1,5 @@
-// Graph behaviors the docs leave open, fixed at build time from the M3 probe (run-diagnostics) so the choice is
-// reviewable (design §5.5). Values come from the owner's probe runs on Ubuntu (v1–v4) and the iPad (v4 on 0.3.5),
+// Graph behaviors the docs leave open, fixed at build time from the M3 probe (the run-diagnostics command,
+// removed in M9) so the choice is reviewable (design §5.5). Values come from the owner's probe runs on Ubuntu (v1–v4) and the iPad (v4 on 0.3.5),
 // 2026-10-12, recorded in docs/plan.md M3. They are server behaviors and matched on both devices.
 
 export type DeltaForm = "approot-colon" | "items-id" | "children-walk";

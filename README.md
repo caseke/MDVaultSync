@@ -18,7 +18,8 @@ Required by the [Obsidian developer policies](https://docs.obsidian.md/Developer
   All requests go through Obsidian's network API.
 - **Account required.** A personal Microsoft account with OneDrive (not work or school), plus your own free Microsoft Entra app registration for a client ID. See [Microsoft Entra setup](#microsoft-entra-setup).
 - **Files outside the vault.** The plugin writes only:
-  - inside your vault, never in the Obsidian config folder or hidden folders. Its own settings and sync state live in this device's plugin folder, inside the config folder;
+  - synced files inside your vault, never in the Obsidian config folder or hidden folders. A download is first written to a hidden temporary file beside its target, then moved into place;
+  - its own settings and sync state, in its plugin folder inside the config folder, on this device;
   - in its own App Folder in your OneDrive. The permission it asks for, `Files.ReadWrite.AppFolder`, can't see anything else in your OneDrive.
 - **No telemetry.** No analytics, usage data or crash reports. The log stays on your device and never contains file names, contents or tokens.
 
@@ -30,7 +31,7 @@ MDVaultSync isn't in the community plugin directory yet. Install it with **BRAT*
 3. Enable **MDVaultSync** in **Settings → Community plugins**.
 4. Do [Microsoft Entra setup](#microsoft-entra-setup) once, then [connect each device](#step-5-connect-each-device).
 
-To update, run **BRAT: Check for updates to all beta plugins** on each device. Keep every device on the same version.
+To update, run **BRAT: Check for updates to all beta plugins** on each device. Keep every device on the same version, and don't go back to a 0.x test build: those could save your sign-in unencrypted.
 
 **Use only one sync service per vault.** Don't use MDVaultSync on a vault that iCloud Drive, Obsidian Sync, Dropbox, Syncthing or another tool also syncs. On iOS, create the vault with *Store in iCloud* off. A second service fights over the same files and copies MDVaultSync's sync state between devices, where it could make a sync act on another device's history.
 
@@ -225,7 +226,7 @@ To check each version before it runs, turn off BRAT's automatic updates at start
 | `AADSTS7000218` client secret required | A **Web** platform was added; remove it (step 3). |
 | `AADSTS9002326` or `9002327` cross-origin | A **Single-page application** platform was added; remove it (step 3). |
 | `AADSTS700016` application not found | Wrong client ID, or the app is in another directory. |
-| `unauthorized_client` or an account-type error | **Supported account types** isn't **Personal accounts only**. If that's right, try **Enable Live SDK support: Yes** (step 3). |
+| `unauthorized_client` or an account-type error | **Supported account types** isn't **Personal accounts only** (step 2). If it is, try **Enable Live SDK support: Yes** (step 3). If that doesn't fix it, set it back to **No**; if it does, please open an issue. |
 | Consent asks for more than the app folder | Check the API permissions (step 4). |
 | "Sign-in required" | The sign-in expired (about 90 days unused) or access was removed. Sign in again. |
 | Asked to sign in at every start | Obsidian's secret storage isn't working on this device (see **Token storage**). On Linux, check that a keyring such as GNOME Keyring is running and unlocked. |
