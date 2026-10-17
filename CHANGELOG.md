@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-0.6.3: the settings freeze, fixed at its cause.
+0.6.3: a fix for the settings freeze (to be confirmed on both devices).
 
 ### Fixed
 

@@ -74,10 +74,16 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 	refresh(): void {
 		this.crumb("refresh", this.refreshes.hit(Date.now()));
 		// 1.13+: always rebuild the definitions Obsidian caches, even while the tab is closed. It reuses them when
-		// the tab opens (it doesn't call getSettingDefinitions() again; M8 matrix row 10), and update() on a
-		// closed tab only stores them, rendering nothing (observed: `defs` at load, no row renders).
+		// the tab opens (it doesn't call getSettingDefinitions() again; observed on 1.14.4, M8 matrix row 10).
+		// update() on a closed tab should only store them ("Stores the result…", obsidian.d.ts); that is observed
+		// only before the first display, so a prepare that lands on a detached link discards itself (below).
 		if (requireApiVersion("1.13.0")) {
-			this.update();
+			// A settings failure must never break the auth flow that called us (notify() has no try/catch).
+			try {
+				this.update();
+			} catch (e) {
+				console.error(`MDVaultSync: settings refresh failed (${e instanceof Error ? e.name : "unknown"})`);
+			}
 			return;
 		}
 		// The fallback renderer draws at once, which prepares a sign-in that only hide() discards (R-SEC-1): only
@@ -120,6 +126,7 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 	override hide(): void {
 		this.crumb("hide");
 		this.shown = false;
+		this.signInSetting = null;
 		// Invalidate in-flight prepares and drop the untapped link's verifier and state.
 		this.renderId++;
 		this.plugin.auth.discardPrepared();
@@ -213,7 +220,7 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 								if (value === "" || isValidClientId(value)) {
 									await this.save({ clientId: value });
 									// Rebuild only the sign-in control, so the text field keeps focus.
-									if (this.signInSetting && !signedIn()) this.renderSignInControl(this.signInSetting);
+									if (this.signInSetting?.settingEl.isConnected && !signedIn()) this.renderSignInControl(this.signInSetting);
 								}
 							}),
 					);
@@ -240,8 +247,11 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 					this.signInSetting = s;
 					this.renderSignInControl(s);
 					// Torn down (a re-render, or the tab closing): drop the untapped link's verifier and state (R-SEC-1).
+					// Only while no newer render has claimed the row: a cleanup that runs after its replacement rendered
+					// must not kill the new link.
 					return () => {
-						if (this.signInSetting === s) this.signInSetting = null;
+						if (this.signInSetting !== s) return;
+						this.signInSetting = null;
 						this.renderId++;
 						this.plugin.auth.discardPrepared();
 					};
@@ -320,6 +330,11 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 			(url) => {
 				this.crumb("signin-prepare-ok");
 				if (id !== this.renderId) return;
+				// Rendered into a closed tab: nothing can tap this link, so drop its verifier and state (R-SEC-1).
+				if (!link.isConnected) {
+					this.plugin.auth.discardPrepared();
+					return;
+				}
 				link.setAttribute("href", url);
 				link.removeAttribute("aria-disabled");
 			},

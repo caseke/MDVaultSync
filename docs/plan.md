@@ -1183,7 +1183,7 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 ---
 
 ## M8: Hardening and end-to-end test matrix
-**Status:** awaiting-owner (2026-10-17, 0.6.3). The session work is done: lint, typecheck, 851 tests, build and audit pass (see **Verification output**), the sentinel and notice-mapping tests pass, every threat-model row has a status, and the security-review passes are done and their findings fixed. Open: row 10 on 0.6.3 (every other row passed; see **Results**), and the owner's sign-off on the S5 redirect acceptance. M9 depends on this matrix.
+**Status:** awaiting-owner (2026-10-17, 0.6.3). The session work is done: lint, typecheck, 851 tests, build and audit pass (see **Verification output, 0.6.3**), the sentinel and notice-mapping tests pass, every threat-model row has a status, and the security-review passes are done and their findings fixed. Open: row 10 on 0.6.3 (every other row passed; see **Results**), and the owner's sign-off on the S5 redirect acceptance. M9 depends on this matrix.
 
 **Goal.** Close the remaining threat-model rows and prove v1 on real devices.
 
@@ -1278,9 +1278,39 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 - The Sign in row's cleanup discards its prepared sign-in (R-SEC-1).
 - design §10 records Obsidian's actual behavior.
 
+**Verification output, 0.6.3** (2026-10-17, after the 0.6.3 review fixes; Node 22.22, container)
+```
+$ npm run lint                  (exit 0; 0 errors, 0 warnings)
+$ npm run typecheck             (exit 0)
+$ npm test
+# tests 851
+# suites 8
+# pass 851
+# fail 0
+$ npm run build                 (exit 0)
+$ npm audit --audit-level=high  (exit 0; 3 moderate, dev-only, unchanged)
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+```
+
+**0.6.3 security review** (`security-reviewer` agent; diff 8aea879..d057cb6): no high finding and no security regression. A prepared but untapped sign-in still accepts no callback (T-S1), so every lifecycle gap below could at worst leave a verifier in memory or a dead link.
+- Fixed, medium:
+  - The status line claimed verification and review results that weren't recorded yet. Both are now recorded here.
+  - "update() on a closed tab renders nothing" was stated as observed, but it was seen only before the first display. It is now worded as inferred. A prepare that lands on a detached link now discards itself, and the re-run checks the breadcrumbs (below).
+- Fixed, low:
+  - The Sign in row's cleanup acts only while no newer render has claimed the row.
+  - `hide()` clears the Sign in row, and a client ID change rebuilds the link only while it's attached.
+  - `refresh()` catches a settings failure, so it can't break a sign-in or the sign-in-required flip.
+  - design §10 says the evidence is from Ubuntu, and that the failed read was the last logged step, not a proven cause.
+  - The CHANGELOG no longer says "fixed at its cause".
+- Open, info:
+  - The visibility test checks the predicate, not each row's key.
+  - The Sync rows capture the data object when the definitions are built. That is safe while `data` is only ever changed in place.
+
 **Re-run on 0.6.3** (owner): 10a and 10b, Ubuntu then the iPad.
 - **10a pass:** the tab opens and shows **Sign in**, with no **OneDrive storage** or **Sign out**.
 - **10b pass:** the tab opens, Status says "Sign-in required", and **Sign in** works and sync resumes.
+- **Breadcrumb check** (Verbose logging on, console level Verbose): after you close settings, a `ui.settings` `refresh` line must not be followed by `account-…` or `signin-prepare` lines until you open the tab again.
 - If it still freezes, capture the stack (row 10 steps).
 - **Ubuntu** (Obsidian version: …): …
 - **iPad** (Obsidian version: …): …
