@@ -1,5 +1,5 @@
 // Which Account rows show for a sign-in state (design §10, M8 matrix row 10). Obsidian 1.13+ builds the setting
-// definitions once (at load) and reuses them when the tab opens, so a row list chosen at build time went stale
+// definitions once (at load) and reuses them when the tab opens [O-API-21], so a row list chosen at build time went stale
 // after a revoke or a sign-out made with settings closed: the signed-in rows showed, and the tab froze. Every
 // row is therefore always defined, and these predicates decide at render time. Pure, so it is unit tested.
 import type { AuthErrorCode, AuthStatus } from "../remote/auth.ts";
@@ -8,7 +8,7 @@ export const ACCOUNT_ROWS = ["status", "client-id", "storage", "sign-out", "sign
 export type AccountRow = (typeof ACCOUNT_ROWS)[number];
 
 /**
- * Obsidian 1.14 also calls `render` for a row whose `visible` is false and only hides it (observed in 0.6.3:
+ * Obsidian 1.14 also calls `render` for a row whose `visible` is false and only hides it [O-API-22] (0.6.3:
  * the hidden Sign in row prepared a sign-in while signed in). So every state-dependent row checks this itself
  * at the top of its render; `visible` only hides it.
  */

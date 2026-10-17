@@ -1455,11 +1455,7 @@ Planning times on this host were 0.97–1.29 s, against 0.66–0.80 s on 0.6.0. 
   - Fixed, low: `maxAttempts: 1` still waited on Retry-After. Quota reads now use `singleAttempt` (no wait, pause or budget).
   - Open, info (no action): an engine rerun already queued isn't re-checked against `stuck` (at most one more run). A commit fragment that never answers holds the lock until a restart (the pre-M8 behavior, now limited to the commit; the probe's last fragment too). The commit-fragment test checks the flag, not a simulated late commit. A plugin reload while a commit is on the wire can still race the new instance (pre-M8, unchanged).
 
-**Notes for M9**
-- **Obsidian 1.14 differs from its d.ts in the settings tab** (design §10). (1) It builds `getSettingDefinitions()` at load and on `update()`, and reuses the result when the tab opens. (2) It calls `render` for rows whose `visible` is false. So rows decide everything at render time and guard themselves. Anyone touching `src/ui/settings-tab.ts` must keep both rules.
-- The S5 redirect risk is accepted and stays out of the README's residual-risk list (§4); the README may mention it under "how transfers are protected" if useful.
-- README: the residual risks (threat-model §4), the T-T3 and T-I5 statements, revoking access (T-I1), `gh attestation verify` (T-T7); the tag ruleset (T-T8, owner).
-- Request timeouts and the stuck-request pause are new user-visible behavior; the settings reference should mention **OneDrive storage**.
+**Notes for M9:** moved to the M9 section's **Carry-ins** list, which is where the session protocol tells the next session to read.
 
 ---
 
@@ -1487,6 +1483,38 @@ Planning times on this host were 0.97–1.29 s, against 0.66–0.80 s on 0.6.0. 
   - how to verify a release: `gh attestation verify main.js -R caseke/MDVaultSync`;
   - uninstall and sign-out.
 - `docs/community-checklist.md`: every item from [O-SUB-1] … [O-SUB-5] with pass or fail, plus the result of the community.obsidian.md "Review branch" preview if available.
+
+**Carry-ins** (requirements handed over by earlier milestones; each names its source)
+- **Start from `main`** (M8 close-out): M8 was built on branch `claude/wizardly-einstein-m82jdh` and is merged into `main` by pull request before M9 starts. The last pre-release version is 0.6.4. `CHANGELOG.md` **[Unreleased]** holds the 0.5.x–0.6.4 notes; turn them into the **[1.0.0]** section.
+- **README items** (threat model; M8 review):
+  - the residual risks (threat-model §4);
+  - files are stored unencrypted in OneDrive (T-I5);
+  - the plugin never runs or renders file contents (T-T3);
+  - any installed plugin can read the token; install only plugins you trust, and how to remove the app's access at https://account.microsoft.com/privacy/app-access (T-I1, T-I2);
+  - `gh attestation verify main.js -R caseke/MDVaultSync` (T-T7).
+- **README settings reference** (M8):
+  - **OneDrive storage** (used, total and free; warns at 10 % free; the recycle bin counts);
+  - **Verbose logging** (mirrors the log to the developer console; codes only).
+- **README behavior notes** (M8):
+  - a request OneDrive doesn't answer gives up after 2 minutes plus time for its size, and the sync ends `partial`;
+  - while 2 or more requests hang, automatic syncs pause with a notice (**Sync now** still works);
+  - conflict naming, including that identical files are never turned into conflicts;
+  - names OneDrive refuses, such as `:` in a name, are skipped and listed;
+  - with two names that differ only in letter case and neither synced yet, both are skipped (R-PATH-2).
+- **S5 redirect** (M3 carry-in, accepted by the owner 2026-10-17): it stays off the README's residual-risk list; the README may mention it under how transfers are protected.
+- **Obsidian 1.14 settings-tab behavior** (M8 row 10; design §10; research [O-API-21], [O-API-22]). It differs from its d.ts in two ways:
+  - it builds `getSettingDefinitions()` at load and on `update()`, and reuses that copy when the tab opens;
+  - it calls `render` for rows whose `visible` is false.
+
+  Any settings change must keep both rules: decide everything at render time, and guard each state-dependent row inside `render`. The 0.6.2–0.6.4 history is in M8.
+- **Open items, not blocking 1.0.0** (from the M7 and M8 reviews; the owner may pick any):
+  - checking `live()` between fragments inside `RemoteContent.resume` (M7, declined for now);
+  - re-hashing after a download write in `recordDownload` (M7);
+  - a prepared but untapped sign-in has no expiry; only a tapped one expires after 10 minutes (R-SEC-1 defense in depth, M8 0.6.2 review);
+  - a conflict copy that an earlier crashed attempt wrote stays on disk and uploads as an ordinary file (M8 0.6.1 review);
+  - unit tests check the settings visibility predicates, not their wiring in `settings-tab.ts`; the Sync rows capture the data object when the definitions are built, which is safe while `data` is only changed in place (M8 0.6.3 and 0.6.4 reviews).
+- **Performance margin** (M8): planning a 5,000-file vault took 0.97–1.29 s on the slower container host, against a 2 s limit (`test/planner.perf.test.ts`). If CI ever runs on a slower host, that test is the first to watch.
+- **Matrix row 5b** (M8): passed by design as 5a (neither name synced, so both are skipped). The tracked-name case (5b) was never run on a device; the planner tests cover it.
 
 **Owner actions**
 - Add a tag protection (ruleset) for release tags.

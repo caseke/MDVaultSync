@@ -74,7 +74,7 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 	refresh(): void {
 		this.crumb("refresh", this.refreshes.hit(Date.now()));
 		// 1.13+: always rebuild the definitions Obsidian caches, even while the tab is closed. It reuses them when
-		// the tab opens (it doesn't call getSettingDefinitions() again; observed on 1.14.4, M8 matrix row 10).
+		// the tab opens (it doesn't call getSettingDefinitions() again; observed on 1.14.4, M8 matrix row 10) [O-API-21].
 		// update() on a closed tab should only store them ("Stores the result…", obsidian.d.ts); that is observed
 		// only before the first display, so a prepare that lands on a detached link discards itself (below).
 		if (requireApiVersion("1.13.0")) {
