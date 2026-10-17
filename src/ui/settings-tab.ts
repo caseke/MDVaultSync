@@ -17,7 +17,7 @@ import {
 	parseThreshold,
 	type PluginData,
 } from "../settings.ts";
-import { accountRowVisible, type AccountRow } from "./account-rows.ts";
+import { accountRowVisible, isQuietPrepareError, type AccountRow } from "./account-rows.ts";
 import { quotaText } from "./quota.ts";
 import { RecentCounter } from "./recent-counter.ts";
 import { refreshAction } from "./settings-refresh.ts";
@@ -193,6 +193,8 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 		// Read at render time, never here: these definitions outlive the state they were built in (row 10).
 		const signedIn = () => auth.status === "signed-in";
 		const shows = (row: AccountRow) => () => accountRowVisible(row, auth.status);
+		// Obsidian 1.14 renders hidden rows too (and only hides them), so each state-dependent row checks first.
+		const hidden = (row: AccountRow) => !accountRowVisible(row, auth.status);
 		const idDesc = (value: string) => {
 			if (signedIn()) return "Sign out to change it. The sign-in belongs to this ID.";
 			if (value === "") return "From your app registration in Microsoft Entra. See the setup guide in the README.";
@@ -229,13 +231,17 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 			{
 				name: "OneDrive storage",
 				visible: shows("storage"),
-				render: (s) => this.renderQuota(s),
+				render: (s) => {
+					if (hidden("storage")) return;
+					this.renderQuota(s);
+				},
 			},
 			{
 				name: "Sign out",
 				desc: "Removes the stored sign-in and sync state from this device. Local files are untouched.",
 				visible: shows("sign-out"),
 				render: (s) => {
+					if (hidden("sign-out")) return;
 					s.addButton((b) => b.setButtonText("Sign out").onClick(() => void this.plugin.signOut()));
 				},
 			},
@@ -244,6 +250,8 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 				desc: "Opens Microsoft's sign-in page in your browser, then returns to Obsidian.",
 				visible: shows("sign-in"),
 				render: (s) => {
+					// While signed in this row is hidden but still rendered: no prepare (R-SEC-1), no notice.
+					if (hidden("sign-in")) return;
 					this.signInSetting = s;
 					this.renderSignInControl(s);
 					// Torn down (a re-render, or the tab closing): drop the untapped link's verifier and state (R-SEC-1).
@@ -340,9 +348,9 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 			},
 			(e: unknown) => {
 				this.crumb("signin-prepare-failed");
-				// A superseded prepare is expected (a newer render or the command won); stay quiet.
-				const superseded = e instanceof AuthError && e.code === "superseded";
-				if (id === this.renderId && !superseded) this.plugin.reportAuthError(e);
+				// The state moved under this render (a newer render, the command, or a sign-in that completed): stay quiet.
+				const quiet = e instanceof AuthError && isQuietPrepareError(e.code);
+				if (id === this.renderId && !quiet) this.plugin.reportAuthError(e);
 			},
 		);
 	}

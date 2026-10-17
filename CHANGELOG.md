@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+0.6.4: no more "You're already signed in" notice when opening settings.
+
+### Fixed
+
+- In 0.6.3, opening the MDVaultSync settings while signed in showed "You're already signed in. Sign out first to use a different account." every time. Obsidian prepares hidden settings rows too, and the hidden **Sign in** row tried to start a sign-in. Hidden rows now do nothing.
+
 0.6.3: a fix for the settings freeze (to be confirmed on both devices).
 
 ### Fixed

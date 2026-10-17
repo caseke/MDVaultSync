@@ -1183,7 +1183,7 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 ---
 
 ## M8: Hardening and end-to-end test matrix
-**Status:** awaiting-owner (2026-10-17, 0.6.3). The session work is done: lint, typecheck, 851 tests, build and audit pass (see **Verification output, 0.6.3**), the sentinel and notice-mapping tests pass, every threat-model row has a status, and the security-review passes are done and their findings fixed. Open: row 10 on 0.6.3 (every other row passed; see **Results**), and the owner's sign-off on the S5 redirect acceptance. M9 depends on this matrix.
+**Status:** awaiting-owner (2026-10-17, 0.6.4). The session work is done: lint, typecheck, 852 tests, build and audit pass (see **Verification output, 0.6.4**), the sentinel and notice-mapping tests pass, every threat-model row has a status, and the security-review passes are done and their findings fixed. Open: row 10 on 0.6.4 (every other row passed; see **Results**), and the owner's sign-off on the S5 redirect acceptance. M9 depends on this matrix.
 
 **Goal.** Close the remaining threat-model rows and prove v1 on real devices.
 
@@ -1204,7 +1204,7 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 **Manual end-to-end matrix** (owner; test vault, not the real one; same Client ID on both devices; 0.6.0, re-runs on 0.6.1)
 
 **Before you start.**
-1. Push tag `0.6.3` (from this branch or after merging; 0.6.0 for the first pass, 0.6.1 and 0.6.2 for the re-runs) so `release.yml` drafts the release, and publish it. Update both devices with BRAT (**Check for updates to all beta plugins**). Settings → MDVaultSync → Account should show **OneDrive storage** with used, total and free space (T-D7).
+1. Push tag `0.6.4` (from this branch or after merging; 0.6.0 for the first pass, 0.6.1–0.6.3 for the re-runs) so `release.yml` drafts the release, and publish it. Update both devices with BRAT (**Check for updates to all beta plugins**). Settings → MDVaultSync → Account should show **OneDrive storage** with used, total and free space (T-D7).
 2. Run each row on the devices it names, and record pass or fail under **Results**. For rows 2, 3 and 10, copy the log (Settings → MDVaultSync → Diagnostics → **Copy log**) and paste the `sync.run` and `upload.resume` lines.
 
 | # | Scenario | Devices | Steps | Pass when |
@@ -1307,7 +1307,13 @@ no forbidden network APIs
   - The visibility test checks the predicate, not each row's key.
   - The Sync rows capture the data object when the definitions are built. That is safe while `data` is only ever changed in place.
 
-**Re-run on 0.6.3** (owner): 10a and 10b, Ubuntu then the iPad.
+**Re-run on 0.6.3** (owner, 2026-10-17): the tab **no longer freezes**. New problem: every time the tab opened while signed in, a notice said "You're already signed in. Sign out first to use a different account." Cause (traced): Obsidian 1.14 calls `render` for rows whose `visible` is false. The hidden **Sign in** row ran its prepare, which rejected `already-signed-in`, and the settings tab reported it. **0.6.4:** each state-dependent row checks its own predicate at the top of `render` and renders nothing when hidden; `already-signed-in` and `superseded` prepare rejections stay quiet (`isQuietPrepareError`, tested). design §10 updated.
+
+**Re-run on 0.6.4** (owner):
+- **Signed in:** open settings several times. No notice; **OneDrive storage** and **Sign out** show, **Sign in** doesn't. With Verbose logging on, no `signin-prepare` line appears.
+- **10a and 10b:** as below.
+
+**Re-run on 0.6.3 steps** (kept for 0.6.4): 10a and 10b, Ubuntu then the iPad.
 - **10a pass:** the tab opens and shows **Sign in**, with no **OneDrive storage** or **Sign out**.
 - **10b pass:** the tab opens, Status says "Sign-in required", and **Sign in** works and sync resumes.
 - **Breadcrumb check** (Verbose logging on, console level Verbose): after you close settings, a `ui.settings` `refresh` line must not be followed by `account-…` or `signin-prepare` lines until you open the tab again.
