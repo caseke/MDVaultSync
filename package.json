@@ -1,6 +1,6 @@
 {
 	"name": "mdvaultsync",
-	"version": "0.5.1",
+	"version": "0.6.4",
 	"description": "Obsidian plugin that syncs one vault to a personal OneDrive App Folder over Microsoft Graph.",
 	"main": "main.js",
 	"type": "module",

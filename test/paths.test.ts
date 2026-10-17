@@ -171,7 +171,6 @@ const OUTSIDE: [string, string[]][] = [
 	["empty segment", ["a", "", "b"]],
 	["/abs", ["/abs"]],
 	["C:\\x", ["C:\\x"]],
-	["C: drive", ["C:", "x.md"]],
 	["backslash", ["a\\b.md"]],
 	["NUL", ["a\0b.md"]],
 	["control char", ["a\nb.md"]],
@@ -182,6 +181,14 @@ for (const [label, segs] of OUTSIDE) {
 		assert.deepEqual(remote(segs), { ok: false, reason: "outside-vault" });
 	});
 }
+test("a first name like a drive letter (`a:b.md`, `C:`) is reported invalid-name: `:` is never allowed (M8 matrix row 6)", () => {
+	assert.deepEqual(remote(["a:b.md"]), { ok: false, reason: "invalid-name" });
+	assert.deepEqual(remote(["C:", "x.md"]), { ok: false, reason: "invalid-name" });
+	assert.deepEqual(remote(["C:x.md"]), { ok: false, reason: "invalid-name" });
+	// The pre-write re-check stays strict (T-T1): it still refuses the path outright.
+	assert.equal(containmentProblem("a:b.md", CFG), "outside-vault");
+	assert.equal(containmentProblem("C:/x.md", CFG), "outside-vault");
+});
 test("remoteToVaultPath rejects <configDir>/plugins/x/main.js as hidden (plugin planting, T-E1)", () => {
 	assert.deepEqual(remote([CFG, "plugins", "x", "main.js"]), { ok: false, reason: "hidden" });
 });

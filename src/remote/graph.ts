@@ -19,6 +19,7 @@ import { NULL_LOGGER, type Logger } from "../core/logger.ts";
 import { DELTA_FORM, type DeltaForm } from "./capabilities.ts";
 import { GraphError, UntrustedUrl, toGraphError } from "./errors.ts";
 import type { RetryPolicy } from "./retry.ts";
+import { timeoutFor } from "./timeout.ts";
 import * as session from "./upload-session.ts";
 import {
 	InvalidResponse,
@@ -309,7 +310,8 @@ export class GraphClient implements RemotePort {
 		if (downloadUrl === null) throw new InvalidResponse("download-url-missing");
 		// The caller checked this size against the cap; an item that changed since must not be buffered (T-D6).
 		if (expectedSize !== undefined && r.item.size !== expectedSize) throw new InvalidResponse("download-length-mismatch");
-		const res = await this.send({ url: checkTransferUrl(downloadUrl), method: "GET" }, this.transferTransport);
+		// The whole body arrives in one response [O-API-2], so its timeout scales with the size (design §6.1).
+		const res = await this.send({ url: checkTransferUrl(downloadUrl), method: "GET", timeoutMs: timeoutFor(r.item.size) }, this.transferTransport);
 		if (res.status !== 200) throw toGraphError(res);
 		if (res.body.byteLength !== r.item.size) throw new InvalidResponse("download-length-mismatch");
 		return res.body;

@@ -1183,7 +1183,7 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 ---
 
 ## M8: Hardening and end-to-end test matrix
-**Status:** not started
+**Status:** done (2026-10-17, 0.6.4). Every matrix row passed on the devices it names (Ubuntu, Obsidian 1.14.4; iPad, Obsidian 1.14.5 (387)), the last one, row 10, on 0.6.4; see **Results**. Lint, typecheck, 852 tests, build and audit pass (**Verification output, 0.6.4**). The sentinel and notice-mapping tests pass, every threat-model row has a status, and the owner accepted the S5 redirect risk (2026-10-17). Every security-review pass is recorded, with its findings fixed or listed as open info.
 
 **Goal.** Close the remaining threat-model rows and prove v1 on real devices.
 
@@ -1201,41 +1201,261 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 - Performance: a fake 5,000-file vault plans in under 2 s on desktop (logged).
 - Review every row of docs/threat-model.md and mark each one implemented, or record why not.
 
-**Manual end-to-end matrix** (owner; both devices; test vault):
-| # | Scenario | Expected |
+**Manual end-to-end matrix** (owner; test vault, not the real one; same Client ID on both devices; 0.6.0, re-runs on 0.6.1)
+
+**Before you start.**
+1. Push tag `0.6.4` (from this branch or after merging; 0.6.0 for the first pass, 0.6.1–0.6.3 for the re-runs) so `release.yml` drafts the release, and publish it. Update both devices with BRAT (**Check for updates to all beta plugins**). Settings → MDVaultSync → Account should show **OneDrive storage** with used, total and free space (T-D7).
+2. Run each row on the devices it names, and record pass or fail under **Results**. For rows 2, 3 and 10, copy the log (Settings → MDVaultSync → Diagnostics → **Copy log**) and paste the `sync.run` and `upload.resume` lines.
+
+| # | Scenario | Devices | Steps | Pass when |
+|---|---|---|---|---|
+| 1 | Fresh device joins an existing remote vault | iPad joins Ubuntu's vault | With a synced test vault on Ubuntu, create a new empty vault on the iPad, install 0.6.0 there with BRAT, enter the Client ID, sign in, and let the first sync start (or run **Sync now**). | **Preview sync** appears and lists only downloads (a union download): no deletes, no uploads. After **Run**, every note is on the iPad, and nothing in OneDrive is deleted. |
+| 2 | Airplane mode mid-sync, then reconnect | iPad (Ubuntu: turn the network off) | Add a file of about 30 MB and run **Sync now**. Turn on airplane mode while the status shows Syncing. Wait for the sync to end, turn airplane mode off, and run **Sync now**. | The first run's report (**Show sync status**) is `partial`, with a network or timeout error. The next run resumes it and ends `ok`. The file is in OneDrive once, with no conflict copy. |
+| 3 | Force-quit Obsidian on iPad during a 50 MiB upload | iPad | Add a 50 MB file and run **Sync now**. While it uploads (Syncing), swipe Obsidian away in the app switcher. Reopen Obsidian and let the startup sync run. | The upload resumes from `nextExpectedRanges`: the log after reopening has an `upload.resume` line (it continued, not restarted from zero). The file is in OneDrive once, with the right size. |
+| 4 | File at 101 MiB with a 100 MiB cap | Ubuntu (the file is easiest to make there) | Leave **Maximum file size** at 100 (the default, in megabytes). In the vault folder, run `head -c 105906176 /dev/urandom > big.bin` (101 MiB). Sync. | It isn't uploaded, and the last sync report lists it as skipped `too-large`. |
+| 5a | Ubuntu: `Note.md` and `note.md` in the same folder, neither synced yet | Ubuntu | In a terminal, create `Note.md` and `note.md` with different text in the same vault folder. Sync. | Neither is uploaded: with no synced name to keep (R-PATH-2), both are reported `case-collision`. Nothing is overwritten. |
+| 5b | Ubuntu: `note.md` appears beside an already synced `Note.md` | Ubuntu | Delete `note.md` from 5a and sync until `Note.md` uploads. Then create `note.md` again, with different text, and sync. | `Note.md` keeps syncing (edit it and sync: the edit reaches the iPad). `note.md` is reported `case-collision` and isn't uploaded. Nothing is overwritten. |
+| 6 | Ubuntu: a file named `a:b.md` | Ubuntu | In a terminal, create a file named `a:b.md` in the vault folder. Sync. | It isn't uploaded, and the report lists it as `invalid-name`. |
+| 7 | Delete `Apps/MDVaultSync` in OneDrive web | Ubuntu, then the iPad | In OneDrive on the web, delete the app folder (`Apps/MDVaultSync`). Run **Sync now** on Ubuntu and select **Run** in the preview. Then do the same on the iPad. Keep syncing each device until it shows **Synced** and **Sync now** brings no preview. | Each device's next sync is treated as a first sync: the preview appears (it says the OneDrive folder changed), and after Run every note is uploaded again. No local file is deleted or trashed on either device. The log (**Copy log**) shows `"op":"sync.plan"` with `"code":"union"` for those runs only. |
+| 8 | Rename a file in OneDrive web | Ubuntu, then the iPad | **First:** both devices have finished row 7 (each shows **Synced**, and **Sync now** shows no preview). In OneDrive on the web, rename a synced note (for example `x.md` → `y.md`). Sync Ubuntu, then the iPad. | No preview appears on either device. The local file is renamed to `y.md`, with its content, on both. No conflict copy appears (the metadata-only 412 path), and no second file is downloaded or uploaded. |
+| 9 | Sign out, then sign in | Both, one at a time | On one device, **Sign out**, then **Sign in** again with the same account, and let the sync run. Repeat on the other device. | Sign-out clears the sync state, so the next sync is a first-sync union: the preview appears. After Run, nothing is deleted on either side, and there are no conflict copies (the files are identical). |
+| 10 | Revoke the app at account.microsoft.com | Both (the capture: Ubuntu) | **First:** Settings → MDVaultSync → Diagnostics → turn on **Verbose logging** on both devices. On Ubuntu, open the developer console (Ctrl+Shift+I) → **Console** tab → the levels dropdown (**Default levels**) → tick **Verbose** (DevTools hides `console.debug` lines otherwise). **10a:** with settings closed, run the command **MDVaultSync: Sign out of OneDrive**, then open Settings → MDVaultSync; note whether it opens; close settings and sign in again. **10b:** remove the app at https://account.microsoft.com/privacy/app-access. Restart Obsidian on each device and wait for the "sign-in required" notice. On Ubuntu, check the console now shows `MDVaultSync {"…op":"auth.refresh"…}` lines. In DevTools, click the **Sources** tab (in the row of tabs across the top of DevTools, next to **Console**; behind **»** if hidden), then open Settings → MDVaultSync. Afterwards, sign in again and turn Verbose logging off. | 10a: the tab opens and shows **Sign in**, with no **OneDrive storage** or **Sign out**. 10b: the tab opens and its Status says "Sign-in required"; Obsidian stays responsive; nothing is deleted; **Sign in** works and sync resumes. **If it freezes (Ubuntu):** click inside DevTools and press **F8** (or the **⏸** button at the top of the right-hand panel in Sources) until a yellow "Paused in debugger" bar appears, then in that panel open **Call Stack**, right-click → **Copy stack trace**, and send it with the last `MDVaultSync {…}` lines from the **Console** tab (codes only). If the tab opens but shows **OneDrive storage** or a **Sign out** button while Status says Sign-in required, say so. |
+| 11 | Stale device rejoins: sign out on Ubuntu, edit 3 notes on iPad and sync, edit 1 *other* note on Ubuntu, sign in on Ubuntu | Both | Sign out on Ubuntu. On the iPad, edit notes A, B and C and sync. On Ubuntu (still signed out), edit note D. Sign in on Ubuntu, then sync the iPad. | The preview on Ubuntu shows **Differs on both sides, no sync history (4)**. After Run there are 4 conflict copies (A–D), on both devices once the iPad syncs, and nothing is lost. |
+| 12 | Type in a note continuously while a sync downloads a remote change to it | Ubuntu types; the iPad makes the remote change | Open a synced note on Ubuntu. On the iPad, edit the *same* note (add a line at the top) and sync the iPad, so the change is in OneDrive but not yet on Ubuntu. On Ubuntu, without syncing, start typing at the end of the note, and keep typing while you run **Sync now** and for a few seconds after it finishes. Stop, then run **Sync now** once more. | No keystroke typed on Ubuntu is lost, and the iPad's line isn't lost either: after the second sync both are on both devices, in the note or split between the note and a conflict copy (R-CONF-4). The first sync's report may show `changed-during-sync` for the note. |
+
+**Results, 0.6.0** (owner, 2026-10-16; session verdicts 2026-10-17)
+| # | Result | Verdict |
 |---|---|---|
-| 1 | Fresh device joins an existing remote vault | Preview, union download, no deletes |
-| 2 | Airplane mode mid-sync, then reconnect | The next run resumes and the report is `partial` then `ok` |
-| 3 | Force-quit Obsidian on iPad during a 50 MiB upload | Upload resumes from `nextExpectedRanges` |
-| 4 | File at 101 MiB with a 100 MiB cap | Skipped, listed as `too-large` |
-| 5 | Ubuntu: `Note.md` and `note.md` in the same folder | One syncs, one is reported `case-collision` |
-| 6 | Ubuntu: a file named `a:b.md` | Reported `invalid-name` |
-| 7 | Delete `Apps/MDVaultSync` in OneDrive web | Next sync treats it as first sync and re-uploads; no local deletes |
-| 8 | Rename a file in OneDrive web | The local file is renamed; no conflict (metadata-only 412 path) |
-| 9 | Sign out, then sign in | State cleared; first-sync union; no deletes |
-| 10 | Revoke the app at account.microsoft.com | Next sync shows "Sign-in required" |
-| 11 | Stale device rejoins: sign out on Ubuntu, edit 3 notes on iPad and sync, edit 1 *other* note on Ubuntu, sign in on Ubuntu | Preview shows "Differs on both sides, no sync history (4)"; after Run there are 4 conflict copies and nothing is lost |
-| 12 | Type in a note continuously while a sync downloads a remote change to it | No keystrokes lost; conflict copy or deferred op (R-CONF-4) |
+| 1, 3, 4, 7, 9, 11 | Pass | Stand. |
+| 2 | Fail: an extra conflict copy | **Bug, fixed in 0.6.1.** Re-run. Most likely the commit of the 30 MB upload landed but its answer was lost to airplane mode; the next run found the file with no sync record and no hash in OneDrive's listing, so the pair counted as "differs, no history", and the conflict procedure wrote the copy before comparing bytes. Reproduced in `test/engine.test.ts`. The procedure now compares first (design §5.5 step 0). |
+| 5 | Fail: neither note synced, both `case-collision` | **As specified** (R-PATH-2: with neither name tracked, both are skipped; nothing is guessed or renamed). The row's wording was wrong. Recorded as **5a: pass**; **5b** (a tracked name) is new. |
+| 6 | Fail: reported "would land outside the vault" | **Bug, fixed in 0.6.1.** The drive-letter check (`C:`) ran before the name rules, so the file was reported `outside-vault`; it was safely skipped either way. Now `invalid-name`. One side effect, safer (M8 review): a synced note renamed to such a name now keeps its OneDrive copy, as other invalid names already did, instead of counting as a local delete. Re-run. |
+| 8 | Fail: iPad download + 2 uploads + a no-history conflict | **Most likely carried over from row 7.** That plan is exactly a first-sync merge (it never deletes, and it matches by path), which a device runs once after the app folder changes. If the iPad's first sync after row 7 happened in row 8, this is by design. 0.6.1 marks such runs in the log (`"code":"union"`). Re-run 7 → 8 with the new precondition. |
+| 10 | Fail: both devices froze after the restart | **Not explained by the code.** The same revoked-grant path runs without hanging in the tests, so it involves something only the app has. 0.6.1 adds refresh breadcrumbs and the Verbose logging toggle; re-run with the console open. |
+| 12 | Unclear: the iPad edit arrived before typing started | **Test setup**: the download didn't race the typing. New steps. Re-run. |
+
+**Re-runs on 0.6.1** (owner, 2026-10-17): rows 2, 6, 7 → 8 and 12 **pass**. Row 5 gave the 5a outcome (neither synced, both `case-collision`), as expected, so it **passes**; 5b wasn't run separately. Row 10 **fails** again on both devices, now narrowed down by the owner: after the revoke and a restart the sign-in-required notice shows; syncing, notes and Obsidian's own settings all work; opening the **MDVaultSync** settings tab freezes Obsidian. Verbose logging was on and the console was open, and no line was visible. That proves little: the mirror writes `console.debug`, which DevTools hides unless the Verbose level is ticked (M8 review); the startup sync's `auth.refresh` lines should have been there. After a second restart (status signed out) the tab opens fine.
+
+**Row 10 analysis (session, 2026-10-17).**
+- **Ruled out (read-only):**
+  - the tab's rows are identical in sign-in-required and signed-out, except the Status text;
+  - the failed report a revoked run leaves in memory renders in 1 ms (run in node), and so do its notices and status text;
+  - there is no synchronous loop in the settings, auth or report code;
+  - no Graph or token call can run on that path without a console line.
+- **What sets this state apart:**
+  - A revoked grant flips the auth status during a background sync, and the listener calls the tab's `refresh()` → `update()` while the tab is closed. The guard was `containerEl.isConnected`, which M7 had already noted as unverified on Obsidian 1.13+.
+  - This isn't the only closed-tab refresh: the **Sign in** and **Sign out** commands and any `obsidian://mdvaultsync-auth` callback also refresh with the tab closed (M8 review). Row 10a separates the two.
+  - What is unique: the tab's definitions are built at load (`addSettingTab` → `update()`) while the plugin is still signed in, and the status changes afterwards. If Obsidian rendered those cached definitions, they would show the signed-in rows next to a "Sign-in required" Status.
+- **0.6.2:**
+  - `refresh()` now re-renders only while the tab is on screen: a row has rendered since the last `hide()`. The decision lives in `ui/settings-refresh.ts`, unit tested.
+  - `ui.settings` breadcrumbs: `defs`, each row's start and end, `refresh` with a per-second count, `refresh-skipped-hidden` / `refresh-skipped-detached`, `hide`, and the sign-in prepare. They are logged only with Verbose logging on, so they never push the sync lines out of the 500-entry log.
+- **This is a hypothesis.** The DevTools stack from the next re-run decides it.
+
+**0.6.2 security review** (`security-reviewer` agent; base db4880c): no security regression.
+- Fixed, medium (accuracy):
+  - "no console line" wasn't evidence, because DevTools hides `console.debug`. Row 10 now has you tick the Verbose level and check for the `auth.refresh` lines first.
+  - "the only closed-tab refresh" was wrong: the sign-in and sign-out commands and auth callbacks do it too. The analysis is corrected, and row 10a now separates the cases.
+- Fixed, low:
+  - The skip crumb now says why it skipped (`hidden` or `detached`).
+  - The stale-definitions tell now names the right symptom: the signed-in rows next to a Sign-in required Status.
+  - Crumbs are logged only with Verbose logging on.
+  - The 0.6.0 row-10 verdict, which my edit had overwritten, is restored.
+  - design.md's OpKind list now includes `ui.settings`.
+- Open, low: if Obsidian runs row renders outside display (search results, indexing), `shown` could be true while the tab is closed, and a prepared sign-in has no TTL (R-SEC-1 defense in depth; the same exposure as 0.6.1). Skipping `update()` leaves Obsidian's search index at its load-time definitions. Both get re-checked once the stack shows how 1.13 renders.
+
+**Re-run on 0.6.2** (owner, 2026-10-17, Ubuntu): 10a (sign out with the command, settings closed, then open settings) and 10b (revoke, restart, notice, open the tab) **both froze**. No call stack was captured, but the console breadcrumbs (Verbose on) were decisive:
+- **`defs`/`defs-done` once, at load:** Obsidian built the definitions while the plugin was signed in.
+- **`refresh` → `refresh-skipped-detached` at the revoke:** the closed tab is detached, so the 0.6.2 hypothesis (a closed-tab refresh) is **ruled out**; 0.6.1 skipped there too.
+- **When the tab opened, no `defs` line:** Obsidian reused the definitions from load. It drew `account-0`…`account-4`, five rows, which is the **signed-in** layout (storage and Sign out), while the status was signed out or sign-in-required.
+- **The last line before the freeze:** `graph.request` with `code: "AuthError"`, the stale storage row reading without a sign-in.
+
+**Cause (confirmed as far as the logs go): stale settings definitions.** The Account rows were chosen when the definitions were built, and Obsidian 1.13+ never rebuilt them unless `update()` ran while the tab was connected. The exact statement that hangs after the failed read isn't proven; the fix removes the stale layout and the read.
+
+**0.6.3:**
+- Every Account row is always defined. `visible` predicates (`ui/account-rows.ts`, unit tested) and render-time `auth.status` reads decide what shows.
+- `refresh()` calls `update()` on every auth change, even with the tab closed (it only stores the definitions then).
+- The storage row reads nothing unless signed in.
+- The Sign in row's cleanup discards its prepared sign-in (R-SEC-1).
+- design §10 records Obsidian's actual behavior.
+
+**Verification output, 0.6.3** (2026-10-17, after the 0.6.3 review fixes; Node 22.22, container)
+```
+$ npm run lint                  (exit 0; 0 errors, 0 warnings)
+$ npm run typecheck             (exit 0)
+$ npm test
+# tests 851
+# suites 8
+# pass 851
+# fail 0
+$ npm run build                 (exit 0)
+$ npm audit --audit-level=high  (exit 0; 3 moderate, dev-only, unchanged)
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+```
+
+**0.6.3 security review** (`security-reviewer` agent; diff 8aea879..d057cb6): no high finding and no security regression. A prepared but untapped sign-in still accepts no callback (T-S1), so every lifecycle gap below could at worst leave a verifier in memory or a dead link.
+- Fixed, medium:
+  - The status line claimed verification and review results that weren't recorded yet. Both are now recorded here.
+  - "update() on a closed tab renders nothing" was stated as observed, but it was seen only before the first display. It is now worded as inferred. A prepare that lands on a detached link now discards itself, and the re-run checks the breadcrumbs (below).
+- Fixed, low:
+  - The Sign in row's cleanup acts only while no newer render has claimed the row.
+  - `hide()` clears the Sign in row, and a client ID change rebuilds the link only while it's attached.
+  - `refresh()` catches a settings failure, so it can't break a sign-in or the sign-in-required flip.
+  - design §10 says the evidence is from Ubuntu, and that the failed read was the last logged step, not a proven cause.
+  - The CHANGELOG no longer says "fixed at its cause".
+- Open, info:
+  - The visibility test checks the predicate, not each row's key.
+  - The Sync rows capture the data object when the definitions are built. That is safe while `data` is only ever changed in place.
+
+**Re-run on 0.6.3** (owner, 2026-10-17): the tab **no longer freezes**. New problem: every time the tab opened while signed in, a notice said "You're already signed in. Sign out first to use a different account." Cause (inferred from the notice, the only path that runs when the tab opens; the 0.6.4 breadcrumb check confirms it): Obsidian 1.14 calls `render` for rows whose `visible` is false. The hidden **Sign in** row ran its prepare, which rejected `already-signed-in`, and the settings tab reported it. **0.6.4:** each state-dependent row checks its own predicate at the top of `render` and renders nothing when hidden; `already-signed-in` and `superseded` prepare rejections stay quiet (`isQuietPrepareError`, tested). design §10 updated.
+
+**Re-run on 0.6.4** (owner):
+- **Signed in:** open settings several times. No notice; **OneDrive storage** and **Sign out** show, **Sign in** doesn't. With Verbose logging on, no `signin-prepare` line appears.
+- **Sign out with settings open:** while signed in, with the tab open, click **Sign out**. Without reopening settings, the **Sign in** row shows an active **Sign in** link, and storage and Sign out disappear.
+- **Sign in with settings open:** while signed out, with the tab open, sign in through the link. When you return, **OneDrive storage** (with figures) and **Sign out** appear and **Sign in** disappears, without reopening.
+- **10a and 10b:** as below.
+
+**Verification output, 0.6.4** (2026-10-17; Node 22.22, container)
+```
+$ npm run lint                  (exit 0; 0 errors, 0 warnings)
+$ npm run typecheck             (exit 0)
+$ npm test
+# tests 852
+# suites 8
+# pass 852
+# fail 0
+$ npm run build                 (exit 0)
+$ npm audit --audit-level=high  (exit 0; 3 moderate, dev-only, unchanged)
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+```
+
+**0.6.4 security review** (`security-reviewer` agent; diff a7edba3..8be176c): no high finding and no security regression. A hidden row now prepares nothing and claims nothing, and the cleanup contract holds whatever order Obsidian runs render and cleanup in. Quieting `already-signed-in` is correct: it is thrown only when the user is signed in, and the Sign in command and a link tap still report it.
+- Fixed, medium: the status line claimed verification and review results before they were recorded. Both are now recorded here.
+- Fixed, low:
+  - "Cause (traced)" and "observed" are now worded as inferred.
+  - The re-run now checks a sign-out and a sign-in with settings open, since a row that rendered hidden is empty and must re-render when it becomes visible.
+- Open, low: no unit test covers the hidden-row early return itself (it lives in the Obsidian-facing file). The breadcrumb check (no `signin-prepare` while signed in) covers it on the device.
+
+
+**Re-run on 0.6.3 steps** (kept for 0.6.4): 10a and 10b, Ubuntu then the iPad.
+- **10a pass:** the tab opens and shows **Sign in**, with no **OneDrive storage** or **Sign out**.
+- **10b pass:** the tab opens, Status says "Sign-in required", and **Sign in** works and sync resumes.
+- **Breadcrumb check** (Verbose logging on, console level Verbose): after you close settings, a `ui.settings` `refresh` line must not be followed by `account-…` or `signin-prepare` lines until you open the tab again.
+- If it still freezes, capture the stack (row 10 steps).
+
+**Results, 0.6.4** (owner, 2026-10-17): **row 10 passes.** 10a and 10b pass; no freeze; no notice when the tab opens while signed in; a sign-out and a sign-in with settings open re-render the rows; no errors on either device.
+- **Ubuntu** (Obsidian 1.14.4): pass.
+- **iPad** (Obsidian 1.14.5 (387)): pass.
 
 **Carry-ins** (requirements handed over by earlier milestones; each names its source)
 - **Redirects** (M3 final review, O-API-2): `requestUrl` follows redirects from an allowlisted transfer host without re-checking the target. No token can go along, because the transfer transport is bare, and download bytes are length- and hash-checked. Cover this in the hardening review.
 
-**Acceptance criteria**
-- Every matrix row passes on both devices, with results recorded below.
-- The sentinel test passes.
-- The notice-mapping test passes.
-- Every threat-model row is marked implemented, or has a recorded reason.
-- `npm audit --audit-level=high` is clean.
+**Acceptance criteria** (all met, 2026-10-17)
+- ☑ Every matrix row passes on the devices its **Devices** column names, with results recorded under **Results**. (Some rows need one device by their scenario, such as the iPad force-quit or the Ubuntu-only file names.) Rows 1, 3, 4, 9 and 11 passed on 0.6.0; rows 2, 5 (as 5a), 6, 7, 8 and 12 on 0.6.1; row 10 on 0.6.4.
+- ☑ The sentinel test passes (`test/logging.sentinel.test.ts`).
+- ☑ The notice-mapping test passes (`test/notices.test.ts`).
+- ☑ Every threat-model row is marked implemented, or has a recorded reason (the Status column in docs/threat-model.md; S5 accepted by the owner).
+- ☑ `npm audit --audit-level=high` is clean (**Verification output, 0.6.4**).
 
 **Verify**
 ```bash
 npm run lint && npm run typecheck && npm test && npm run build && npm audit --audit-level=high
 ```
 
-**Verification output**
+**Verification output** (2026-10-13, after both review passes; Node 22.22, container)
 ```
-(paste here, plus matrix results)
+$ npm run lint                  (exit 0; 0 errors, 0 warnings)
+$ npm run typecheck             (exit 0)
+$ npm test
+# first sync (union): 664.9 ms, 7000 ops
+# steady state: 693.5 ms, 0 ops
+# busy day: 677.7 ms, 1252 ops (local-move 50, upload-replace 500, remote-delete 50, local-trash 50, download 501, upload-new 101)
+# tests 833
+# suites 8
+# pass 833
+# fail 0
+$ npm run build                 (exit 0)
+$ npm audit --audit-level=high  (exit 0; 3 moderate, dev-only, unchanged since M6)
+$ scripts/check-network-apis.sh
+no forbidden network APIs
 ```
+The planning times are the slowest of 3 runs of `plan()` on a 5,000-file, 250-folder fake vault (`test/planner.perf.test.ts`); the limit is 2,000 ms. The engine's `sync.plan` log event now carries `durationMs`, so the time on a real vault shows in **Copy log**.
+
+**Verification output, 0.6.1** (2026-10-17, after the 0.6.1 review fixes; Node 22.22, container)
+```
+$ npm run lint                  (exit 0; 0 errors, 0 warnings)
+$ npm run typecheck             (exit 0)
+$ npm test
+# tests 843
+# suites 8
+# pass 843
+# fail 0
+$ npm run build                 (exit 0)
+$ npm audit --audit-level=high  (exit 0; 3 moderate, dev-only, unchanged)
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+```
+Planning times on this host were 0.97–1.29 s, against 0.66–0.80 s on 0.6.0. The 0.6.0 code (stashed) measured the same 0.98–1.13 s on this host, so the rise comes from the host, not from 0.6.1. The margin to the 2 s limit is now about 1.5×.
+
+**0.6.1 changes** (after the owner's first pass; verdicts under **Results**):
+- **Row 2** (`src/core/executor.ts`, design §5.5 step 0): the conflict procedure compares both versions before it writes a copy: the item's hash, or the downloaded bytes byte for byte when OneDrive lists no hash. Identical files are recorded as synced, with no copy. Tests:
+  - the lost commit answer;
+  - different bytes;
+  - the same bytes;
+  - an edit made during the download (it uploads on the next run);
+  - an XOR transform;
+  - a constructed QuickXorHash collision (two different 200-byte files with equal hashes), which must still give a copy.
+- **Row 6** (`src/core/paths.ts`, planner): `containmentSkipReason` reports a drive-letter name as `invalid-name`. `containmentProblem` (the pre-write re-check) still refuses it.
+- **Rows 7–8** (engine): `sync.plan` logs `code: "union"` for first-sync merges.
+- **Row 10:**
+  - `AuthClient` logs `auth.refresh` breadcrumbs (design §9).
+  - Settings → Diagnostics has the **Verbose logging** toggle. Design §9 specified it from the start, but it was never built.
+- Version 0.6.1.
+
+**0.6.1 security review** (`security-reviewer` agent; base 49ab5c3, commit e784e25):
+- No high or medium findings. The step-0 adopt can't lose or mask local bytes (an edit after the read leaves mtime 0, so the next scan re-hashes). The drive-letter refusal holds at every local write. The breadcrumbs and the console mirror carry codes only.
+- Fixed, low:
+  - With the remote bytes already downloaded, step 0 still decided by QuickXorHash, which a writer to the App Folder could collide. It now compares bytes, and the collision test proves it.
+  - Edge cases are now tested: an edit during the download, a non-identity transform, and the collision.
+  - The sentinel run now gives `AuthClient` the logger, so the breadcrumbs pass the sentinel check and the console capture.
+  - A bad token answer or a failed token store left `start` as the last breadcrumb, which looks like a hang. These now log `failed-local`.
+- Fixed, info: the clear step can no longer skip the sign-in-required notice if the logger throws. The row-6 verdict and the CHANGELOG now say that a rename to such a name keeps the OneDrive copy.
+- Open, info: a copy an earlier, crashed attempt wrote stays on disk and uploads as an ordinary file (design §5.5 step 0).
+
+**What was built**
+- `src/remote/timeout.ts` (new): `TimeoutTransport` wraps the requestUrl transport once in `main.ts`, under both the authorizing and the transfer transport. 120 s, plus 1 s per started 64 KiB of body; `GraphClient.download` sets `HttpRequest.timeoutMs` (new optional field, `ports.ts`) from the item size. `RequestTimeout` (no URL) isn't retried; `classify.ts` maps it to `network`/`timeout`, so the run ends `partial`. An upload session's final fragment carries `NO_TIMEOUT` (see **Security review**). `stuck` counts timed-out requests still hanging; at 2, unattended triggers skip, with a one-time notice (`ui/triggers.ts`).
+- `src/ui/quota.ts` (new): `quotaText` and `QuotaCache` (5 min success, 1 min failure, shared in flight, cleared on sign-out and after a `quota` failure). Settings → Account → **OneDrive storage** (signed in only). Quota reads use their own `GraphClient` with `RetryPolicy({ singleAttempt: true })` (new option).
+- `src/ui/notices.ts`: `ERROR_TEXT` covers every classifier and core code (`timeout`, `name-exists`, `range`, `resync`, `range-error`, `no-approot`, `cancelled`, `other`), `graph-<status>` families (5xx, 429, other 4xx), and sign-in codes via `AUTH_ERROR_MESSAGES`; `isAuthCode`. The quota text points to **OneDrive storage**.
+- The 507 / `quotaLimitReached` → `quota` mapping already existed in `src/remote/classify.ts` (M6); M8 proves it per write call and through the engine rather than moving it into `graph.ts` (clarification of the **Files** list).
+- `docs/threat-model.md`: a **Status** column on every row. `docs/design.md` §2, §6.1, §9 and §10 updated. Version 0.6.0.
+
+**Tests added:** `test/logging.sentinel.test.ts` (1; full stack; checked to catch a URL written to the console and a path logged as `code`), `timeout-transport.test.ts` (10), `quota.test.ts` (6), `planner.perf.test.ts` (1), and in existing files: notices (4: every classified and core code, HTTP families, sign-in codes, quota notice), graph (4: quota per write call, quota on a fragment, the download timeout, no timeout on the commit fragment), engine (1: a 507 mid-run), triggers (1), retry (1). The commit-fragment test was checked to fail with its fix reverted; the other new tests were written before their code and failed first. The quota-mapping tests passed at once: they pin behavior M6 built. `FakeGraph` gained `realHashes` for end-to-end runs through `RemoteContent`; `Device` gained `concurrency`.
+
+**Acceptance**
+- Matrix rows: pending (owner, 0.6.0).
+- The sentinel test passes. The notice-mapping test passes. Every threat-model row is marked implemented, accepted with a reason, or owed in M9. `npm audit --audit-level=high` is clean.
+
+**Carry-ins closed**
+- **Long requests (M7):** timeouts as above; the owner chose "timeout, no retry" in the plan approval.
+- **Notice table (M7):** done, with the mapping test.
+- **Sentinel test (M7):** it runs a full fake sync through `Engine` with the M7 hooks (`onStatus` → `statusText`, `onReport` → `noticesFor`) attached.
+- **Redirects (M3):** reviewed under threat-model S5/T5: accepted, because the transfer transport is bare (no token can go along), downloads are length- and hash-checked, and the redirect comes from Microsoft's own host. **Accepted by the owner, 2026-10-17.**
+- Not done (optional, owner's call, unchanged from M7): the per-fragment `live()` check in `RemoteContent.resume`; re-hashing after a download write. Settings re-render on 1.13+ (`update()`) was covered by M7 check 11.
+
+**Security review** (`security-reviewer` agent; base 4b14335, then 1b8482a):
+- **First pass.** No high findings.
+  - Fixed, medium: an upload session's final fragment commits the file with no If-Match [G-UP-5]. With timeouts, a timed-out commit could land after the next run had uploaded a newer version, and the run after that would download the old bytes over the edit. The final fragment now carries `NO_TIMEOUT` and keeps the single-flight lock, as before M8. The timeout.ts header, design §6.1 and threat-model D4 were corrected.
+  - Fixed, low: requests hung past their timeout piled up (each holds a body of up to 10 MiB and a connection). Now they are counted, and unattended runs pause at 2.
+  - Fixed, low: quota reads shared the sync's `RetryPolicy` (backoff, budget, pause), and failures weren't cached.
+  - Fixed, info: the iOS timer wording in design §6.1; the I3 status wording; the `fetch` field in `QuotaCache` renamed `read`.
+  - Open, info: the S5 redirect acceptance needed the owner's sign-off (given 2026-10-17).
+- **Re-review of the fixes.** The medium is confirmed fixed, and `stuck` can't drift below zero. No high or medium findings.
+  - Fixed, low: a request that never answers kept the pause on silently. The first skip now shows a persistent notice.
+  - Fixed, low: `maxAttempts: 1` still waited on Retry-After. Quota reads now use `singleAttempt` (no wait, pause or budget).
+  - Open, info (no action): an engine rerun already queued isn't re-checked against `stuck` (at most one more run). A commit fragment that never answers holds the lock until a restart (the pre-M8 behavior, now limited to the commit; the probe's last fragment too). The commit-fragment test checks the flag, not a simulated late commit. A plugin reload while a commit is on the wire can still race the new instance (pre-M8, unchanged).
+
+**Notes for M9:** moved to the M9 section's **Carry-ins** list, which is where the session protocol tells the next session to read.
 
 ---
 
@@ -1263,6 +1483,38 @@ npm run lint && npm run typecheck && npm test && npm run build && npm audit --au
   - how to verify a release: `gh attestation verify main.js -R caseke/MDVaultSync`;
   - uninstall and sign-out.
 - `docs/community-checklist.md`: every item from [O-SUB-1] … [O-SUB-5] with pass or fail, plus the result of the community.obsidian.md "Review branch" preview if available.
+
+**Carry-ins** (requirements handed over by earlier milestones; each names its source)
+- **Start from `main`** (M8 close-out): M8 was built on branch `claude/wizardly-einstein-m82jdh` and is merged into `main` by pull request before M9 starts. The last pre-release version is 0.6.4. `CHANGELOG.md` **[Unreleased]** holds the 0.5.x–0.6.4 notes; turn them into the **[1.0.0]** section.
+- **README items** (threat model; M8 review):
+  - the residual risks (threat-model §4);
+  - files are stored unencrypted in OneDrive (T-I5);
+  - the plugin never runs or renders file contents (T-T3);
+  - any installed plugin can read the token; install only plugins you trust, and how to remove the app's access at https://account.microsoft.com/privacy/app-access (T-I1, T-I2);
+  - `gh attestation verify main.js -R caseke/MDVaultSync` (T-T7).
+- **README settings reference** (M8):
+  - **OneDrive storage** (used, total and free; warns at 10 % free; the recycle bin counts);
+  - **Verbose logging** (mirrors the log to the developer console; codes only).
+- **README behavior notes** (M8):
+  - a request OneDrive doesn't answer gives up after 2 minutes plus time for its size, and the sync ends `partial`;
+  - while 2 or more requests hang, automatic syncs pause with a notice (**Sync now** still works);
+  - conflict naming, including that identical files are never turned into conflicts;
+  - names OneDrive refuses, such as `:` in a name, are skipped and listed;
+  - with two names that differ only in letter case and neither synced yet, both are skipped (R-PATH-2).
+- **S5 redirect** (M3 carry-in, accepted by the owner 2026-10-17): it stays off the README's residual-risk list; the README may mention it under how transfers are protected. **Reopen S5** if the transfer-host allowlist (design §8) ever gains a domain where outsiders can create subdomains, such as `.sharepoint.com`: an outsider-owned allowed host could then redirect uploads.
+- **Obsidian 1.14 settings-tab behavior** (M8 row 10; design §10; research [O-API-21], [O-API-22]). It differs from its d.ts in two ways:
+  - it builds `getSettingDefinitions()` at load and on `update()`, and reuses that copy when the tab opens;
+  - it calls `render` for rows whose `visible` is false.
+
+  Any settings change must keep both rules: decide everything at render time, and guard each state-dependent row inside `render`. The 0.6.2–0.6.4 history is in M8.
+- **Open items, not blocking 1.0.0** (from the M7 and M8 reviews; the owner may pick any):
+  - checking `live()` between fragments inside `RemoteContent.resume` (M7, declined for now);
+  - re-hashing after a download write in `recordDownload` (M7);
+  - a prepared but untapped sign-in has no expiry; only a tapped one expires after 10 minutes (R-SEC-1 defense in depth, M8 0.6.2 review);
+  - a conflict copy that an earlier crashed attempt wrote stays on disk and uploads as an ordinary file (M8 0.6.1 review);
+  - unit tests check the settings visibility predicates, not their wiring in `settings-tab.ts`; the Sync rows capture the data object when the definitions are built, which is safe while `data` is only changed in place (M8 0.6.3 and 0.6.4 reviews).
+- **Performance margin** (M8): planning a 5,000-file vault took 0.97–1.29 s on the slower container host, against a 2 s limit (`test/planner.perf.test.ts`). If CI ever runs on a slower host, that test is the first to watch.
+- **Matrix row 5b** (M8): passed by design as 5a (neither name synced, so both are skipped). The tracked-name case (5b) was never run on a device; the planner tests cover it.
 
 **Owner actions**
 - Add a tag protection (ruleset) for release tags.
@@ -1304,19 +1556,19 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-CD-3, R-CD-4 | M4, M5 | ☑ (M4 2026-10-12: QuickXorHash; M5 2026-10-12: FileRecord validated, change detection by hash → cTag → size/eTag, unchanged content never planned for transfer) |
 | R-ORDER | M6 | ☑ (M6, 2026-10-12: pull side before push side, moves first; tested) |
 | R-CC-1, R-CC-2 | M3, M6 | ☑ (M3 part done 2026-10-12: If-Match on replace, move, delete and replace sessions; conflictBehavior=fail on new files and folders; 412 → GraphError; M6 part done 2026-10-12: PUT with If-Match per the probe, sessions above 10 MiB with the commit-time eTag re-check, 412 re-read: metadata-only retry, else conflict; tested) |
-| R-CONF-1…4 | M4, M5, M6, M7 | ☑ (M4 part done 2026-10-12: conflict-copy naming for R-CONF-1; M5 part done 2026-10-12: conflicts only when both sides differ (R-CONF-3, property-tested), no-history pairs counted in `differsNoHistory`, report conflicts list; M6 part done 2026-10-12: conflict procedure with pendingConflicts and crash reuse, copy uploaded, pre-write re-check (R-CONF-4); the notice is M7. M7 part done 2026-10-12 (owner checks passed 2026-10-12): one persistent notice lists every conflict copy (R-CONF-2); the preview groups no-history conflicts (R-CONF-3); tested) |
+| R-CONF-1…4 | M4, M5, M6, M7 | ☑ (M4 part done 2026-10-12: conflict-copy naming for R-CONF-1; M5 part done 2026-10-12: conflicts only when both sides differ (R-CONF-3, property-tested), no-history pairs counted in `differsNoHistory`, report conflicts list; M6 part done 2026-10-12: conflict procedure with pendingConflicts and crash reuse, copy uploaded, pre-write re-check (R-CONF-4); the notice is M7. M7 part done 2026-10-12 (owner checks passed 2026-10-12): one persistent notice lists every conflict copy (R-CONF-2); the preview groups no-history conflicts (R-CONF-3); tested; M8 2026-10-17: identical bytes are adopted, not copied, even when OneDrive lists no hash (byte compare)) |
 | R-DEL-1…3 | M5, M6 | ☑ (M5 part done 2026-10-12: deletes planned both ways with If-Match, edits beat deletes (R-DEL-2), folder deletes only with zero children incl. skipped (R-DEL-3); M6 part done 2026-10-12: remote delete with If-Match (404 forget, 412 download back), local delete via FileManager.trashFile, folders only when empty; tested with fakes) |
 | R-MOVE-1 | M5, M6 | ☑ (M5 part done 2026-10-12: renames detected by id, event or unique hash; folder renames collapse to one move; M6 part done 2026-10-12: PATCH by id with If-Match and eTag chaining, Vault.rename locally, folder moves re-path records; tested with fakes) |
 | R-FIRST-1, R-FIRST-2 | M5, M7 | ☑ (M5 part done 2026-10-12: union mode never deletes (property-tested); malformed state, approot change and a missing approot id all force it. M7 part done 2026-10-12 (owner checks passed 2026-10-12): preview modal before the first sync, on the Preview sync command and with the setting on; Cancel and timeout run nothing; tested) |
 | R-GUARD-1 | M5, M7 | ☑ (M5 part done 2026-10-12: `deleteCount`, `exceedsDeleteGuard` boundary, declined deletes suppressed until either side changes or "Sync now". M7 part done 2026-10-12 (owner checks passed 2026-10-12): confirm modal with "Delete N files" / "Skip deletes this time", skip on close or timeout, threshold setting 1–100 %) |
-| R-PATH-1…4 | M4, M6 | ☑ (M4 part done 2026-10-12: NFC and collision detection, naming rules, 400-character limit and containment rules, unit tested; the pre-write re-check is M6; M6 part done 2026-10-12: containment and name rules re-checked before every local write, move, trash and mkdir, in the executor and in ObsidianVault) |
+| R-PATH-1…4 | M4, M6 | ☑ (M4 part done 2026-10-12: NFC and collision detection, naming rules, 400-character limit and containment rules, unit tested; the pre-write re-check is M6; M6 part done 2026-10-12: containment and name rules re-checked before every local write, move, trash and mkdir, in the executor and in ObsidianVault; M8 2026-10-17: a drive-letter-like name (`a:b.md`) is reported invalid-name; still refused before every write) |
 | R-IO-1, R-IO-2 | M6 | ☑ (M6 2026-10-12: temp-then-rename and hash-before-write implemented and tested; adapter.rename refuses to overwrite on Ubuntu and the iPad, and the remove-then-rename fallback passed on both) |
 | R-NET-1 | M2, M3 | ☑ (M2 and M3, 2026-10-12: auth and Graph go only through the requestUrl transport; lint and the CI script enforce it) |
-| R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested) |
+| R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested; M8 2026-10-17: request timeouts (not retried; the commit fragment never times out), quota reads never retry) |
 | R-RES-2, R-RES-3 | M3, M6 | ☑ (M3 part done 2026-10-12: 10 MiB upload-session primitives, status and 404 handling; a 12 MiB two-fragment round trip passed on both devices; persistence and resume are M6; M6 part done 2026-10-12: sessions persisted before the first fragment and resumed from nextExpectedRanges, 404 restarts; saves at most 1 s after an op and before every destructive op; crash injection after every mutating call converges) |
-| R-UI-1…3 | M2, M7 | ☑ (M2 part done 2026-10-12: Account section. M7 part done 2026-10-12 (owner checks passed 2026-10-12): every R-UI-1 field; status bar on desktop with the state and last sync time; on mobile the ribbon icon shows the state and Show sync status the time (R-UI-2 amended 2026-10-12, 0.5.1); notices for errors and conflicts only; tested in the pure modules) |
+| R-UI-1…3 | M2, M7 | ☑ (M2 part done 2026-10-12: Account section. M7 part done 2026-10-12 (owner checks passed 2026-10-12): every R-UI-1 field; status bar on desktop with the state and last sync time; on mobile the ribbon icon shows the state and Show sync status the time (R-UI-2 amended 2026-10-12, 0.5.1); notices for errors and conflicts only; tested in the pure modules; M8 2026-10-17: the OneDrive storage line (T-D7), the Verbose logging toggle, error notice text for every code, and settings rows that follow the sign-in state (Obsidian caches definitions)) |
 | R-SEC-1, R-SEC-2 | M2 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 M2 part (SecretStorage observed on both devices, including a locked GNOME keyring) — README residual-risk text is owed in M9 |
-| R-SEC-3 | M3, M8 | ☐ (M3 part done 2026-10-12: typed redacting logger, unit tested; the sentinel test is M8) |
+| R-SEC-3 | M3, M8 | ☑ (M3 part done 2026-10-12: typed redacting logger, unit tested; M8 part done 2026-10-13: the sentinel test runs full syncs over the production stack and finds no name, content, token, URL or server message in the ring buffer or any console call) |
 | R-SEC-4 | M3, M4 | ☐ (M3 part done 2026-10-12: Graph JSON, ids, names, sizes, tags, hashes, links and transfer URLs validated; paths are M4) — M4 part done 2026-10-12: remote-derived paths validated by `remoteToVaultPath` |
 | R-SEC-5 | M1, M9 | ☐ (M1 part done: lockfile, Dependabot, CodeQL, audit, SHA pins, and secret scanning and push protection verified 2026-10-12; release attestation is M9) |
 | R-SEC-6 | M1 | ☑ (M1, 2026-10-12) |

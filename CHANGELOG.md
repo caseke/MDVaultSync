@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Milestone 8 is complete: the owner's end-to-end checks passed on the iPad and Ubuntu (0.6.4).
+
+0.6.4: no more "You're already signed in" notice when opening settings.
+
+### Fixed
+
+- In 0.6.3, opening the MDVaultSync settings while signed in showed "You're already signed in. Sign out first to use a different account." every time. Obsidian prepares hidden settings rows too, and the hidden **Sign in** row tried to start a sign-in. Hidden rows now do nothing.
+
+0.6.3: a fix for the settings freeze (to be confirmed on both devices).
+
+### Fixed
+
+- If you signed out with the command, or your Microsoft account removed this app's access, while settings were closed, opening the MDVaultSync settings could freeze Obsidian. Obsidian kept showing the settings as they were when you were signed in, including a storage check that can't work without a sign-in. The settings now always show the rows for your current state, and the storage line doesn't check anything until you're signed in.
+
+0.6.2: the settings freeze after access was removed (in progress).
+
+### Fixed
+
+- After this app's access was removed at your Microsoft account, opening the MDVaultSync settings could freeze Obsidian. The settings tab no longer redraws itself while it's closed. This is a likely cause, not a confirmed one; the next device check decides it.
+
+### Added
+
+- With **Verbose logging** on, the settings tab writes short markers to the developer console (no names or tokens), to find where a freeze stops.
+
+0.6.1: fixes from the owner's first pass of the Milestone 8 device checks.
+
+### Fixed
+
+- After a large upload was cut off at the very end (for example by airplane mode), the next sync could make a conflict copy of a file that was identical on both sides. A sync now compares the two versions before it makes a copy, and only keeps both when they really differ.
+- A file named like `a:b.md` was reported as "would land outside the vault". It's now reported as an invalid name (OneDrive doesn't allow `:`). It was never uploaded either way. Renaming a synced note to such a name now keeps its OneDrive copy, as other invalid names already did, instead of deleting it there.
+
+### Added
+
+- **Verbose logging** in Settings → Diagnostics writes each log line to the developer console too (the same content as **Copy log**: no file names, contents or tokens).
+- The log now marks first-sync merges and records each step of a sign-in renewal, to help find the cause of a freeze seen after the app's access was removed.
+
+0.6.0: Milestone 8, hardening. The owner's end-to-end checks on both devices are still to come.
+
+### Added
+
+- Settings → Account shows **OneDrive storage**: used, total and free space. It warns when 10 % or less is free, and when the drive is full. The recycle bin counts toward it.
+- A full OneDrive now gives a clear notice: sync stops, and the notice says to free up space, including the recycle bin.
+- Every error a sync can meet now has a readable notice text.
+
+### Changed
+
+- A request that OneDrive doesn't answer now gives up after a while: 2 minutes, plus more for large files (a 10 MB piece of an upload gets about 5 minutes). Before, a stalled request could hold up syncing for as long as it hung (about 24 minutes once on the iPad). The sync ends as "partial" and the next one carries on. The last piece of a large upload is the exception: it always waits for OneDrive's answer, so a late answer can never overwrite a newer edit.
+- While two or more requests are still hanging after giving up, automatic syncs (startup and interval) wait, and a notice says so once. **Sync now** still runs, and restarting Obsidian clears it.
+
+### Security
+
+- A new test runs whole syncs with marker text in file names, contents, sign-in tokens and server messages, and checks that none of it reaches the plugin's log or the developer console.
+
 0.5.1: the sync state on the iPad.
 
 Milestone 7 is complete: the owner's checks passed on the iPad and Ubuntu.

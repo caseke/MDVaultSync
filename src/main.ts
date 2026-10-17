@@ -20,18 +20,20 @@ import { classifyError } from "./remote/classify.ts";
 import { GraphClient } from "./remote/graph.ts";
 import { AuthorizingTransport } from "./remote/http.ts";
 import { RetryPolicy } from "./remote/retry.ts";
+import { TimeoutTransport } from "./remote/timeout.ts";
 import { defaultDeviceName, isValidClientId, pauseFromData, parseData, snapshotForSave, toEngineSettings, type PluginData } from "./settings.ts";
 import { AUTH_ERROR_MESSAGES, authErrorText } from "./ui/auth-messages.ts";
 import { ConfirmDeletesModal } from "./ui/confirm-deletes-modal.ts";
 import { DiagnosticsModal, FILE_REPLACE_TEXT } from "./ui/diagnostics-modal.ts";
 import { noticesFor, type NoticeSpec } from "./ui/notices.ts";
 import { PlanPreviewModal } from "./ui/plan-preview-modal.ts";
+import { QuotaCache } from "./ui/quota.ts";
 import type { PromptModal } from "./ui/prompt-modal.ts";
 import { ReportModal } from "./ui/report-modal.ts";
 import { MDVaultSyncSettingTab } from "./ui/settings-tab.ts";
 import { SignInModal } from "./ui/sign-in-modal.ts";
 import { DEFAULT_ICON, statusIcon, statusText } from "./ui/status.ts";
-import { PATTERNS_TEXT, triggerDecision } from "./ui/triggers.ts";
+import { PATTERNS_TEXT, STUCK_TEXT, triggerDecision } from "./ui/triggers.ts";
 
 /**
  * ObsidianVault's structural view of app.vault and app.fileManager. It only ever hands back the TFile and TFolder
@@ -77,6 +79,12 @@ export default class MDVaultSyncPlugin extends Plugin {
 	/** `sync-state.json` in the plugin folder (design §12). */
 	stateStore!: StateStore;
 	engine!: Engine;
+	/** OneDrive storage for the settings tab (T-D7): one read per 5 minutes at most. */
+	quota!: QuotaCache;
+	/** Every request goes through it; its `stuck` count pauses unattended runs (ui/triggers.ts). */
+	private timeouts!: TimeoutTransport;
+	/** The stuck-requests notice showed during the current pause (reset once a trigger runs again). */
+	private stuckNoticeShown = false;
 	/** The latest sync report (design §5.6), for the settings tab, the report modal and repeat-notice checks. */
 	lastReport: SyncReport | null = null;
 	/** Device name used when the setting is empty: "iPad" or "Ubuntu" on the owner's devices (design §11). */
@@ -125,15 +133,21 @@ export default class MDVaultSyncPlugin extends Plugin {
 		});
 		// Before AuthClient reads the token: a sign-in left by an uninstalled copy is removed (R-AUTH-9).
 		await this.clearLeftoverSignIn(!(await isLeftoverInstall(this.app.vault.adapter, this.pluginDir)));
-		const transport = createRequestUrlTransport((p) => requestUrl(p));
+		// requestUrl has no timeout: every request, the token endpoint's included, races a timer (design §6.1).
+		const transport = (this.timeouts = new TimeoutTransport(createRequestUrlTransport((p) => requestUrl(p)), (ms, fn) => {
+			const id = window.setTimeout(fn, ms);
+			return () => window.clearTimeout(id);
+		}));
 		const clock: Clock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => window.setTimeout(r, ms)) };
+		// Before AuthClient, which logs refresh breadcrumbs. "Verbose logging" mirrors events to the console (design §9).
+		this.logger = new RingLogger({ now: () => Date.now(), debug: () => this.data.verboseLogging });
 		this.auth = new AuthClient({
 			transport,
 			tokens: this.tokenStore,
 			clock,
 			getClientId: () => this.data.clientId,
+			logger: this.logger,
 		});
-		this.logger = new RingLogger({ now: () => Date.now() });
 		// Graph stack: requestUrl → Authorization for graph.microsoft.com only (401 → refresh once) → retry (design §6.1).
 		const graphTransport = new AuthorizingTransport(transport, this.auth);
 		const retry = new RetryPolicy({ clock, logger: this.logger });
@@ -148,6 +162,16 @@ export default class MDVaultSyncPlugin extends Plugin {
 				...(deltaForm ? { deltaForm } : {}),
 			});
 		this.graph = graphFor();
+		// Quota reads send once (no backoff, no Retry-After wait, no pause, no budget): a settings render never stalls
+		// or throttles a sync (M8 review). A failure is reused for a minute by QuotaCache.
+		const quotaGraph = new GraphClient({
+			transport: graphTransport,
+			transferTransport: transport,
+			retry: new RetryPolicy({ clock, logger: this.logger, singleAttempt: true }),
+			clock,
+			logger: this.logger,
+		});
+		this.quota = new QuotaCache(() => quotaGraph.quota(), () => Date.now());
 
 		// The sync engine (design §1): every byte passes the transform seam (R-ENG-4); v1 is the identity transform.
 		const transform = new IdentityTransform();
@@ -311,8 +335,15 @@ export default class MDVaultSyncPlugin extends Plugin {
 
 	/** Every trigger comes here; the engine's single-flight lock keeps runs sequential (R-TRIG-4). */
 	async sync(trigger: Trigger): Promise<void> {
-		const d = triggerDecision(trigger, this.auth.status, isValidClientId(this.data.clientId), !this.patternsInvalid);
-		if (d.action === "skip") return;
+		const d = triggerDecision(trigger, this.auth.status, isValidClientId(this.data.clientId), !this.patternsInvalid, this.timeouts.stuck);
+		if (d.action === "skip") {
+			if (d.reason === "stuck" && !this.stuckNoticeShown) {
+				this.stuckNoticeShown = true;
+				new Notice(STUCK_TEXT, 0);
+			}
+			return;
+		}
+		if (d.action === "run") this.stuckNoticeShown = false;
 		if (d.action === "notice") {
 			new Notice(d.text);
 			return;
@@ -368,6 +399,8 @@ export default class MDVaultSyncPlugin extends Plugin {
 	private onReport(report: SyncReport): void {
 		const previous = this.lastReport;
 		this.lastReport = report;
+		// A full drive: the storage line in settings reads again rather than showing a stale figure.
+		if (report.errors.some((e) => e.code === "quota")) this.quota.invalidate();
 		for (const n of noticesFor(report, previous)) this.showNotice(n);
 		this.settingTab.refreshReport();
 	}
@@ -472,6 +505,8 @@ export default class MDVaultSyncPlugin extends Plugin {
 		// The engine is reset first, so a running sync can't save state after the clear.
 		const { tokenCleared, stateCleared } = await clearSession({ engine: this.engine, signOut: () => this.auth.signOut(), store: this.stateStore });
 		this.lastReport = null;
+		// The next sign-in may be another account.
+		this.quota.invalidate();
 		this.settingTab.refresh();
 		this.updateStatus();
 		if (!tokenCleared) {

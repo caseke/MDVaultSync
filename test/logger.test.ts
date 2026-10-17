@@ -92,3 +92,13 @@ test("entries() returns copies", () => {
 test("NULL_LOGGER accepts events", () => {
 	NULL_LOGGER.event("graph.request", { status: 200 });
 });
+
+test("ui.settings breadcrumbs are kept, with a fixed code and a count (M8 matrix row 10)", () => {
+	const log = new RingLogger({ now: () => 0 });
+	log.event("ui.settings", { code: "account-2-done" });
+	log.event("ui.settings", { code: "refresh", count: 3 });
+	assert.deepEqual(log.entries(), [
+		{ t: 0, op: "ui.settings", code: "account-2-done" },
+		{ t: 0, op: "ui.settings", code: "refresh", count: 3 },
+	]);
+});

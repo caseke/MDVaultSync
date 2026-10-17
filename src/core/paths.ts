@@ -91,12 +91,17 @@ export function validatePath(path: string, pathPrefixLen: number, isFolder: bool
 	return null;
 }
 
-function containmentOfSegments(segs: readonly string[], configDir: string): ContainmentProblem | null {
+/**
+ * "drive-prefix": a first segment like `C:`. Refused like any containment problem (T-T1), but reported as
+ * `invalid-name` in plans and reports, since `:` is never allowed in a OneDrive name [G-NM-1] (M8 matrix row 6:
+ * a local `a:b.md` read "would land outside the vault").
+ */
+function containmentOfSegments(segs: readonly string[], configDir: string): ContainmentProblem | "drive-prefix" | null {
 	if (segs.length === 0) return "outside-vault";
 	for (const seg of segs) {
 		if (seg === "" || seg === "." || seg === ".." || CONTROL_OR_SEPARATOR.test(seg)) return "outside-vault";
 	}
-	if (DRIVE_PREFIX.test(segs[0] ?? "")) return "outside-vault";
+	if (DRIVE_PREFIX.test(segs[0] ?? "")) return "drive-prefix";
 	if (segs.some((s) => s.startsWith("."))) return "hidden";
 	// configDir may be renamed and need not start with a dot. Compared case-insensitively: on a case-insensitive
 	// file system (the iPad), a remote "Config/" would land inside a configDir named "config" (T-E1).
@@ -110,7 +115,15 @@ function containmentOfSegments(segs: readonly string[], configDir: string): Cont
  */
 export function containmentProblem(path: string, configDir: string): ContainmentProblem | null {
 	if (path !== nfc(path)) return "outside-vault";
-	return containmentOfSegments(path.split("/"), configDir);
+	const c = containmentOfSegments(path.split("/"), configDir);
+	return c === "drive-prefix" ? "outside-vault" : c;
+}
+
+/** containmentProblem for a skip reason: a drive-letter name is `invalid-name` (still never written). */
+export function containmentSkipReason(path: string, configDir: string): ContainmentProblem | "invalid-name" | null {
+	if (path !== nfc(path)) return "outside-vault";
+	const c = containmentOfSegments(path.split("/"), configDir);
+	return c === "drive-prefix" ? "invalid-name" : c;
 }
 
 /**
@@ -122,7 +135,7 @@ export function containmentProblem(path: string, configDir: string): Containment
 export function remoteToVaultPath(segments: readonly string[], configDir: string, pathPrefixLen: number, isFolder: boolean): RemotePathResult {
 	const segs = segments.map(nfc);
 	const contained = containmentOfSegments(segs, configDir);
-	if (contained) return { ok: false, reason: contained };
+	if (contained) return { ok: false, reason: contained === "drive-prefix" ? "invalid-name" : contained };
 	const joined = segs.join("/");
 	const invalid = validatePath(joined, pathPrefixLen, isFolder);
 	if (invalid) return { ok: false, reason: invalid };

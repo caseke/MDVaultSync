@@ -126,7 +126,11 @@ export interface TokenStore {
 export interface AccessTokenProvider { getAccessToken(): Promise<string>; } // single-flight refresh
 
 // ---------- HTTP ----------
-export interface HttpRequest { url: string; method: string; headers?: Record<string, string>; body?: ArrayBuffer | string; }
+export interface HttpRequest {
+  url: string; method: string; headers?: Record<string, string>; body?: ArrayBuffer | string;
+  /** Overrides the size-based default of the timeout decorator (src/remote/timeout.ts); downloads set it from the item size. */
+  timeoutMs?: number;
+}
 export interface HttpResponse { status: number; headers: Record<string, string>; body: ArrayBuffer; }
 export interface HttpTransport { send(req: HttpRequest): Promise<HttpResponse>; } // never throws on status; throws on network failure
 
@@ -177,4 +181,5 @@ export type EngineStatus =
   | { state: "waiting-for-user" } | { state: "error"; code: string } | { state: "sign-in-required" };
 export interface SyncEngine { requestSync(trigger: Trigger): Promise<SyncReport>; readonly status: EngineStatus; }
 export type OpKind = "auth.refresh" | "auth.signin" | "graph.request" | "sync.run" | "sync.pull" | "sync.scan"
-  | "sync.plan" | "sync.exec" | `op.${PlanOp["kind"]}` | "upload.fragment" | "upload.resume" | "retry.backoff" | "state.save";
+  | "sync.plan" | "sync.exec" | `op.${PlanOp["kind"]}` | "upload.fragment" | "upload.resume" | "retry.backoff" | "state.save"
+  | "ui.settings"; // M8: settings-tab breadcrumbs (matrix row 10)

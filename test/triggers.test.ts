@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Trigger } from "../src/core/ports.ts";
-import { triggerDecision } from "../src/ui/triggers.ts";
+import { STUCK_LIMIT, triggerDecision } from "../src/ui/triggers.ts";
 
 const ALL: Trigger[] = ["startup", "interval", "command", "ribbon", "preview", "rerun"];
 
@@ -30,4 +30,13 @@ test("invalid exclude patterns pause every trigger until fixed (fail closed, M7 
 		const d = triggerDecision(t, "signed-in", true, false);
 		assert.ok(d.action === "notice" && /[Ee]xclude patterns/.test(d.text), t);
 	}
+});
+
+test("requests still hanging after their timeout pause unattended runs; user actions still run (review M8, T-D6)", () => {
+	for (const t of ["startup", "interval", "rerun"] as Trigger[]) {
+		assert.deepEqual(triggerDecision(t, "signed-in", true, true, STUCK_LIMIT), { action: "skip", reason: "stuck" }, t);
+		assert.deepEqual(triggerDecision(t, "signed-in", true, true, STUCK_LIMIT - 1), { action: "run" }, t);
+	}
+	for (const t of ["command", "ribbon", "preview"] as Trigger[]) assert.deepEqual(triggerDecision(t, "signed-in", true, true, 10), { action: "run" }, t);
+	assert.equal(STUCK_LIMIT, 2);
 });

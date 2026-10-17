@@ -3,6 +3,7 @@
 // sessions on a non-Graph host, and pre-authenticated download URLs. It records Authorization leaks.
 import { createHash } from "node:crypto";
 import type { HttpRequest, HttpResponse, HttpTransport } from "../../src/core/ports.ts";
+import { quickXorHash } from "../../src/core/quickxor.ts";
 
 export const GRAPH = "https://graph.microsoft.com/v1.0";
 export const UPLOAD_HOST = "https://api.onedrive.com";
@@ -51,6 +52,8 @@ export interface FakeGraphOptions {
 	omitDownloadUrlOnSelect?: boolean;
 	/** Leave @microsoft.graph.downloadUrl out of every item response. */
 	omitDownloadUrl?: boolean;
+	/** Report the real QuickXorHash (end-to-end tests through RemoteContent) instead of a SHA-1 stand-in. */
+	realHashes?: boolean;
 }
 
 export function sha1Base64(b: Uint8Array): string {
@@ -101,6 +104,7 @@ export class FakeGraph implements HttpTransport {
 			downloadUrlPad: opts.downloadUrlPad ?? 0,
 			omitDownloadUrlOnSelect: opts.omitDownloadUrlOnSelect ?? true,
 			omitDownloadUrl: opts.omitDownloadUrl ?? false,
+			realHashes: opts.realHashes ?? false,
 		};
 		this.nodes.set("ROOT", this.node("ROOT", "root", null, true));
 		this.nodes.set("APPS", this.node("APPS", "Apps", "ROOT", true));
@@ -177,7 +181,7 @@ export class FakeGraph implements HttpTransport {
 		if (n.isFolder) o["folder"] = { childCount: this.children(n.id).length };
 		else {
 			o["cTag"] = `"c:{${n.id}},${n.contentVersion}"`;
-			o["file"] = { mimeType: "application/octet-stream", ...(opts.hashes === false ? {} : { hashes: { quickXorHash: sha1Base64(n.content) } }) };
+			o["file"] = { mimeType: "application/octet-stream", ...(opts.hashes === false ? {} : { hashes: { quickXorHash: this.opts.realHashes ? quickXorHash(n.content.slice().buffer) : sha1Base64(n.content) } }) };
 			if (opts.downloadUrl) {
 				const pad = this.opts.downloadUrlPad ? `&pad=${"p".repeat(this.opts.downloadUrlPad)}` : "";
 				o["@microsoft.graph.downloadUrl"] = `${this.opts.downloadHost}/dl/${n.id}?tempauth=${URL_SECRET}${pad}`;

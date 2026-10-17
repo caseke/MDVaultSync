@@ -3,14 +3,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MAX_PENDING_HINTS, PROMPT_TIMEOUT_MS } from "../src/core/engine.ts";
-import type { DeltaPage, PlanOp, VaultPath } from "../src/core/ports.ts";
+import type { DeltaPage, PlanOp, RemoteItem, RemotePort, VaultPath } from "../src/core/ports.ts";
 import { AuthError } from "../src/remote/auth.ts";
-import { ResyncRequired } from "../src/remote/errors.ts";
+import { GraphError, NetworkError, ResyncRequired } from "../src/remote/errors.ts";
 import { FakeRemote } from "./fakes/fake-remote.ts";
 import { CrashSwitch, Device, UNIT, remoteFiles, vaultFiles } from "./fakes/device.ts";
 import { STAMP } from "./fakes/plan-fixtures.ts";
 import { deferred } from "./fakes/fake-http.ts";
 import { XorTransform, withOverrides, xor } from "./fakes/sync-fakes.ts";
+import { quickXorHash } from "../src/core/quickxor.ts";
 
 /** Lets every queued promise continuation run (the engine reaches its next real wait). */
 const tasks = () => new Promise<void>((res) => setImmediate(res));
@@ -811,4 +812,180 @@ test("the full re-hash after a hint overflow stays pending through a cancelled r
 	const r = await a.sync("interval");
 	assert.equal(r.counts["upload-replace"], 1, "still re-hashed after the cancel and the reset");
 	assert.equal(remote.contentAt("m.md"), "SAME SIZE");
+});
+
+// ---------- M8 hardening ----------
+
+test("a full drive (507) mid-run fails the run as quota, keeps what was done, and retries cleanly after space is freed (T-D7)", async () => {
+	const remote = new FakeRemote();
+	let full = false;
+	let uploads = 0;
+	const a = new Device(remote, {
+		concurrency: 1,
+		remote: (r) =>
+			withOverrides(r, {
+				uploadNew: (parentId: string, name: string, data: ArrayBuffer) => {
+					if (full && ++uploads > 1) return Promise.reject(new GraphError(507, "quotaLimitReached"));
+					return r.uploadNew(parentId, name, data);
+				},
+			}),
+	});
+	a.vault.write("first.md", "1");
+	await a.sync("startup");
+	full = true;
+	for (const n of ["b", "c", "d"]) a.vault.write(`${n}.md`, n);
+	const r = await a.sync("interval");
+	assert.equal(r.result, "failed");
+	assert.equal(r.errors[0]?.code, "quota");
+	assert.deepEqual(a.engine.status, { state: "error", code: "quota" });
+	const uploaded = Object.keys(remoteFiles(remote)).filter((p) => p !== "first.md");
+	assert.equal(uploaded.length, 1, "the upload before the 507 landed");
+	assert.ok(a.store.state?.files[uploaded[0] as VaultPath], "and its record was saved");
+	full = false;
+	const again = await a.sync("interval");
+	assert.equal(again.result, "ok");
+	assert.deepEqual(Object.keys(remoteFiles(remote)).sort(), ["b.md", "c.md", "d.md", "first.md"]);
+});
+
+/** The remote as OneDrive may show a file right after a large upload: no quickXorHash yet [G-DL-8]. */
+function hashless(r: RemotePort): RemotePort {
+	const strip = (it: RemoteItem): RemoteItem => (it.isFolder ? it : { ...it, quickXorHash: null });
+	return withOverrides(r, {
+		delta: async (link: string | null) => {
+			const page = await r.delta(link);
+			return { ...page, items: page.items.map(strip) };
+		},
+		getItem: async (id: string) => {
+			const it = await r.getItem(id);
+			return it && strip(it);
+		},
+		getChildByName: async (parentId: string, name: string) => {
+			const it = await r.getChildByName(parentId, name);
+			return it && strip(it);
+		},
+	});
+}
+
+test("an upload whose commit answer was lost, then listed with no hash, is adopted: no conflict copy for identical bytes (M8 matrix row 2)", async () => {
+	const remote = new FakeRemote();
+	let dropCommit = true;
+	const a = new Device(remote, {
+		remote: (r) =>
+			hashless(
+				withOverrides(r, {
+					// The final fragment commits on OneDrive, then airplane mode eats the answer.
+					putFragment: async (url: string, start: number, total: number, data: ArrayBuffer) => {
+						const item = await r.putFragment(url, start, total, data);
+						if (item && dropCommit) {
+							dropCommit = false;
+							throw new NetworkError();
+						}
+						return item;
+					},
+				}),
+			),
+	});
+	a.vault.write("first.md", "1");
+	await a.sync("startup");
+	const big = lcg(2 * UNIT + 100, 7);
+	a.vault.write("big.bin", big);
+	const r1 = await a.sync("command");
+	assert.equal(r1.result, "partial", "the lost answer ends the run partial");
+	const r2 = await a.sync("command");
+	assert.equal(r2.result, "ok");
+	assert.equal(r2.conflicts.length, 0, "identical bytes: no conflict copy");
+	assert.deepEqual(Object.keys(vaultFiles(a.vault)).sort(), ["big.bin", "first.md"]);
+	assert.deepEqual(Object.keys(remoteFiles(remote)).sort(), ["big.bin", "first.md"]);
+	assert.ok(a.store.state?.files["big.bin" as VaultPath], "the pair is recorded as synced");
+	assert.equal(await settle(a), 1);
+});
+
+test("a no-history pair with no remote hash and different bytes still gets a conflict copy (M8 matrix row 2)", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote, { remote: hashless });
+	a.vault.write("first.md", "1");
+	await a.sync("startup");
+	remote.putFile("n.md", "theirs");
+	a.vault.write("n.md", "mine!!");
+	const r = await a.sync("command");
+	assert.equal(r.conflicts.length, 1);
+	assert.equal(a.vault.contentAt("n.md"), "theirs");
+	assert.equal(a.vault.contentAt(r.conflicts[0]?.copyPath ?? ""), "mine!!");
+});
+
+test("a no-history pair with no remote hash and the same bytes is adopted without a copy (M8 matrix row 2)", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote, { remote: hashless });
+	a.vault.write("first.md", "1");
+	await a.sync("startup");
+	remote.putFile("n.md", "same");
+	a.vault.write("n.md", "same");
+	const r = await a.sync("command");
+	assert.equal(r.result, "ok");
+	assert.equal(r.conflicts.length, 0);
+	assert.deepEqual(Object.keys(vaultFiles(a.vault)).sort(), ["first.md", "n.md"]);
+	assert.equal(await settle(a), 1);
+});
+
+test("step 0 adopt: an edit made while the remote bytes download isn't masked; the next run uploads it (M8 review)", async () => {
+	const remote = new FakeRemote();
+	let editDuring = false;
+	const a = new Device(remote, {
+		remote: (r) =>
+			hashless(
+				withOverrides(r, {
+					download: async (id: string, size?: number) => {
+						const bytes = await r.download(id, size);
+						if (editDuring) {
+							editDuring = false;
+							a.vault.write("n.md", "edited during the download");
+						}
+						return bytes;
+					},
+				}),
+			),
+	});
+	a.vault.write("first.md", "1");
+	await a.sync("startup");
+	remote.putFile("n.md", "same");
+	a.vault.write("n.md", "same");
+	editDuring = true;
+	const r = await a.sync("command");
+	assert.equal(r.conflicts.length, 0);
+	await a.sync("interval");
+	assert.equal(remote.contentAt("n.md"), "edited during the download", "the edit reached OneDrive");
+	assert.equal(a.vault.contentAt("n.md"), "edited during the download");
+});
+
+test("step 0 adopt works through a non-identity transform (stored bytes are compared, R-ENG-4)", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote, { remote: hashless, transform: new XorTransform() });
+	a.vault.write("first.md", "1");
+	await a.sync("startup");
+	remote.putFile("n.md", new Uint8Array(xor(new TextEncoder().encode("same").buffer)));
+	a.vault.write("n.md", "same");
+	const r = await a.sync("command");
+	assert.equal(r.result, "ok");
+	assert.equal(r.conflicts.length, 0);
+	assert.equal(a.vault.contentAt("n.md"), "same");
+});
+
+test("step 0 with downloaded bytes compares bytes, not just the non-cryptographic hash (M8 review, T-T4)", async () => {
+	// QuickXorHash is XOR-linear and its bit positions repeat every 160 bytes: flipping the same bit in bytes 0
+	// and 160 keeps the hash and the length. A remote listed without a hash must not be adopted on the hash alone.
+	const mineBytes = lcg(200, 3);
+	const theirsBytes = mineBytes.slice();
+	theirsBytes[0] = (theirsBytes[0] as number) ^ 1;
+	theirsBytes[160] = (theirsBytes[160] as number) ^ 1;
+	assert.equal(quickXorHash(mineBytes), quickXorHash(theirsBytes), "a real collision");
+	const remote = new FakeRemote();
+	const a = new Device(remote, { remote: hashless });
+	a.vault.write("first.md", "1");
+	await a.sync("startup");
+	remote.putFile("n.bin", theirsBytes);
+	a.vault.write("n.bin", mineBytes);
+	const r = await a.sync("command");
+	assert.equal(r.conflicts.length, 1, "different bytes keep both versions");
+	assert.deepEqual(a.vault.files.get("n.bin")?.data, theirsBytes, "OneDrive's version keeps the name");
+	assert.deepEqual(a.vault.files.get(r.conflicts[0]?.copyPath ?? "")?.data, mineBytes, "this device's version is in the copy");
 });

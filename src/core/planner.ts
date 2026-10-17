@@ -12,7 +12,7 @@
 // Union mode (first sync, resync, approot change) turns every delete into a restore (R-FIRST-1).
 import { conflictCopyPath } from "./conflict-name.ts";
 import { exclusionReason } from "./exclude.ts";
-import { caseKey, containmentProblem, findCollisions, toVaultPath, validatePath } from "./paths.ts";
+import { caseKey, containmentSkipReason, findCollisions, toVaultPath, validatePath } from "./paths.ts";
 import type { FileRecord, PendingConflict, Plan, PlanOp, RemoteItem, SkipReason, SyncState, VaultPath } from "./ports.ts";
 import { buildRemoteTree } from "./remote-tree.ts";
 
@@ -143,7 +143,10 @@ export function plan(state: SyncState, local: readonly ScannedEntry[], remoteInd
 
 		const p = toVaultPath(e.path);
 		let reason: SkipReason | null = collisions.get(e.path) ?? null;
-		if (!reason && (p === null || containmentProblem(p, configDir) === "outside-vault")) reason = "outside-vault";
+		if (!reason) {
+			const c = p === null ? "outside-vault" : containmentSkipReason(p, configDir);
+			if (c === "outside-vault" || c === "invalid-name") reason = c;
+		}
 		if (!reason && p) reason = exclusionReason(p, configDir, excludePatterns, e.isFolder) ?? validatePath(p, pathPrefixLen, e.isFolder);
 		if (!reason && !e.isFolder && e.size > maxFileSize) reason = "too-large";
 		if (reason || !p) {

@@ -17,6 +17,10 @@ import {
 	parseThreshold,
 	type PluginData,
 } from "../settings.ts";
+import { accountRowVisible, isQuietPrepareError, type AccountRow } from "./account-rows.ts";
+import { quotaText } from "./quota.ts";
+import { RecentCounter } from "./recent-counter.ts";
+import { refreshAction } from "./settings-refresh.ts";
 import { renderReport } from "./report-view.ts";
 
 const STATUS_TEXT: Record<AuthStatus, string> = {
@@ -28,10 +32,19 @@ const STATUS_TEXT: Record<AuthStatus, string> = {
 interface Row {
 	name: string;
 	desc?: string;
-	render(setting: Setting): void;
+	/**
+	 * Evaluated at render time (Obsidian 1.13+ evaluates `visible` on every render; the fallback renderer when it
+	 * builds). Obsidian reuses the definitions built at load, so nothing that depends on state may be decided
+	 * when the rows are listed (M8 matrix row 10).
+	 */
+	visible?: () => boolean;
+	/** May return a cleanup, run before the row is torn down (1.13+). */
+	render(setting: Setting): void | (() => void);
 }
 
 interface Section {
+	/** Breadcrumb prefix (a fixed code). */
+	id: string;
 	heading: string;
 	rows: Row[];
 }
@@ -46,8 +59,11 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 	private shown = false;
 	/** Bumped on every sign-in control render, so a slow prepare can't fill in an outdated link. */
 	private renderId = 0;
+	/** The Sign in row, so a client ID change can rebuild just its control. */
+	private signInSetting: Setting | null = null;
 	/** The rendered report, refreshed alone after each sync so typing in another field keeps its focus. */
 	private reportEl: HTMLElement | null = null;
+	private readonly refreshes = new RecentCounter(1_000);
 
 	constructor(app: App, plugin: MDVaultSyncPlugin) {
 		super(app, plugin);
@@ -56,10 +72,28 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 
 	/** Re-render after auth or sync changes: update() on 1.13+, the fallback renderer before. */
 	refresh(): void {
-		// Only while the tab is on screen: rendering prepares a sign-in, and only hide() discards it (R-SEC-1).
-		if (!this.containerEl.isConnected) return;
-		if (requireApiVersion("1.13.0")) this.update();
-		else if (this.shown) this.renderFallback();
+		this.crumb("refresh", this.refreshes.hit(Date.now()));
+		// 1.13+: always rebuild the definitions Obsidian caches, even while the tab is closed. It reuses them when
+		// the tab opens (it doesn't call getSettingDefinitions() again; observed on 1.14.4, M8 matrix row 10) [O-API-21].
+		// update() on a closed tab should only store them ("Stores the result…", obsidian.d.ts); that is observed
+		// only before the first display, so a prepare that lands on a detached link discards itself (below).
+		if (requireApiVersion("1.13.0")) {
+			// A settings failure must never break the auth flow that called us (notify() has no try/catch).
+			try {
+				this.update();
+			} catch (e) {
+				console.error(`MDVaultSync: settings refresh failed (${e instanceof Error ? e.name : "unknown"})`);
+			}
+			return;
+		}
+		// The fallback renderer draws at once, which prepares a sign-in that only hide() discards (R-SEC-1): only
+		// while the tab is on screen.
+		const connected = this.containerEl.isConnected;
+		if (refreshAction({ onScreen: this.shown, connected }) === "skip") {
+			this.crumb(connected ? "refresh-skipped-hidden" : "refresh-skipped-detached");
+			return;
+		}
+		this.renderFallback();
 	}
 
 	/** After a sync: re-render only the report, if it is on screen. */
@@ -67,8 +101,32 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 		if (this.reportEl?.isConnected) renderReport(this.reportEl, this.plugin.lastReport, Date.now());
 	}
 
+	/**
+	 * Breadcrumbs (M8 matrix row 10: the tab froze in the sign-in-required state with nothing in the console).
+	 * Fixed codes only; with Verbose logging on, the last console line names the step that didn't return.
+	 */
+	private crumb(code: string, count?: number): void {
+		// Only with Verbose logging on: a busy tab must not push the sync lines out of the 500-entry log.
+		if (!this.plugin.data.verboseLogging) return;
+		this.plugin.logger.event("ui.settings", count === undefined ? { code } : { code, count });
+	}
+
+	/** Wraps a row's render with start and end breadcrumbs, `<section>-<index>`. */
+	private tracked(section: string, i: number, r: Row): (setting: Setting) => void | (() => void) {
+		return (setting) => {
+			// A row renders only while the tab is on screen; hide() clears this again.
+			this.shown = true;
+			this.crumb(`${section}-${i}`);
+			const cleanup = r.render(setting);
+			this.crumb(`${section}-${i}-done`);
+			return cleanup;
+		};
+	}
+
 	override hide(): void {
+		this.crumb("hide");
 		this.shown = false;
+		this.signInSetting = null;
 		// Invalidate in-flight prepares and drop the untapped link's verifier and state.
 		this.renderId++;
 		this.plugin.auth.discardPrepared();
@@ -76,19 +134,24 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 	}
 
 	override getSettingDefinitions(): SettingDefinitionItem[] {
-		return this.sections().map((s) => ({
+		this.crumb("defs");
+		const defs: SettingDefinitionItem[] = this.sections().map((s) => ({
 			type: "group",
 			heading: s.heading,
-			items: s.rows.map((r) => ({
+			items: s.rows.map((r, i) => ({
 				name: r.name,
 				...(r.desc !== undefined ? { desc: r.desc } : {}),
-				render: (setting: Setting) => r.render(setting),
+				...(r.visible !== undefined ? { visible: r.visible } : {}),
+				render: this.tracked(s.id, i, r),
 			})),
 		}));
+		this.crumb("defs-done");
+		return defs;
 	}
 
 	/** Obsidian before 1.13 only; 1.13+ renders getSettingDefinitions() instead and never calls this. */
 	override display(): void {
+		this.crumb("display");
 		this.renderFallback();
 	}
 
@@ -98,11 +161,12 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		for (const s of this.sections()) {
 			const group = new SettingGroup(containerEl).setHeading(s.heading);
-			for (const r of s.rows) {
+			for (const [i, r] of s.rows.entries()) {
+				if (r.visible && !r.visible()) continue;
 				group.addSetting((setting) => {
 					setting.setName(r.name);
 					if (r.desc !== undefined) setting.setDesc(r.desc);
-					r.render(setting);
+					this.tracked(s.id, i, r)(setting);
 				});
 			}
 		}
@@ -110,10 +174,10 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 
 	private sections(): Section[] {
 		return [
-			{ heading: "Account", rows: this.accountRows() },
-			{ heading: "Sync", rows: this.syncRows() },
-			{ heading: "Last sync report", rows: this.reportRows() },
-			{ heading: "Diagnostics", rows: this.diagnosticsRows() },
+			{ id: "account", heading: "Account", rows: this.accountRows() },
+			{ id: "sync", heading: "Sync", rows: this.syncRows() },
+			{ id: "report", heading: "Last sync report", rows: this.reportRows() },
+			{ id: "diag", heading: "Diagnostics", rows: this.diagnosticsRows() },
 		];
 	}
 
@@ -126,14 +190,17 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 
 	private accountRows(): Row[] {
 		const auth = this.plugin.auth;
-		const signedIn = auth.status === "signed-in";
-		let signInSetting: Setting | null = null;
+		// Read at render time, never here: these definitions outlive the state they were built in (row 10).
+		const signedIn = () => auth.status === "signed-in";
+		const shows = (row: AccountRow) => () => accountRowVisible(row, auth.status);
+		// Obsidian 1.14 renders hidden rows too (and only hides them), so each state-dependent row checks first.
+		const hidden = (row: AccountRow) => !accountRowVisible(row, auth.status);
 		const idDesc = (value: string) => {
-			if (signedIn) return "Sign out to change it. The sign-in belongs to this ID.";
+			if (signedIn()) return "Sign out to change it. The sign-in belongs to this ID.";
 			if (value === "") return "From your app registration in Microsoft Entra. See the setup guide in the README.";
 			return isValidClientId(value) ? "Saved." : "Not a valid ID. It looks like 00000000-0000-0000-0000-000000000000.";
 		};
-		const rows: Row[] = [
+		return [
 			{
 				name: "Status",
 				render: (s) => {
@@ -148,53 +215,89 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 						text
 							.setPlaceholder("00000000-0000-0000-0000-000000000000")
 							.setValue(this.plugin.data.clientId)
-							.setDisabled(signedIn)
+							.setDisabled(signedIn())
 							.onChange(async (raw) => {
 								const value = raw.trim();
 								s.setDesc(idDesc(value));
 								if (value === "" || isValidClientId(value)) {
 									await this.save({ clientId: value });
 									// Rebuild only the sign-in control, so the text field keeps focus.
-									if (signInSetting) this.renderSignInControl(signInSetting);
+									if (this.signInSetting?.settingEl.isConnected && !signedIn()) this.renderSignInControl(this.signInSetting);
 								}
 							}),
 					);
 				},
 			},
-		];
-		if (signedIn) {
-			rows.push({
+			{
+				name: "OneDrive storage",
+				visible: shows("storage"),
+				render: (s) => {
+					if (hidden("storage")) return;
+					this.renderQuota(s);
+				},
+			},
+			{
 				name: "Sign out",
 				desc: "Removes the stored sign-in and sync state from this device. Local files are untouched.",
+				visible: shows("sign-out"),
 				render: (s) => {
+					if (hidden("sign-out")) return;
 					s.addButton((b) => b.setButtonText("Sign out").onClick(() => void this.plugin.signOut()));
 				},
-			});
-		} else {
-			rows.push({
+			},
+			{
 				name: "Sign in",
 				desc: "Opens Microsoft's sign-in page in your browser, then returns to Obsidian.",
+				visible: shows("sign-in"),
 				render: (s) => {
-					signInSetting = s;
+					// While signed in this row is hidden but still rendered: no prepare (R-SEC-1), no notice.
+					if (hidden("sign-in")) return;
+					this.signInSetting = s;
 					this.renderSignInControl(s);
+					// Torn down (a re-render, or the tab closing): drop the untapped link's verifier and state (R-SEC-1).
+					// Only while no newer render has claimed the row: a cleanup that runs after its replacement rendered
+					// must not kill the new link.
+					return () => {
+						if (this.signInSetting !== s) return;
+						this.signInSetting = null;
+						this.renderId++;
+						this.plugin.auth.discardPrepared();
+					};
 				},
-			});
-		}
-		rows.push({
-			name: "Token storage",
-			render: (s) => {
-				if (this.plugin.tokenStore.backend === "plugin-data") {
-					setDescError(
-						s,
-						"Obsidian secret storage failed on this device, so the sign-in token is stored unencrypted " +
-							"in this plugin's data file. Use device encryption, and sign in again once secret storage works.",
-					);
-				} else {
-					s.setDesc("Stored in Obsidian secret storage. Encryption depends on your device's keyring.");
-				}
 			},
-		});
-		return rows;
+			{
+				name: "Token storage",
+				render: (s) => {
+					if (this.plugin.tokenStore.backend === "plugin-data") {
+						setDescError(
+							s,
+							"Obsidian secret storage failed on this device, so the sign-in token is stored unencrypted " +
+								"in this plugin's data file. Use device encryption, and sign in again once secret storage works.",
+						);
+					} else {
+						s.setDesc("Stored in Obsidian secret storage. Encryption depends on your device's keyring.");
+					}
+				},
+			},
+		];
+	}
+
+	/** Used and free space (T-D7) [G-QT-1]. Read at most every 5 minutes (QuotaCache); a failure shows no detail. */
+	private renderQuota(setting: Setting): void {
+		// Never a Graph read without a sign-in: in the stale layout this read was the last step before the freeze.
+		if (this.plugin.auth.status !== "signed-in") {
+			setting.setDesc("Sign in to see storage.");
+			return;
+		}
+		setting.setDesc("Loading…");
+		this.plugin.quota.get().then(
+			(q) => {
+				const { text, warn } = quotaText(q);
+				if (warn) setDescError(setting, text);
+				else setting.setDesc(text);
+			},
+			() => setting.setDesc("Couldn't read the storage figures. They're read again when settings reopen."),
+		);
 	}
 
 	/**
@@ -230,16 +333,24 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 				this.renderSignInControl(setting);
 			}
 		});
+		this.crumb("signin-prepare");
 		this.plugin.auth.prepareSignIn().then(
 			(url) => {
+				this.crumb("signin-prepare-ok");
 				if (id !== this.renderId) return;
+				// Rendered into a closed tab: nothing can tap this link, so drop its verifier and state (R-SEC-1).
+				if (!link.isConnected) {
+					this.plugin.auth.discardPrepared();
+					return;
+				}
 				link.setAttribute("href", url);
 				link.removeAttribute("aria-disabled");
 			},
 			(e: unknown) => {
-				// A superseded prepare is expected (a newer render or the command won); stay quiet.
-				const superseded = e instanceof AuthError && e.code === "superseded";
-				if (id === this.renderId && !superseded) this.plugin.reportAuthError(e);
+				this.crumb("signin-prepare-failed");
+				// The state moved under this render (a newer render, the command, or a sign-in that completed): stay quiet.
+				const quiet = e instanceof AuthError && isQuietPrepareError(e.code);
+				if (id === this.renderId && !quiet) this.plugin.reportAuthError(e);
 			},
 		);
 	}
@@ -443,6 +554,13 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 							);
 						}),
 					);
+				},
+			},
+			{
+				name: "Verbose logging",
+				desc: "Also writes each log line to the developer console, for troubleshooting. Same content as the log: no file names, contents or tokens.",
+				render: (s) => {
+					s.addToggle((t) => t.setValue(this.plugin.data.verboseLogging).onChange((v) => this.save({ verboseLogging: v })));
 				},
 			},
 		];
