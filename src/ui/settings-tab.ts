@@ -65,8 +65,9 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 		this.crumb("refresh", this.refreshes.hit(Date.now()));
 		// Only while the tab is on screen: rendering prepares a sign-in, and only hide() discards it (R-SEC-1). A
 		// closed tab isn't re-rendered (M8 matrix row 10); it renders afresh when it next opens.
-		if (refreshAction({ onScreen: this.shown, connected: this.containerEl.isConnected }) === "skip") {
-			this.crumb("refresh-skipped");
+		const connected = this.containerEl.isConnected;
+		if (refreshAction({ onScreen: this.shown, connected }) === "skip") {
+			this.crumb(connected ? "refresh-skipped-hidden" : "refresh-skipped-detached");
 			return;
 		}
 		if (requireApiVersion("1.13.0")) this.update();
@@ -83,6 +84,8 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 	 * Fixed codes only; with Verbose logging on, the last console line names the step that didn't return.
 	 */
 	private crumb(code: string, count?: number): void {
+		// Only with Verbose logging on: a busy tab must not push the sync lines out of the 500-entry log.
+		if (!this.plugin.data.verboseLogging) return;
 		this.plugin.logger.event("ui.settings", count === undefined ? { code } : { code, count });
 	}
 

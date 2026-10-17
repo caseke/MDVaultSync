@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- After this app's access was removed at your Microsoft account, opening the MDVaultSync settings could freeze Obsidian. The settings tab no longer redraws itself while it's closed, which is the one thing that set this case apart. It isn't confirmed yet that this was the cause; the next device check confirms it.
+- After this app's access was removed at your Microsoft account, opening the MDVaultSync settings could freeze Obsidian. The settings tab no longer redraws itself while it's closed. This is a likely cause, not a confirmed one; the next device check decides it.
 
 ### Added
 
