@@ -9,6 +9,7 @@ import {
 } from "../src/remote/auth.ts";
 import { challengeFromVerifier } from "../src/remote/pkce.ts";
 import type { TokenStore } from "../src/core/ports.ts";
+import { RingLogger } from "../src/core/logger.ts";
 import { FakeClock, FakeHttp, bytes, deferred, formOf, jsonResponse } from "./fakes/fake-http.ts";
 
 const CLIENT_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
@@ -626,4 +627,31 @@ describe("one-tap sign-in: review edge cases", () => {
 		auth.discardPrepared();
 		assert.equal(await codeOf(Promise.resolve().then(() => auth.activateSignIn(href))), "no-pending");
 	});
+});
+
+test("refresh breadcrumbs: start, the outcome and the token clear are logged by fixed code only (M8 matrix row 10)", async () => {
+	const http = new FakeHttp();
+	const tokens = new MemoryTokenStore();
+	tokens.value = "RT-SENTINEL";
+	const clock = new FakeClock();
+	const log = new RingLogger({ now: () => 0 });
+	const auth = new AuthClient({ transport: http, tokens, clock, getClientId: () => CLIENT_ID, logger: log });
+	http.enqueueJson(200, tokenBody({ access_token: "AT-SENTINEL", refresh_token: "RT2-SENTINEL" }));
+	await auth.getAccessToken();
+	clock.advance(2 * 3600 * 1000);
+	http.enqueueJson(400, { error: "invalid_grant", error_description: "DESC-SENTINEL" });
+	assert.equal(await codeOf(auth.getAccessToken()), "sign-in-required");
+	const codes = log.entries().filter((e) => e.op === "auth.refresh").map((e) => e.code);
+	assert.deepEqual(codes, ["start", "ok", "start", "invalid-grant", "cleared", "notified"]);
+	assert.ok(!log.serialize().includes("SENTINEL"));
+	tokens.value = "RT3";
+	const auth2 = new AuthClient({ transport: http, tokens, clock, getClientId: () => CLIENT_ID, logger: log });
+	http.enqueueNetworkError();
+	assert.equal(await codeOf(auth2.getAccessToken()), "network");
+	http.enqueueJson(400, { error: "invalid_client" });
+	assert.equal(await codeOf(auth2.getAccessToken()), "token-request-failed");
+	assert.deepEqual(
+		log.entries().filter((e) => e.op === "auth.refresh").map((e) => e.code).slice(6),
+		["start", "network", "start", "failed"],
+	);
 });

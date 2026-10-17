@@ -139,13 +139,15 @@ export default class MDVaultSyncPlugin extends Plugin {
 			return () => window.clearTimeout(id);
 		}));
 		const clock: Clock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => window.setTimeout(r, ms)) };
+		// Before AuthClient, which logs refresh breadcrumbs. "Verbose logging" mirrors events to the console (design §9).
+		this.logger = new RingLogger({ now: () => Date.now(), debug: () => this.data.verboseLogging });
 		this.auth = new AuthClient({
 			transport,
 			tokens: this.tokenStore,
 			clock,
 			getClientId: () => this.data.clientId,
+			logger: this.logger,
 		});
-		this.logger = new RingLogger({ now: () => Date.now() });
 		// Graph stack: requestUrl → Authorization for graph.microsoft.com only (401 → refresh once) → retry (design §6.1).
 		const graphTransport = new AuthorizingTransport(transport, this.auth);
 		const retry = new RetryPolicy({ clock, logger: this.logger });

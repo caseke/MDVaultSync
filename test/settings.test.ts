@@ -32,6 +32,7 @@ test("defaults follow design §11", () => {
 		excludePatterns: [],
 		previewEveryRun: false,
 		massDeleteThresholdPct: 25,
+		verboseLogging: false,
 	});
 	assert.ok(Object.isFrozen(DEFAULT_DATA.excludePatterns));
 });
@@ -190,4 +191,10 @@ test("a data.json on disk that doesn't parse to an object pauses sync too: its p
 	const garbled = pauseFromData(null, true);
 	assert.ok(garbled.paused);
 	assert.deepEqual(garbled.readable, []);
+});
+
+test("verboseLogging: off by default; only a boolean is accepted (design §9, M8 matrix row 10)", () => {
+	assert.equal(parseData({}).verboseLogging, false);
+	assert.equal(parseData({ verboseLogging: true }).verboseLogging, true);
+	assert.equal(parseData({ verboseLogging: "yes" }).verboseLogging, false);
 });

@@ -21,6 +21,8 @@ export interface PluginData {
 	previewEveryRun: boolean;
 	/** Mass-delete guard, percent of tracked files (R-GUARD-1). */
 	massDeleteThresholdPct: number;
+	/** Mirror log events to the developer console (design §9). Codes only, like the log itself (R-SEC-3). */
+	verboseLogging: boolean;
 }
 
 export const MAX_PATTERN_LINES = 200;
@@ -42,6 +44,7 @@ export const DEFAULT_DATA: Readonly<PluginData> = Object.freeze({
 	excludePatterns: Object.freeze([]) as unknown as string[],
 	previewEveryRun: false,
 	massDeleteThresholdPct: 25,
+	verboseLogging: false,
 });
 
 function wholeNumber(raw: string): number | null {
@@ -153,6 +156,7 @@ export function parseData(raw: unknown): PluginData {
 	if (validPatterns(pats)) out.excludePatterns = [...pats];
 	if (typeof o["previewEveryRun"] === "boolean") out.previewEveryRun = o["previewEveryRun"];
 	if (inRange(o["massDeleteThresholdPct"], 1, 100)) out.massDeleteThresholdPct = o["massDeleteThresholdPct"];
+	if (typeof o["verboseLogging"] === "boolean") out.verboseLogging = o["verboseLogging"];
 	return out;
 }
 

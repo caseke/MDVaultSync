@@ -3,9 +3,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MAX_PENDING_HINTS, PROMPT_TIMEOUT_MS } from "../src/core/engine.ts";
-import type { DeltaPage, PlanOp, VaultPath } from "../src/core/ports.ts";
+import type { DeltaPage, PlanOp, RemoteItem, RemotePort, VaultPath } from "../src/core/ports.ts";
 import { AuthError } from "../src/remote/auth.ts";
-import { GraphError, ResyncRequired } from "../src/remote/errors.ts";
+import { GraphError, NetworkError, ResyncRequired } from "../src/remote/errors.ts";
 import { FakeRemote } from "./fakes/fake-remote.ts";
 import { CrashSwitch, Device, UNIT, remoteFiles, vaultFiles } from "./fakes/device.ts";
 import { STAMP } from "./fakes/plan-fixtures.ts";
@@ -844,4 +844,84 @@ test("a full drive (507) mid-run fails the run as quota, keeps what was done, an
 	const again = await a.sync("interval");
 	assert.equal(again.result, "ok");
 	assert.deepEqual(Object.keys(remoteFiles(remote)).sort(), ["b.md", "c.md", "d.md", "first.md"]);
+});
+
+/** The remote as OneDrive may show a file right after a large upload: no quickXorHash yet [G-DL-8]. */
+function hashless(r: RemotePort): RemotePort {
+	const strip = (it: RemoteItem): RemoteItem => (it.isFolder ? it : { ...it, quickXorHash: null });
+	return withOverrides(r, {
+		delta: async (link: string | null) => {
+			const page = await r.delta(link);
+			return { ...page, items: page.items.map(strip) };
+		},
+		getItem: async (id: string) => {
+			const it = await r.getItem(id);
+			return it && strip(it);
+		},
+		getChildByName: async (parentId: string, name: string) => {
+			const it = await r.getChildByName(parentId, name);
+			return it && strip(it);
+		},
+	});
+}
+
+test("an upload whose commit answer was lost, then listed with no hash, is adopted: no conflict copy for identical bytes (M8 matrix row 2)", async () => {
+	const remote = new FakeRemote();
+	let dropCommit = true;
+	const a = new Device(remote, {
+		remote: (r) =>
+			hashless(
+				withOverrides(r, {
+					// The final fragment commits on OneDrive, then airplane mode eats the answer.
+					putFragment: async (url: string, start: number, total: number, data: ArrayBuffer) => {
+						const item = await r.putFragment(url, start, total, data);
+						if (item && dropCommit) {
+							dropCommit = false;
+							throw new NetworkError();
+						}
+						return item;
+					},
+				}),
+			),
+	});
+	a.vault.write("first.md", "1");
+	await a.sync("startup");
+	const big = lcg(2 * UNIT + 100, 7);
+	a.vault.write("big.bin", big);
+	const r1 = await a.sync("command");
+	assert.equal(r1.result, "partial", "the lost answer ends the run partial");
+	const r2 = await a.sync("command");
+	assert.equal(r2.result, "ok");
+	assert.equal(r2.conflicts.length, 0, "identical bytes: no conflict copy");
+	assert.deepEqual(Object.keys(vaultFiles(a.vault)).sort(), ["big.bin", "first.md"]);
+	assert.deepEqual(Object.keys(remoteFiles(remote)).sort(), ["big.bin", "first.md"]);
+	assert.ok(a.store.state?.files["big.bin" as VaultPath], "the pair is recorded as synced");
+	assert.equal(await settle(a), 1);
+});
+
+test("a no-history pair with no remote hash and different bytes still gets a conflict copy (M8 matrix row 2)", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote, { remote: hashless });
+	a.vault.write("first.md", "1");
+	await a.sync("startup");
+	remote.putFile("n.md", "theirs");
+	a.vault.write("n.md", "mine!!");
+	const r = await a.sync("command");
+	assert.equal(r.conflicts.length, 1);
+	assert.equal(a.vault.contentAt("n.md"), "theirs");
+	assert.equal(a.vault.contentAt(r.conflicts[0]?.copyPath ?? ""), "mine!!");
+});
+
+test("a no-history pair with no remote hash and the same bytes is adopted without a copy (M8 matrix row 2)", async () => {
+	const remote = new FakeRemote();
+	const a = new Device(remote, { remote: hashless });
+	a.vault.write("first.md", "1");
+	await a.sync("startup");
+	remote.putFile("n.md", "same");
+	a.vault.write("n.md", "same");
+	const r = await a.sync("command");
+	assert.equal(r.result, "ok");
+	assert.equal(r.conflicts.length, 0);
+	assert.deepEqual(Object.keys(vaultFiles(a.vault)).sort(), ["first.md", "n.md"]);
+	assert.equal(await settle(a), 1);
 });

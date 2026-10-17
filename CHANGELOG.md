@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+0.6.1: fixes from the owner's first pass of the Milestone 8 device checks.
+
+### Fixed
+
+- After a large upload was cut off at the very end (for example by airplane mode), the next sync could make a conflict copy of a file that was identical on both sides. A sync now compares the two versions before it makes a copy, and only keeps both when they really differ.
+- A file named like `a:b.md` was reported as "would land outside the vault". It's now reported as an invalid name (OneDrive doesn't allow `:`). It was never uploaded either way.
+
+### Added
+
+- **Verbose logging** in Settings → Diagnostics writes each log line to the developer console too (the same content as **Copy log**: no file names, contents or tokens).
+- The log now marks first-sync merges and records each step of a sign-in renewal, to help find the cause of a freeze seen after the app's access was removed.
+
 0.6.0: Milestone 8, hardening. The owner's end-to-end checks on both devices are still to come.
 
 ### Added

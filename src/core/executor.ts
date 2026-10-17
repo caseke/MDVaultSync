@@ -503,6 +503,21 @@ class Execution {
 		const mine = await this.ctx.vault.read(path);
 		const mineHash = quickXorHash(mine);
 
+		// Identical bytes are no conflict (M8 matrix row 2). The planner can call a pair equal only by hash, and
+		// OneDrive may list a file without one, for example right after an upload whose answer was lost [G-DL-8].
+		// So compare here, before any copy is written: by the item's hash, or else by the downloaded bytes, which
+		// the procedure below would download anyway (the buffer is reused, not fetched twice).
+		const mineStored = await this.ctx.content.storedHashOf(mine, path);
+		let fetched: { plain: ArrayBuffer; remoteHash: string } | null = null;
+		if (fresh.quickXorHash === null) fetched = await this.ctx.content.fetch(fresh, path);
+		const theirs = fresh.quickXorHash ?? fetched?.remoteHash ?? null;
+		if (theirs === mineStored) {
+			// The stat before the read guards the record: an edit since then leaves mtime 0, so the next scan re-hashes.
+			await this.recordUpload(path, fresh, mine, mineHash, theirs, st);
+			delete this.state.pendingConflicts[path];
+			return ok({ kind: "adopt", path, id });
+		}
+
 		let copyPath = plannedCopy;
 		const pc = own(this.state.pendingConflicts, path) ? this.state.pendingConflicts[path] : undefined;
 		// A crash mid-procedure: reuse the same copy for the same pair (step 1). The planner already vetted a planned one.
@@ -538,7 +553,7 @@ class Execution {
 		this.taken.add(caseKey(copyPath));
 		const done = { kind: "conflict" as const, path, id, copyPath };
 
-		const { plain, remoteHash } = await this.ctx.content.fetch(fresh, path);
+		const { plain, remoteHash } = fetched ?? (await this.ctx.content.fetch(fresh, path));
 		// Step 4's pre-write check compares against the bytes the copy now preserves.
 		const now = await this.hashOf(path);
 		if (now !== null && now !== mineHash) return fail(done, "changed-during-sync");

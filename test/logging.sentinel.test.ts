@@ -247,6 +247,9 @@ test("no sentinel name, content or token reaches the log ring buffer or the cons
 			logger.entries().some((e) => e.op === "sync.plan" && typeof e.durationMs === "number"),
 			"the plan time is logged (M8 performance)",
 		);
+		const plans = logger.entries().filter((e) => e.op === "sync.plan");
+		assert.equal(plans[0]?.code, "union", "a first sync is marked union in the log (M8 matrix rows 7-8)");
+		assert.ok(plans.some((e) => e.code === undefined), "a normal run carries no union marker");
 	} finally {
 		for (const m of CONSOLE_METHODS) con[m] = saved.get(m);
 	}

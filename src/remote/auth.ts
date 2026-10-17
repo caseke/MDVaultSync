@@ -1,4 +1,5 @@
 // OAuth 2.0 authorization code + PKCE against the /consumers endpoints, as a public client (design §4, D-4).
+import { NULL_LOGGER, type Logger } from "../core/logger.ts";
 import type { AccessTokenProvider, Clock, HttpResponse, HttpTransport, TokenStore } from "../core/ports.ts";
 import { isValidClientId } from "../settings.ts";
 import { challengeFromVerifier, createState, createVerifier, timingSafeEqual } from "./pkce.ts";
@@ -53,6 +54,8 @@ export interface AuthClientOptions {
 	tokens: TokenStore;
 	clock: Clock;
 	getClientId: () => string;
+	/** Refresh breadcrumbs, fixed codes only (M8 matrix row 10: find where a revoked grant hung the app). */
+	logger?: Logger;
 }
 
 interface PendingSignIn {
@@ -75,6 +78,7 @@ export class AuthClient implements AccessTokenProvider {
 	private readonly tokens: TokenStore;
 	private readonly clock: Clock;
 	private readonly getClientId: () => string;
+	private readonly logger: Logger;
 
 	/** In memory only, never persisted (design §4 step 1). */
 	private pending: PendingSignIn | null = null;
@@ -97,6 +101,7 @@ export class AuthClient implements AccessTokenProvider {
 		this.clock = opts.clock;
 		const getClientId = opts.getClientId;
 		this.getClientId = () => getClientId();
+		this.logger = opts.logger ?? NULL_LOGGER;
 		this.lastStatus = this.status;
 	}
 
@@ -272,30 +277,44 @@ export class AuthClient implements AccessTokenProvider {
 		const rt = this.tokens.get();
 		if (!rt) throw new AuthError("signed-out");
 		const clientId = this.requireClientId();
-		const res = await this.postToken({
-			client_id: clientId,
-			grant_type: "refresh_token",
-			refresh_token: rt,
-			scope: SCOPE,
-		});
+		this.logger.event("auth.refresh", { code: "start" });
+		let res: HttpResponse;
+		try {
+			res = await this.postToken({
+				client_id: clientId,
+				grant_type: "refresh_token",
+				refresh_token: rt,
+				scope: SCOPE,
+			});
+		} catch (e) {
+			this.logger.event("auth.refresh", { code: "network" });
+			throw e;
+		}
 		if (epoch !== this.epoch) throw new AuthError("signed-out");
 		if (!isSuccess(res)) {
 			const code = parseTokenError(res.body);
 			if (code === "invalid_grant" || code === "interaction_required") {
+				this.logger.event("auth.refresh", { code: "invalid-grant", status: res.status });
 				// The grant is dead: forget it and ask the user to sign in again. Local state is kept.
 				this.access = null;
 				this.signInRequired = true;
 				// If the clear fails, status still reads sign-in-required and the dead token is never sent again.
-				await this.tokens.clear().catch(() => undefined);
+				await this.tokens.clear().then(
+					() => this.logger.event("auth.refresh", { code: "cleared" }),
+					() => this.logger.event("auth.refresh", { code: "clear-failed" }),
+				);
 				this.notify();
+				this.logger.event("auth.refresh", { code: "notified" });
 				throw new AuthError("sign-in-required", code);
 			}
+			this.logger.event("auth.refresh", { code: "failed", status: res.status });
 			throw new AuthError("token-request-failed", code);
 		}
 		const tok = parseOrThrow(res.body, false);
 		// The rotated refresh token replaces the stored one before the access token is used [I-TL-3].
 		await this.storeRefreshToken(tok, epoch);
 		this.cacheAccess(tok);
+		this.logger.event("auth.refresh", { code: "ok" });
 		this.notify();
 		return tok.accessToken;
 	}

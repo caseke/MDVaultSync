@@ -761,3 +761,11 @@ test("when a tracked collision keeper moves away, nothing is written over the sk
 test("rejects a scanned file without hashes", () => {
 	assert.throws(() => plan(syncedState(), [{ path: "a.md", isFolder: false, size: 1, mtime: 1, localHash: null, storedHash: null }], rootIndex(), SETTINGS), /scan-incomplete/);
 });
+
+test("a local `a:b.md` is skipped as invalid-name, not outside-vault (M8 matrix row 6)", async () => {
+	const w = world({ "n.md": "n" });
+	w.vault.write("a:b.md", "x");
+	const p = await run(w);
+	assert.ok(lines(p).includes("skip a:b.md (invalid-name)"), lines(p).join("\n"));
+	assert.ok(!p.ops.some((o) => o.kind === "upload-new"));
+});

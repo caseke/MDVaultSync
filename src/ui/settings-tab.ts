@@ -463,6 +463,13 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 					);
 				},
 			},
+			{
+				name: "Verbose logging",
+				desc: "Also writes each log line to the developer console, for troubleshooting. Same content as the log: no file names, contents or tokens.",
+				render: (s) => {
+					s.addToggle((t) => t.setValue(this.plugin.data.verboseLogging).onChange((v) => this.save({ verboseLogging: v })));
+				},
+			},
 		];
 	}
 }

@@ -321,8 +321,9 @@ export class Engine implements SyncEngine {
 				// "Sync now" (command or ribbon) re-offers deletes the user declined (R-GUARD-1).
 				reofferDeclined: reoffer || trigger === "command" || trigger === "ribbon",
 			});
-			// The plan time is logged so a slow planner shows in Copy log (plan M8: 5,000 files in under 2 s).
-			this.logger.event("sync.plan", { count: plan.ops.length, durationMs: deps.clock.now() - tPlan });
+			// The plan time is logged so a slow planner shows in Copy log (plan M8: 5,000 files in under 2 s), and a
+			// first-sync merge is marked, so a log shows when union mode was on (M8 matrix rows 7-8).
+			this.logger.event("sync.plan", { count: plan.ops.length, durationMs: deps.clock.now() - tPlan, ...(plan.unionMode ? { code: "union" } : {}) });
 
 			// Preview (R-FIRST-2): on request, when the setting is on, and always in union mode, even unattended.
 			if (trigger === "preview" || settings.previewEveryRun || plan.unionMode) {
