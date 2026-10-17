@@ -18,6 +18,8 @@ import {
 	type PluginData,
 } from "../settings.ts";
 import { quotaText } from "./quota.ts";
+import { RecentCounter } from "./recent-counter.ts";
+import { refreshAction } from "./settings-refresh.ts";
 import { renderReport } from "./report-view.ts";
 
 const STATUS_TEXT: Record<AuthStatus, string> = {
@@ -33,6 +35,8 @@ interface Row {
 }
 
 interface Section {
+	/** Breadcrumb prefix (a fixed code). */
+	id: string;
 	heading: string;
 	rows: Row[];
 }
@@ -49,6 +53,7 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 	private renderId = 0;
 	/** The rendered report, refreshed alone after each sync so typing in another field keeps its focus. */
 	private reportEl: HTMLElement | null = null;
+	private readonly refreshes = new RecentCounter(1_000);
 
 	constructor(app: App, plugin: MDVaultSyncPlugin) {
 		super(app, plugin);
@@ -57,10 +62,15 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 
 	/** Re-render after auth or sync changes: update() on 1.13+, the fallback renderer before. */
 	refresh(): void {
-		// Only while the tab is on screen: rendering prepares a sign-in, and only hide() discards it (R-SEC-1).
-		if (!this.containerEl.isConnected) return;
+		this.crumb("refresh", this.refreshes.hit(Date.now()));
+		// Only while the tab is on screen: rendering prepares a sign-in, and only hide() discards it (R-SEC-1). A
+		// closed tab isn't re-rendered (M8 matrix row 10); it renders afresh when it next opens.
+		if (refreshAction({ onScreen: this.shown, connected: this.containerEl.isConnected }) === "skip") {
+			this.crumb("refresh-skipped");
+			return;
+		}
 		if (requireApiVersion("1.13.0")) this.update();
-		else if (this.shown) this.renderFallback();
+		else this.renderFallback();
 	}
 
 	/** After a sync: re-render only the report, if it is on screen. */
@@ -68,7 +78,27 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 		if (this.reportEl?.isConnected) renderReport(this.reportEl, this.plugin.lastReport, Date.now());
 	}
 
+	/**
+	 * Breadcrumbs (M8 matrix row 10: the tab froze in the sign-in-required state with nothing in the console).
+	 * Fixed codes only; with Verbose logging on, the last console line names the step that didn't return.
+	 */
+	private crumb(code: string, count?: number): void {
+		this.plugin.logger.event("ui.settings", count === undefined ? { code } : { code, count });
+	}
+
+	/** Wraps a row's render with start and end breadcrumbs, `<section>-<index>`. */
+	private tracked(section: string, i: number, r: Row): (setting: Setting) => void {
+		return (setting) => {
+			// A row renders only while the tab is on screen; hide() clears this again.
+			this.shown = true;
+			this.crumb(`${section}-${i}`);
+			r.render(setting);
+			this.crumb(`${section}-${i}-done`);
+		};
+	}
+
 	override hide(): void {
+		this.crumb("hide");
 		this.shown = false;
 		// Invalidate in-flight prepares and drop the untapped link's verifier and state.
 		this.renderId++;
@@ -77,19 +107,23 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 	}
 
 	override getSettingDefinitions(): SettingDefinitionItem[] {
-		return this.sections().map((s) => ({
+		this.crumb("defs");
+		const defs: SettingDefinitionItem[] = this.sections().map((s) => ({
 			type: "group",
 			heading: s.heading,
-			items: s.rows.map((r) => ({
+			items: s.rows.map((r, i) => ({
 				name: r.name,
 				...(r.desc !== undefined ? { desc: r.desc } : {}),
-				render: (setting: Setting) => r.render(setting),
+				render: this.tracked(s.id, i, r),
 			})),
 		}));
+		this.crumb("defs-done");
+		return defs;
 	}
 
 	/** Obsidian before 1.13 only; 1.13+ renders getSettingDefinitions() instead and never calls this. */
 	override display(): void {
+		this.crumb("display");
 		this.renderFallback();
 	}
 
@@ -99,11 +133,11 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		for (const s of this.sections()) {
 			const group = new SettingGroup(containerEl).setHeading(s.heading);
-			for (const r of s.rows) {
+			for (const [i, r] of s.rows.entries()) {
 				group.addSetting((setting) => {
 					setting.setName(r.name);
 					if (r.desc !== undefined) setting.setDesc(r.desc);
-					r.render(setting);
+					this.tracked(s.id, i, r)(setting);
 				});
 			}
 		}
@@ -111,10 +145,10 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 
 	private sections(): Section[] {
 		return [
-			{ heading: "Account", rows: this.accountRows() },
-			{ heading: "Sync", rows: this.syncRows() },
-			{ heading: "Last sync report", rows: this.reportRows() },
-			{ heading: "Diagnostics", rows: this.diagnosticsRows() },
+			{ id: "account", heading: "Account", rows: this.accountRows() },
+			{ id: "sync", heading: "Sync", rows: this.syncRows() },
+			{ id: "report", heading: "Last sync report", rows: this.reportRows() },
+			{ id: "diag", heading: "Diagnostics", rows: this.diagnosticsRows() },
 		];
 	}
 
@@ -248,13 +282,16 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 				this.renderSignInControl(setting);
 			}
 		});
+		this.crumb("signin-prepare");
 		this.plugin.auth.prepareSignIn().then(
 			(url) => {
+				this.crumb("signin-prepare-ok");
 				if (id !== this.renderId) return;
 				link.setAttribute("href", url);
 				link.removeAttribute("aria-disabled");
 			},
 			(e: unknown) => {
+				this.crumb("signin-prepare-failed");
 				// A superseded prepare is expected (a newer render or the command won); stay quiet.
 				const superseded = e instanceof AuthError && e.code === "superseded";
 				if (id === this.renderId && !superseded) this.plugin.reportAuthError(e);

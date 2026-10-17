@@ -181,4 +181,5 @@ export type EngineStatus =
   | { state: "waiting-for-user" } | { state: "error"; code: string } | { state: "sign-in-required" };
 export interface SyncEngine { requestSync(trigger: Trigger): Promise<SyncReport>; readonly status: EngineStatus; }
 export type OpKind = "auth.refresh" | "auth.signin" | "graph.request" | "sync.run" | "sync.pull" | "sync.scan"
-  | "sync.plan" | "sync.exec" | `op.${PlanOp["kind"]}` | "upload.fragment" | "upload.resume" | "retry.backoff" | "state.save";
+  | "sync.plan" | "sync.exec" | `op.${PlanOp["kind"]}` | "upload.fragment" | "upload.resume" | "retry.backoff" | "state.save"
+  | "ui.settings"; // M8: settings-tab breadcrumbs (matrix row 10)
