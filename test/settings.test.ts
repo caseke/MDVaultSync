@@ -10,6 +10,7 @@ import {
 	snapshotForSave,
 	intervalFloor,
 	isValidClientId,
+	legacyRefreshToken,
 	parseData,
 	parseDeviceName,
 	parseExcludePatterns,
@@ -26,6 +27,7 @@ test("missing or non-object data gives defaults", () => {
 test("defaults follow design §11", () => {
 	assert.deepEqual(DEFAULT_DATA, {
 		clientId: "",
+		sessionOnlySignIn: false,
 		deviceName: "",
 		intervalMinutes: 5,
 		maxFileSizeMiB: 100,
@@ -38,12 +40,34 @@ test("defaults follow design §11", () => {
 });
 
 test("keeps well-typed fields and drops mistyped or unknown ones", () => {
-	assert.deepEqual(parseData({ clientId: "abc", fallbackRefreshToken: "RT", extra: 1 }), {
+	assert.deepEqual(parseData({ clientId: "abc", sessionOnlySignIn: true, extra: 1 }), {
 		...DEFAULT_DATA,
 		clientId: "abc",
-		fallbackRefreshToken: "RT",
+		sessionOnlySignIn: true,
 	});
-	assert.deepEqual(parseData({ clientId: 5, fallbackRefreshToken: "" }), DEFAULT_DATA);
+	assert.deepEqual(parseData({ clientId: 5, sessionOnlySignIn: "yes" }), DEFAULT_DATA);
+});
+
+// D-5 (changed in M9): a plaintext refresh token written by 0.x is read once, to migrate it, and never kept.
+test("a 0.x plaintext token is never part of the parsed data, but can be read once for migration", () => {
+	const parsed = parseData({ clientId: "abc", fallbackRefreshToken: "RT" });
+	assert.ok(!JSON.stringify(parsed).includes("RT"));
+	assert.equal(legacyRefreshToken({ fallbackRefreshToken: "RT" }), "RT");
+	assert.equal(legacyRefreshToken({ fallbackRefreshToken: "" }), "");
+	assert.equal(legacyRefreshToken({ fallbackRefreshToken: 5 }), "");
+	assert.equal(legacyRefreshToken({}), null);
+	assert.equal(legacyRefreshToken(null), null);
+	assert.equal(legacyRefreshToken([]), null);
+});
+
+test("default device names name the platform, not the owner's devices", () => {
+	assert.equal(defaultDeviceName("ios"), "iOS");
+	assert.equal(defaultDeviceName("linux"), "Linux");
+	assert.equal(defaultDeviceName("macos"), "Mac");
+	assert.equal(defaultDeviceName("windows"), "Windows");
+	assert.equal(defaultDeviceName("android"), "Android");
+	assert.equal(defaultDeviceName("other"), "Device");
+	assert.equal(defaultDeviceName("toString"), "Device");
 });
 
 test("keeps valid sync settings", () => {
@@ -134,12 +158,9 @@ test("device name: 1–40 characters that are a valid file name (it goes into co
 	for (const bad of ["", "   ", "x".repeat(41), "a/b", "a:b", "CON", "~home", "tab\there"]) assert.equal(parseDeviceName(bad), null, bad);
 });
 
-test("the default device name comes from the platform; an empty setting means the default", () => {
-	assert.equal(defaultDeviceName("ios"), "iPad");
-	assert.equal(defaultDeviceName("linux"), "Ubuntu");
-	assert.equal(defaultDeviceName("other"), "Device");
-	assert.equal(effectiveDeviceName({ ...DEFAULT_DATA, excludePatterns: [] }, "iPad"), "iPad");
-	assert.equal(effectiveDeviceName({ ...DEFAULT_DATA, excludePatterns: [], deviceName: "Desk" }, "iPad"), "Desk");
+test("an empty device name setting means the platform default", () => {
+	assert.equal(effectiveDeviceName({ ...DEFAULT_DATA, excludePatterns: [] }, "iOS"), "iOS");
+	assert.equal(effectiveDeviceName({ ...DEFAULT_DATA, excludePatterns: [], deviceName: "Desk" }, "iOS"), "Desk");
 });
 
 test("toEngineSettings converts MiB to bytes and copies the rest", () => {

@@ -1,5 +1,7 @@
-// Refresh token storage: Obsidian SecretStorage, with a data.json fallback only if it fails (R-AUTH-5, D-5).
-// SecretStorage and data access are injected so this runs under node --test.
+// Refresh token storage: Obsidian SecretStorage. If it fails, the token is kept in memory for this session only,
+// never written to disk (R-AUTH-5, D-5, changed in M9). The non-secret `sessionOnlySignIn` flag in data.json
+// records that, so the next launch can say why a sign-in is needed. SecretStorage and data access are injected so
+// this runs under node --test.
 import type { TokenStore } from "../core/ports.ts";
 import type { PluginData } from "../settings.ts";
 
@@ -28,20 +30,26 @@ export class TokenClearError extends Error {
 export class PluginTokenStore implements TokenStore {
 	private readonly secrets: SecretStorageLike;
 	private readonly data: PluginDataAccess;
-	private current: TokenStore["backend"];
+	private current: TokenStore["backend"] = "secret-storage";
+	/** The refresh token while `current` is "memory". Never persisted. */
+	private memory: string | null = null;
 
 	constructor(secrets: SecretStorageLike, data: PluginDataAccess) {
 		this.secrets = secrets;
 		this.data = data;
-		this.current = data.get().fallbackRefreshToken ? "plugin-data" : "secret-storage";
 	}
 
 	get backend(): TokenStore["backend"] {
 		return this.current;
 	}
 
+	/** This session's sign-in, or the last one, could be kept in memory only (settings warning, launch notice). */
+	get sessionOnly(): boolean {
+		return this.current === "memory" || this.data.get().sessionOnlySignIn;
+	}
+
 	get(): string | null {
-		if (this.current === "plugin-data") return this.data.get().fallbackRefreshToken ?? null;
+		if (this.current === "memory") return this.memory;
 		try {
 			return this.secrets.getSecret(SECRET_ID) || null;
 		} catch {
@@ -49,33 +57,39 @@ export class PluginTokenStore implements TokenStore {
 		}
 	}
 
-	/** Tries SecretStorage first on every write, so a fixed keyring moves the token off data.json. */
+	/** Tries SecretStorage first on every write, so a keyring that starts working takes the token over. */
 	async set(refreshToken: string): Promise<void> {
-		const data = this.data.get();
 		if (this.trySecret(refreshToken) && this.readSecret() === refreshToken) {
 			this.current = "secret-storage";
-			if (data.fallbackRefreshToken !== undefined) {
-				delete data.fallbackRefreshToken;
-				await this.data.save();
-			}
+			this.memory = null;
+			await this.setFlag(false);
 			return;
 		}
 		// SecretStorage threw or didn't keep the value. Don't leave an older token behind in it.
 		this.trySecret("");
-		data.fallbackRefreshToken = refreshToken;
-		this.current = "plugin-data";
-		await this.data.save();
+		this.memory = refreshToken;
+		this.current = "memory";
+		await this.setFlag(true);
 	}
 
 	/**
-	 * There is no delete method, so the secret is overwritten with "" [O-API-4]. The fallback is removed either
-	 * way; if a token is still readable afterwards, this throws so sign-out never reports a false success.
+	 * Migrates a plaintext token a 0.x version left in data.json: into SecretStorage if it works now, otherwise into
+	 * memory for this session. A token already in SecretStorage wins. The caller then saves data.json without it.
+	 */
+	async adoptLegacy(refreshToken: string): Promise<void> {
+		if (refreshToken === "" || this.readSecret()) return;
+		await this.set(refreshToken);
+	}
+
+	/**
+	 * There is no delete method, so the secret is overwritten with "" [O-API-4]. The in-memory token is dropped
+	 * either way; if a token is still readable afterwards, this throws so sign-out never reports a false success.
 	 */
 	async clear(): Promise<void> {
 		this.trySecret("");
-		delete this.data.get().fallbackRefreshToken;
+		this.memory = null;
 		this.current = "secret-storage";
-		await this.data.save();
+		await this.setFlag(false);
 		if (this.readSecret()) throw new TokenClearError();
 	}
 
@@ -89,6 +103,13 @@ export class PluginTokenStore implements TokenStore {
 		if (hasPluginData || !this.readSecret()) return false;
 		await this.clear();
 		return true;
+	}
+
+	private async setFlag(on: boolean): Promise<void> {
+		const data = this.data.get();
+		if (data.sessionOnlySignIn === on) return;
+		data.sessionOnlySignIn = on;
+		await this.data.save();
 	}
 
 	private trySecret(value: string): boolean {

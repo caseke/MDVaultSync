@@ -29,7 +29,7 @@ Requirement keywords: **MUST** is required for v1. **SHOULD** is expected unless
 - **R-AUTH-2.** Sign-in MUST open in the system browser and return through the `obsidian://mdvaultsync-auth` protocol handler [I-BR-1], [O-API-3].
 - **R-AUTH-3.** *Withdrawn 2026-10-12 (owner decision).* It required a paste fallback through Microsoft's `nativeclient` page. The owner observed a phishing warning on that page in M2 testing, and the primary flow works on both devices (Ubuntu on 0.2.0, iPad on 0.2.1), so the fallback was removed. A device with no `obsidian://` handler can't sign in.
 - **R-AUTH-4.** The requested scopes MUST be exactly `Files.ReadWrite.AppFolder offline_access` [I-REG-5].
-- **R-AUTH-5.** The refresh token MUST be stored in `app.secretStorage`. If that API throws, the plugin MUST store it in plugin data and show a standing warning in settings (D-5). Access tokens MUST be kept in memory only.
+- **R-AUTH-5.** The refresh token MUST be stored in `app.secretStorage`. If that API throws, the plugin MUST keep it in memory for the session only, never on disk, and show a standing warning in settings (D-5). Access tokens MUST be kept in memory only. *Changed 2026-10-17 (owner, M9): it said plugin data.*
 - **R-AUTH-6.** Each refresh MUST replace the stored refresh token with the new one [I-TL-3]. Refreshes MUST be single-flight: concurrent callers share one refresh request.
 - **R-AUTH-7.** Sign-out MUST clear the stored tokens and all sync state, leave local files untouched, and show the user where to remove the app's access in their Microsoft account [I-TL-4], [C-MSA-1].
 - **R-AUTH-8.** The Entra application (client) ID MUST be a user setting, with no default value (D-14).
@@ -117,7 +117,7 @@ Requirement keywords: **MUST** is required for v1. **SHOULD** is expected unless
   - the dry-run toggle;
   - the mass-delete threshold;
   - the last sync report;
-  - diagnostics (capability probe, copy log).
+  - diagnostics (the log, verbose logging). *Changed 2026-10-17 (owner, M9): the capability probe and the file-replace test were removed as beta-testing leftovers.*
 - **R-UI-2.** The status bar MUST show the last sync time and current state. Obsidian has no status bar on mobile [O-API-13], and a tooltip needs hover, which a touchscreen doesn't have [O-API-20]. So on mobile the ribbon icon MUST show the current state, and a "Show sync status" command MUST show the state and the last sync time. *Changed 2026-10-12 (M7 owner check 7: the iPad shows no ribbon tooltip); it said the ribbon tooltip carried the state on iPad.*
 - **R-UI-3.** Errors and conflicts MUST raise notices. A successful sync with no conflicts MUST NOT.
 
@@ -151,8 +151,8 @@ Requirement keywords: **MUST** is required for v1. **SHOULD** is expected unless
 | D-2 | The Entra tenant comes from an Azure free account (card used for verification only) | Since June 2024 apps must be registered in a directory [I-REG-1]. The M365 Developer Program excludes personal accounts [I-REG-3]. Azure free is the documented route [I-REG-2], [C-AZ-1]. Owner accepted the card step. |
 | D-3 | Scopes `Files.ReadWrite.AppFolder` + `offline_access` | Least privilege: the plugin can't see any other OneDrive file [I-REG-5]. |
 | D-4 | Auth code + PKCE, "Mobile and desktop applications" platform, `obsidian://mdvaultsync-auth` only (the `nativeclient` paste fallback was withdrawn in M2, see R-AUTH-3), no device code | Full comparison of both flows on iPad and Ubuntu is in design §4.0. The Mobile and desktop platform gives about 90-day refresh tokens and no Origin requirement; SPA would give 24-hour tokens [I-TL-2], [I-AC-5]. The .deb install is expected to register `obsidian://` (INFERRED [O-DEB-1], checked in M2), so one code path covers both devices with no Node code. Device code needs "Allow public client flows" and is flagged by Microsoft as phishing-prone [I-DC-1]. The owner first chose a paste fallback, then withdrew it in M2 (R-AUTH-3). |
-| D-5 | Refresh token in SecretStorage; fall back to `data.json` with a warning only if the API throws (or accepts the write but reads back a different value, which is the same failure without an exception; M2) | It is the most secure store Obsidian offers [O-API-4]. The owner prefers working sync with a visible warning over being locked out. `configDir` is never synced, so `data.json` stays on the device. |
-| D-6 | Exclude configDir, hidden paths and user patterns | Owner decision. Settings and plugin state are per device, and `data.json` may hold a token. |
+| D-5 | Refresh token in SecretStorage. If the API throws, or accepts the write but reads back a different value (M2), the token is kept in memory for this session only, with a warning; the next launch needs a new sign-in. A plaintext token a 0.x version left in `data.json` is moved at load and deleted | It is the most secure store Obsidian offers [O-API-4]. *Changed 2026-10-17 (owner, M9):* it fell back to a plaintext `data.json` copy. That file reaches any other tool that syncs or backs up the vault folder (iCloud, Obsidian Sync, Syncthing; M9 review), so sync stays usable for the session without ever writing the token to disk. |
+| D-6 | Exclude configDir, hidden paths and user patterns | Owner decision. Settings and plugin state are per device. |
 | D-7 | Triggers: startup, interval, command, ribbon, behind one lock | Owner decision. |
 | D-8 | Remote delete goes to the recycle bin; local delete uses the trash per Obsidian setting | Owner decision. Both are recoverable [G-DEL-1], [O-API-7]. |
 | D-9 | On conflict the remote version keeps the name; the local version becomes the conflict copy | Owner decision. Every device converges on the same main file, and the conflict copy is uploaded so it is visible everywhere. |

@@ -4,7 +4,7 @@
 // itself (and indexes it for settings search); older versions (minAppVersion is 1.11.4) call display(), which
 // renders the same rows through SettingGroup (since 1.11.0). Every row is a `render` definition, because the
 // sign-in link and the validated inputs need imperative control.
-import { Notice, PluginSettingTab, requireApiVersion, SettingGroup } from "obsidian";
+import { PluginSettingTab, requireApiVersion, SettingGroup } from "obsidian";
 import type { App, Setting, SettingDefinitionItem } from "obsidian";
 import type MDVaultSyncPlugin from "../main.ts";
 import { AuthError, type AuthStatus } from "../remote/auth.ts";
@@ -21,6 +21,7 @@ import { accountRowVisible, isQuietPrepareError, type AccountRow } from "./accou
 import { quotaText } from "./quota.ts";
 import { RecentCounter } from "./recent-counter.ts";
 import { refreshAction } from "./settings-refresh.ts";
+import { LogModal } from "./log-modal.ts";
 import { renderReport } from "./report-view.ts";
 
 const STATUS_TEXT: Record<AuthStatus, string> = {
@@ -268,11 +269,11 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 			{
 				name: "Token storage",
 				render: (s) => {
-					if (this.plugin.tokenStore.backend === "plugin-data") {
+					if (this.plugin.tokenStore.sessionOnly) {
 						setDescError(
 							s,
-							"Obsidian secret storage failed on this device, so the sign-in token is stored unencrypted " +
-								"in this plugin's data file. Use device encryption, and sign in again once secret storage works.",
+							"Obsidian secret storage isn't working on this device, so your sign-in is kept in memory only, " +
+								"never on disk. You'll need to sign in again each time Obsidian starts.",
 						);
 					} else {
 						s.setDesc("Stored in Obsidian secret storage. Encryption depends on your device's keyring.");
@@ -536,24 +537,10 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 	private diagnosticsRows(): Row[] {
 		return [
 			{
-				name: "OneDrive capability probe",
-				desc: "Checks what OneDrive supports for this account, using a hidden test folder in the app folder.",
-				render: (s) => {
-					s.addButton((b) => b.setButtonText("Run probe").onClick(() => void this.plugin.runDiagnostics()));
-				},
-			},
-			{
 				name: "Log",
-				desc: "Copies the recent log. It holds operation names, counts, durations and status codes, never file names, contents or tokens.",
+				desc: "The recent log, to copy into a bug report. It holds operation names, counts, durations and status codes, never file names, contents or tokens.",
 				render: (s) => {
-					s.addButton((b) =>
-						b.setButtonText("Copy log").onClick(() => {
-							navigator.clipboard.writeText(this.plugin.logger.serialize()).then(
-								() => new Notice("Log copied."),
-								() => new Notice("Couldn't copy the log."),
-							);
-						}),
-					);
+					s.addButton((b) => b.setButtonText("Show log").onClick(() => new LogModal(this.app, this.plugin.logger.serialize()).open()));
 				},
 			},
 			{

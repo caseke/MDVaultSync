@@ -16,12 +16,12 @@ The first stable release: MDVaultSync now syncs a vault between your devices thr
 - **Syncing.** A sync runs about 5 seconds after Obsidian opens, then every 5 minutes (adjustable, or off). **Sync now** (command or ribbon button) syncs at once. Only one sync runs at a time; a trigger during a sync queues at most one more.
 - **Each sync** applies OneDrive's changes here first, then sends this device's changes up. Renames and moves, including whole folders, are applied as moves, so OneDrive keeps its version history. Unchanged files are never transferred, and up to four files transfer at a time.
 - **A preview before the first sync** on each device, and on demand with **Preview sync** or before every sync with a setting. The first sync on a device, after signing in again, or after the OneDrive folder is recreated only adds files and never deletes. Files that differ on both sides with no sync history are listed in their own group, so the conflict copies they get are no surprise.
-- **Conflicts keep both versions.** The OneDrive version keeps the name; this device's version is saved as a conflict copy such as `Note (conflict iPad 2026-10-12 140203).md` and uploaded, so every device has it. One notice lists every conflict copy. Identical files are never made into conflicts: they're compared byte for byte first. A note you edit while a sync runs is never overwritten or deleted by that sync.
+- **Conflicts keep both versions.** The OneDrive version keeps the name; this device's version is saved as a conflict copy such as `Note (conflict iOS 2026-10-12 140203).md` and uploaded, so every device has it. One notice lists every conflict copy. Identical files are never made into conflicts: they're compared byte for byte first. A note you edit while a sync runs is never overwritten or deleted by that sync.
 - **Safe deletes.** Deletes go to the OneDrive recycle bin or this device's trash. An edit wins over a delete. If a sync would delete more than 25 % of your synced files (adjustable), it asks first; skipped deletes aren't proposed again until a file changes or you select **Sync now**.
 - **Safe writes.** Every download is checked against its size and, when OneDrive lists one, its fingerprint, written to a hidden temporary file, then moved into place. Nothing is ever written into Obsidian's settings folder, a hidden folder, or outside the vault.
 - **Large files and interruptions.** Files over 10 MB upload in pieces, and an interrupted upload continues where it stopped, after a restart too. Progress is saved as the sync goes, so a sync stopped by iPadOS or a lost connection resumes without losing work.
 - **Skipped files are reported, never renamed:** names OneDrive refuses, paths over 400 characters, names that clash by letter case or Unicode form, files over the size cap, and excluded or hidden files.
-- **Settings:** device name (used in conflict copy names), sync interval, maximum file size, exclude patterns (gitignore style), preview before every sync, the delete threshold, the last sync report with a **Sync now** button, **OneDrive storage** (used, total and free; warns at 10 % free), and **Verbose logging** under Diagnostics.
+- **Settings:** device name (used in conflict copy names), sync interval, maximum file size, exclude patterns (gitignore style), preview before every sync, the delete threshold, the last sync report with a **Sync now** button, **OneDrive storage** (used, total and free; warns at 10 % free), and, under Diagnostics, **Show log** (the recent log, with a **Copy** button) and **Verbose logging**.
 - **Sync state at a glance:** the status bar (desktop) and the ribbon button's icon (every device) show the state; **Show sync status** shows the state, the last sync time and the last report.
 - **Readable notices** for every error a sync can meet, including a full OneDrive. A sync with nothing wrong stays quiet.
 - **README:** the complete guide, including the Microsoft Entra setup (moved from `docs/entra-setup.md`), a settings and commands reference, how sync behaves, the residual security risks, how to verify a release with `gh attestation verify`, and how to sign out and uninstall.
@@ -34,13 +34,21 @@ The first stable release: MDVaultSync now syncs a vault between your devices thr
 - If the saved exclude patterns can't be read, sync pauses with a notice until you check them, instead of syncing with no exclusions.
 - Signing out also deletes the sync state and closes any open sync preview or delete prompt. A OneDrive sign-in left behind by an uninstalled copy is removed when the plugin is installed again, with a notice.
 - Releases from 1.0.0 on are full releases, not pre-releases.
+- The default device name in conflict copies is now the platform: "iOS", "Linux", "Mac", "Windows" or "Android" (it was "iPad" or "Ubuntu").
+- The README is shorter, with one troubleshooting section.
+
+### Removed
+
+- The **Run OneDrive capability probe** and **Test file replace on this device** commands and the probe's settings row: checks for the test builds, no longer needed.
 
 ### Fixed
 
+- **Copy log** did nothing on Linux. The log now opens in a window; **Copy** copies it, or, if the clipboard doesn't answer within 2 seconds, selects it so you can copy it yourself.
 - Opening the MDVaultSync settings after this app's access was removed, or after signing out with the command, could freeze Obsidian (0.6.0–0.6.3). The settings now always show the rows for the current state.
 
 ### Security
 
+- Your sign-in is never written to a plain file. If Obsidian's secret storage doesn't work on a device, the sign-in is kept in memory until Obsidian closes, with a warning in settings, and you sign in again at the next start. Before, it was saved unencrypted in the plugin's data file. A sign-in saved that way by a test build is moved into secret storage (or memory) and deleted from the file at startup.
 - File names in the preview, report and notices show hidden or direction-changing characters as codes, so a name can't disguise itself.
 - A test runs whole syncs with marker text in file names, contents, tokens and server messages, and checks that none of it reaches the plugin's log or the developer console.
 

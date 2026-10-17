@@ -11,7 +11,7 @@ import { GRAPH_BASE } from "../src/remote/graph.ts";
 import { API_TIMEOUT_MS } from "../src/remote/timeout.ts";
 import { FRAGMENT } from "../src/remote/upload-session.ts";
 import { TRANSFER_HOST_SUFFIXES } from "../src/remote/validate.ts";
-import { DEFAULT_DATA, MAX_PATTERN_LINES } from "../src/settings.ts";
+import { DEFAULT_DATA, MAX_PATTERN_LINES, defaultDeviceName } from "../src/settings.ts";
 import { LOW_SPACE_FRACTION } from "../src/ui/quota.ts";
 import { STUCK_LIMIT } from "../src/ui/triggers.ts";
 
@@ -43,7 +43,7 @@ test("README has the developer-policy disclosures [O-POL-1], [O-POL-2]", () => {
 
 test("README holds the full Entra setup guide (SPEC §6.4); docs/entra-setup.md points to it", () => {
 	const g = section("Microsoft Entra setup");
-	for (const h of ["Step 1:", "Step 2:", "Step 3:", "Step 4:", "Step 5:", "Final check", "Troubleshooting"]) {
+	for (const h of ["Step 1:", "Step 2:", "Step 3:", "Step 4:", "Step 5:", "Final check"]) {
 		assert.match(g, new RegExp(`^### ${h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "m"), `guide heading ${h}`);
 	}
 	has(g, "`obsidian://mdvaultsync-auth`");
@@ -68,7 +68,7 @@ test("README settings reference names every settings row and every command", () 
 	assert.ok(rows.length >= 15, `found ${rows.length} settings rows`);
 	for (const r of rows) has(ref, `**${r}**`, `settings row ${r}`);
 	const commands = [...read("src/main.ts").matchAll(/^\s+name: "([^"]+)",$/gm)].map((m) => m[1] ?? "");
-	assert.ok(commands.length >= 7, `found ${commands.length} commands`);
+	assert.ok(commands.length >= 5, `found ${commands.length} commands`);
 	for (const c of commands) has(section("Commands"), `**${c}**`, `command ${c}`);
 	has(ref, "Verbose logging");
 	has(ref, `${LOW_SPACE_FRACTION * 100} % or less is free`);
@@ -81,8 +81,9 @@ test("README settings reference names every settings row and every command", () 
 
 test("README conflict naming matches src/core/conflict-name.ts", () => {
 	const at = new Date(2026, 9, 12, 14, 2, 3);
-	const first = conflictCopyPath("Note.md" as VaultPath, "iPad", at, () => false, 16);
-	const second = conflictCopyPath("Note.md" as VaultPath, "iPad", at, (p) => p === first.toLowerCase() || p === first, 16);
+	const device = defaultDeviceName("ios");
+	const first = conflictCopyPath("Note.md" as VaultPath, device, at, () => false, 16);
+	const second = conflictCopyPath("Note.md" as VaultPath, device, at, (p) => p === first.toLowerCase() || p === first, 16);
 	const s = section("How sync works");
 	has(s, `\`${first}\``, `example ${first}`);
 	assert.ok(second.startsWith(first.replace(/\.md$/, " 2")), `second copy ${second}`);
@@ -159,4 +160,22 @@ test("README has no pre-release status text, and every relative link resolves", 
 		if (/^[a-z]+:/i.test(target)) continue;
 		assert.ok(existsSync(join(root, dirname("docs/entra-setup.md"), target)), `broken link in entra-setup.md: ${target}`);
 	}
+});
+
+test("README has one troubleshooting section with the sign-in errors", () => {
+	const s = section("Troubleshooting");
+	for (const code of ["AADSTS50011", "AADSTS7000218", "AADSTS9002326", "AADSTS700016", "unauthorized_client"]) has(s, code);
+	has(s, "x-scheme-handler/obsidian");
+	has(s, "**Web viewer**");
+	has(s, "**Show log → Copy**");
+	assert.ok(!section("Microsoft Entra setup").includes("### Troubleshooting"), "no second troubleshooting section");
+});
+
+test("README describes the memory-only sign-in and none of the removed diagnostics (D-5, R-UI-1)", () => {
+	has(section("Settings reference"), "kept in memory only, never on disk");
+	for (const gone of ["unencrypted in the plugin's data file", "capability probe", "Test file replace", "Copy log"]) {
+		assert.ok(!flatReadme.includes(gone), `stale text: ${gone}`);
+	}
+	const sync = section("Settings reference");
+	for (const name of ["iOS", "Linux"]) has(sync, `"${name}"`);
 });

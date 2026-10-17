@@ -1460,7 +1460,7 @@ Planning times on this host were 0.97–1.29 s, against 0.66–0.80 s on 0.6.0. 
 ---
 
 ## M9: BRAT release 1.0.0 and README with the Entra guide
-**Status:** awaiting-owner (2026-10-17, 1.0.0). The session part is done: README, community checklist, version 1.0.0 and CHANGELOG; lint, typecheck, 868 tests, build and audit pass (**Verification output**). The release itself (tag, draft, publish, `gh attestation verify`), the tag ruleset, the BRAT installs and the round trip are owner steps 1–7 below; M9 is `done` when they pass.
+**Status:** awaiting-owner (2026-10-17, 1.0.0). The session part is done: README, community checklist, version 1.0.0 and CHANGELOG; lint, typecheck, 863 tests, build and audit pass (**Verification output**, after the owner-notes follow-up). The release itself (tag, draft, publish, `gh attestation verify`), the tag ruleset, the BRAT installs and the round trip are owner steps 1–7 below; M9 is `done` when they pass.
 
 **Goal.** A first release, attested and built in CI, installable through BRAT on both devices.
 
@@ -1543,6 +1543,10 @@ Planning times on this host were 0.97–1.29 s, against 0.66–0.80 s on 0.6.0. 
    Pass when both print `✓ Verification succeeded!` (paste the last lines below).
 6. **BRAT on both devices.** On Ubuntu and on the iPad, run **BRAT: Check for updates to all beta plugins** (or add `caseke/MDVaultSync` on a fresh install). **Settings → Community plugins** shows MDVaultSync **1.0.0**.
 7. **Round trip.** On Ubuntu, create a note `M9 check.md` with one line and run **Sync now**. On the iPad, run **Sync now**: the note appears. Add a line on the iPad, sync, then sync Ubuntu: the line arrives. Delete the note on Ubuntu and sync both: it's in the iPad's trash (as Obsidian's **Deleted files** setting says) and in the OneDrive recycle bin. Pass when each step shows the expected result and no conflict copy appears.
+7a. **Owner-notes follow-up checks** (on 1.0.0; a failure here means a 1.0.1, not a re-tag):
+   - **Show log** on Ubuntu and on the iPad: Settings → MDVaultSync → Diagnostics → **Show log** opens the log; **Copy**, then paste somewhere. Pass when the paste holds the log, or, if it can't reach the clipboard, the hint appears within about 2 seconds and the text is selected for a manual copy. Say which one happened on each device.
+   - **Device name:** the **Device name** description reads `Leave empty for "iOS"` on the iPad and `Leave empty for "Linux"` on Ubuntu.
+   - **Diagnostics:** the command palette has no "Run OneDrive capability probe" or "Test file replace" command, and settings has no probe row.
 8. **Optional:** the community.obsidian.md **Review branch** preview, steps in [community-checklist.md](community-checklist.md).
 9. **Later:** re-test sign-in 30 or more days after the Azure sign-up (cost-estimate "to re-check"), when the free subscription is disabled. Pass when **Sign in** still works on one device. This doesn't block 1.0.0.
 
@@ -1561,23 +1565,24 @@ npm version 1.0.0 --no-git-tag-version   # done in the session: version-bump.mjs
 ```
 *Changed in M9:* the plan had `npm version 1.0.0` and `git push --follow-tags` on `main` after the merge. The version is bumped in the branch instead, as for 0.6.x, so the pull request carries the 1.0.0 manifest and CHANGELOG; `npm version 1.0.0` on `main` would then fail ("Version not changed"). The owner tags the merge commit (step 3).
 
-**Verification output** (2026-10-17, Node 22.22, container; after the review fixes)
+**Verification output** (2026-10-17, Node 22.22, container; after the owner-notes follow-up)
 ```
 $ npm run lint                  (exit 0; 0 errors, 0 warnings)
 $ npm run typecheck             (exit 0)
 $ npm test
-# tests 868
+# tests 863
 # suites 8
-# pass 868
+# pass 863
 # fail 0
 $ npm run build                 (exit 0)
 $ npm audit --audit-level=high  (exit 0; 3 moderate, dev-only, unchanged)
 $ scripts/check-network-apis.sh
 no forbidden network APIs
 $ npm run build; sha256sum main.js   (twice)
-d36b59004f0ea8db0a7f084786bcce236712b4be8a5fb983f55729cfd4b77f6e  main.js
-d36b59004f0ea8db0a7f084786bcce236712b4be8a5fb983f55729cfd4b77f6e  main.js
+6ba661c5b6236b8d92e3ebd32ec3e3925684cd8a5b04b7f24201609fdc799d65  main.js
+6ba661c5b6236b8d92e3ebd32ec3e3925684cd8a5b04b7f24201609fdc799d65  main.js
 ```
+Before the follow-up (after the first review fixes): 868 tests passing, `main.js` sha256 `d36b5900…77f6e` both times. The count fell by the removed probe tests and rose by the new token, copy and README tests.
 The two builds give the same `main.js`, which the community directory's build verification relies on [O-SUB-5].
 
 **What was built**
@@ -1597,7 +1602,19 @@ The two builds give the same `main.js`, which the community directory's build ve
 - **Obsidian 1.14 settings-tab behavior, performance margin, matrix row 5b:** no settings or planner change in M9, so nothing to keep; they stay recorded in M8 for later work.
 - **Open items, not blocking 1.0.0:** none picked; they stay open (listed under **Open after 1.0.0**).
 
-**Open after 1.0.0** (owner's choice; unchanged from the M7 and M8 reviews)
+**Owner-notes follow-up** (2026-10-17, after the owner read the README; plan approved in the session)
+Triage of the 9 notes: 1, 2, 3, 4a, 5 and 7 before the tag; 4b, 6 and 8 after (below).
+- **Token fallback (note 3; owner chose "memory only"):** when SecretStorage fails, the refresh token is kept in memory for the session and never written to disk. A non-secret `sessionOnlySignIn` flag in data.json drives the settings warning and a notice at the next launch. A 0.x plaintext `fallbackRefreshToken` is moved into SecretStorage, or memory, at load and data.json is saved without it (`legacyRefreshToken`, `adoptLegacy`). SPEC R-AUTH-5, D-5 and D-6, design §4 and §11, and threat-model I1 and I2 are updated. Tests: `test/token-store.test.ts` (rewritten for memory-only, restart, migration) and `test/settings.test.ts`.
+- **Device names (note 4a; owner chose "iOS"):** "iOS", "Linux", "Mac", "Windows", "Android", else "Device". No distribution name: that needs Node file access, which mobile lacks.
+- **Diagnostics (note 5):** the capability probe (`src/remote/probe.ts`, `src/platform/diagnostics.ts`), the file-replace test (`src/platform/rename-probe.ts`) and `src/ui/diagnostics-modal.ts` are removed, along with their commands, settings row and tests. `platformName` moved to `src/platform/platform-name.ts`. `probeBytes` moved into `test/quickxor.test.ts`, which keeps OneDrive's hash vectors. SPEC R-UI-1 is amended. The capability constants stay in `capabilities.ts`.
+- **Copy log (note 7; owner: on Ubuntu nothing happened, no notice):** the old handler gave no answer when `navigator.clipboard.writeText` threw before returning a promise or never settled. **Show log** now opens `LogModal`, and `copyText` (`src/ui/copy-text.ts`) always settles: copied, or manual after a throw, a rejection, a missing API or a 2-second timeout, which selects the text. Tests: `test/copy-text.test.ts` (6). The real cause on Ubuntu isn't known; step 7a records what each device does.
+- **README (notes 1, 2):** rewritten shorter. Old portal labels, old layouts, the paste-fallback history and research IDs are gone. One **Troubleshooting** section holds the sign-in errors and sync symptoms. `test/readme.test.ts` (+2) checks the single troubleshooting section, the memory-only text and that no removed diagnostic is mentioned.
+- CHANGELOG `[1.0.0]` updated (Removed, Fixed, Security). The version stays 1.0.0 (not tagged yet).
+
+**Open after 1.0.0** (owner's choice; the M7 and M8 review items, plus owner notes 4b, 6 and 8)
+- **Duplicate device names (note 4b).** No data-safety effect: copies carry a timestamp to the second and get ` 2` on a clash. Detecting duplicates needs a shared registry file in the app folder (new remote data, validation and threat-model rows).
+- **Sync history and log export (note 6).** Proposal: keep a local history of the last N reports with problems, file names included, viewable in Obsidian and separate from the log. The log stays codes-only (R-SEC-3). An optional export adds per-file tokens as an HMAC with a random key made per export and never saved, so names can be matched within one export but not guessed. Needs a SPEC and threat-model change.
+- **Ribbon action by state (note 8).** Sync when synced; show the status while syncing, waiting or after an error; sign in when a sign-in is needed. The tooltip and aria-label must change with the action.
 - checking `live()` between fragments inside `RemoteContent.resume`;
 - re-hashing after a download write in `recordDownload`;
 - a prepared but untapped sign-in has no expiry;
@@ -1630,6 +1647,7 @@ The two builds give the same `main.js`, which the community directory's build ve
 | 5 `gh attestation verify` (both forms) | (owner) |
 | 6 BRAT 1.0.0 on Ubuntu / iPad | (owner) |
 | 7 Round trip | (owner) |
+| 7a Show log / device name / diagnostics gone | (owner) |
 | 9 Sign-in after 30+ days | (owner, later) |
 
 ---
@@ -1657,7 +1675,7 @@ The two builds give the same `main.js`, which the community directory's build ve
 | R-NET-1 | M2, M3 | ☑ (M2 and M3, 2026-10-12: auth and Graph go only through the requestUrl transport; lint and the CI script enforce it) |
 | R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested; M8 2026-10-17: request timeouts (not retried; the commit fragment never times out), quota reads never retry) |
 | R-RES-2, R-RES-3 | M3, M6 | ☑ (M3 part done 2026-10-12: 10 MiB upload-session primitives, status and 404 handling; a 12 MiB two-fragment round trip passed on both devices; persistence and resume are M6; M6 part done 2026-10-12: sessions persisted before the first fragment and resumed from nextExpectedRanges, 404 restarts; saves at most 1 s after an op and before every destructive op; crash injection after every mutating call converges) |
-| R-UI-1…3 | M2, M7 | ☑ (M2 part done 2026-10-12: Account section. M7 part done 2026-10-12 (owner checks passed 2026-10-12): every R-UI-1 field; status bar on desktop with the state and last sync time; on mobile the ribbon icon shows the state and Show sync status the time (R-UI-2 amended 2026-10-12, 0.5.1); notices for errors and conflicts only; tested in the pure modules; M8 2026-10-17: the OneDrive storage line (T-D7), the Verbose logging toggle, error notice text for every code, and settings rows that follow the sign-in state (Obsidian caches definitions)) |
+| R-UI-1…3 | M2, M7, M9 | ☑ (M9 2026-10-17: R-UI-1 amended, the capability probe removed; the log opens in a window with a copy fallback. M2 part done 2026-10-12: Account section. M7 part done 2026-10-12 (owner checks passed 2026-10-12): every R-UI-1 field; status bar on desktop with the state and last sync time; on mobile the ribbon icon shows the state and Show sync status the time (R-UI-2 amended 2026-10-12, 0.5.1); notices for errors and conflicts only; tested in the pure modules; M8 2026-10-17: the OneDrive storage line (T-D7), the Verbose logging toggle, error notice text for every code, and settings rows that follow the sign-in state (Obsidian caches definitions)) |
 | R-SEC-1, R-SEC-2 | M2, M9 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 (M2: SecretStorage observed on both devices, including a locked GNOME keyring; M9 2026-10-17: the residual risks are in the README, copied verbatim from threat-model §4 and tested in `test/readme.test.ts`) |
 | R-SEC-3 | M3, M8 | ☑ (M3 part done 2026-10-12: typed redacting logger, unit tested; M8 part done 2026-10-13: the sentinel test runs full syncs over the production stack and finds no name, content, token, URL or server message in the ring buffer or any console call) |
 | R-SEC-4 | M3, M4 | ☑ (M3 part done 2026-10-12: Graph JSON, ids, names, sizes, tags, hashes, links and transfer URLs validated; M4 part done 2026-10-12: remote-derived paths validated by `remoteToVaultPath`) |

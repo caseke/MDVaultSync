@@ -118,10 +118,10 @@ export interface StateStore { load(): Promise<SyncState | null>; save(s: SyncSta
 // ---------- auth ----------
 export interface TokenStore {
   get(): string | null;
-  set(refreshToken: string): Promise<void>;   // async: the data.json fallback needs saveData
+  set(refreshToken: string): Promise<void>;   // async: saves the non-secret sessionOnlySignIn flag
   clear(): Promise<void>;
-  /** "secret-storage" = Obsidian SecretStorage (OS encryption NOT guaranteed, see §4); "plugin-data" = data.json fallback. */
-  readonly backend: "secret-storage" | "plugin-data";
+  /** "secret-storage" = Obsidian SecretStorage (OS encryption NOT guaranteed, see §4); "memory" = this session only (D-5). */
+  readonly backend: "secret-storage" | "memory";
 }
 export interface AccessTokenProvider { getAccessToken(): Promise<string>; } // single-flight refresh
 

@@ -89,7 +89,7 @@ test("RemotePort content methods are banned outside remote-content.ts and src/re
 		const code = `declare const remote: any, id: any, p: any, n: any, d: any, e: any, t: any, u: any;\nexport const r = remote.${call};\n`;
 		await assertFlags(code, "src/core/executor.ts", "no-restricted-syntax");
 		await assertFlags(code, "src/main.ts", "no-restricted-syntax");
-		await assertFlags(code, "src/platform/diagnostics.ts", "no-restricted-syntax");
+		await assertFlags(code, "src/platform/obsidian-vault.ts", "no-restricted-syntax");
 		await assertClean(code, "src/core/remote-content.ts");
 		await assertClean(code, "src/remote/graph.ts");
 		await assertClean(code, "test/fakes/fake-remote.ts");

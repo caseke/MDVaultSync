@@ -1,10 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { QuickXorHasher, quickXorHash } from "../src/core/quickxor.ts";
-import { probeBytes } from "../src/remote/probe.ts";
 
 function b64(s: string): Uint8Array {
 	return new Uint8Array(Buffer.from(s, "base64"));
+}
+
+/** The M3 probe's deterministic test bytes (xorshift32), kept here for the OneDrive hash vectors below. */
+function probeBytes(n: number, seed: number): ArrayBuffer {
+	const out = new Uint8Array(n);
+	let x = seed >>> 0 || 1;
+	for (let i = 0; i < n; i++) {
+		x ^= x << 13;
+		x >>>= 0;
+		x ^= x >>> 17;
+		x ^= x << 5;
+		x >>>= 0;
+		out[i] = x & 0xff;
+	}
+	return out.buffer;
 }
 
 // OneDrive's own hashes of the M3 probe files (plan.md M3 hashVectors, research.md [G-HASH-2]).

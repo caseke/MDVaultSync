@@ -4,7 +4,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { clearSession } from "../src/platform/sign-out.ts";
 import { PluginStateStore } from "../src/platform/plugin-state-store.ts";
-import { probeRename } from "../src/platform/rename-probe.ts";
 import { FakeRemote } from "./fakes/fake-remote.ts";
 import { Device, vaultFiles } from "./fakes/device.ts";
 import { deferred } from "./fakes/fake-http.ts";
@@ -52,20 +51,4 @@ test("a failure to clear either part is reported, and the state is still cleared
 	assert.deepEqual(res, { tokenCleared: false, stateCleared: true });
 	const res2 = await clearSession({ engine: null, signOut: () => Promise.resolve(), store: { load: () => Promise.resolve(null), save: () => Promise.resolve(), clear: () => Promise.reject(new Error("y")) } });
 	assert.deepEqual(res2, { tokenCleared: true, stateCleared: false });
-});
-
-test("the rename probe reports how adapter.rename treats an existing target (manual check, O-API-10)", async () => {
-	for (const [mode, expected] of [
-		[true, "replaced"],
-		[false, "threw"],
-		["keep", "kept-target"],
-	] as const) {
-		const o = new FakeObsidian();
-		o.renameOverwrites = mode;
-		const r = await probeRename(o.adapter, DIR);
-		assert.equal(r.renameOverExisting, expected);
-		assert.equal(r.fallbackWorks, true);
-		assert.equal(r.cleanedUp, true);
-		assert.equal([...o.entries.keys()].length, 0);
-	}
 });

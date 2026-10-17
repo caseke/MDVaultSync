@@ -43,56 +43,108 @@ test("stores in SecretStorage and never in plugin data", async () => {
 	const { secrets, data, store } = setup();
 	await store.set("RT1");
 	assert.equal(secrets.map.get(SECRET_ID), "RT1");
-	assert.equal(data.fallbackRefreshToken, undefined);
+	assert.ok(!JSON.stringify(data).includes("RT1"));
 	assert.equal(store.get(), "RT1");
 	assert.equal(store.backend, "secret-storage");
+	assert.equal(store.sessionOnly, false);
 });
 
-test("falls back to plugin data when setSecret throws", async () => {
+// D-5 (changed in M9): no plaintext fallback. A token SecretStorage can't hold lives in memory only.
+test("keeps the token in memory only when setSecret throws; nothing secret reaches plugin data", async () => {
 	const { secrets, data, store, saves } = setup();
 	secrets.failSet = true;
 	await store.set("RT1");
-	assert.equal(store.backend, "plugin-data");
-	assert.equal(data.fallbackRefreshToken, "RT1");
-	assert.equal(saves(), 1);
+	assert.equal(store.backend, "memory");
 	assert.equal(store.get(), "RT1");
+	assert.ok(!JSON.stringify(data).includes("RT1"));
+	assert.equal(data.sessionOnlySignIn, true);
+	assert.equal(store.sessionOnly, true);
+	assert.equal(saves(), 1);
 });
 
-test("falls back when SecretStorage doesn't keep the value", async () => {
+test("keeps the token in memory only when SecretStorage doesn't keep the value", async () => {
 	const { secrets, data, store } = setup();
 	secrets.dropWrites = true;
 	await store.set("RT1");
-	assert.equal(store.backend, "plugin-data");
-	assert.equal(data.fallbackRefreshToken, "RT1");
+	assert.equal(store.backend, "memory");
+	assert.equal(store.get(), "RT1");
+	assert.ok(!JSON.stringify(data).includes("RT1"));
 });
 
-test("moves back to SecretStorage once it works and removes the fallback", async () => {
-	const { secrets, data, store } = setup({ fallbackRefreshToken: "OLD" });
-	assert.equal(store.backend, "plugin-data");
-	assert.equal(store.get(), "OLD");
+test("a refresh while memory-only replaces the in-memory token", async () => {
+	const { secrets, store } = setup();
+	secrets.failSet = true;
+	await store.set("RT1");
 	await store.set("RT2");
-	assert.equal(store.backend, "secret-storage");
-	assert.equal(secrets.map.get(SECRET_ID), "RT2");
-	assert.ok(!("fallbackRefreshToken" in data));
 	assert.equal(store.get(), "RT2");
 });
 
-test("clear empties both stores", async () => {
-	const { secrets, data, store } = setup({ fallbackRefreshToken: "OLD" });
+test("a memory-only sign-in is gone after a restart, and the flag says why", async () => {
+	const { secrets, data, store } = setup();
+	secrets.failSet = true;
+	await store.set("RT1");
+	const restarted = new PluginTokenStore(secrets, { get: () => data, save: () => Promise.resolve() });
+	assert.equal(restarted.get(), null);
+	assert.equal(restarted.backend, "secret-storage");
+	assert.equal(restarted.sessionOnly, true);
+});
+
+test("moves to SecretStorage once it works and clears the memory-only flag", async () => {
+	const { secrets, data, store } = setup();
+	secrets.failSet = true;
+	await store.set("RT1");
+	secrets.failSet = false;
+	await store.set("RT2");
+	assert.equal(store.backend, "secret-storage");
+	assert.equal(secrets.map.get(SECRET_ID), "RT2");
+	assert.equal(store.get(), "RT2");
+	assert.equal(data.sessionOnlySignIn, false);
+	assert.equal(store.sessionOnly, false);
+});
+
+test("clear empties SecretStorage and memory, and clears the flag", async () => {
+	const { secrets, data, store } = setup();
+	secrets.failSet = true;
+	await store.set("RT1");
+	secrets.failSet = false;
 	secrets.map.set(SECRET_ID, "RT");
 	await store.clear();
 	assert.equal(secrets.map.get(SECRET_ID), "");
-	assert.ok(!("fallbackRefreshToken" in data));
 	assert.equal(store.get(), null);
+	assert.equal(store.backend, "secret-storage");
+	assert.equal(data.sessionOnlySignIn, false);
+});
+
+test("clear still drops the in-memory token when setSecret throws", async () => {
+	const { secrets, store } = setup();
+	secrets.failSet = true;
+	await store.set("RT1");
+	await store.clear();
+	assert.equal(store.get(), null);
+});
+
+test("a plaintext token left in data.json by 0.x is adopted into SecretStorage", async () => {
+	const { secrets, store } = setup();
+	await store.adoptLegacy("OLD");
+	assert.equal(secrets.map.get(SECRET_ID), "OLD");
+	assert.equal(store.get(), "OLD");
 	assert.equal(store.backend, "secret-storage");
 });
 
-test("clear still removes the fallback when setSecret throws", async () => {
-	const { secrets, data, store } = setup({ fallbackRefreshToken: "OLD" });
+test("a legacy token SecretStorage still can't hold is kept in memory for this session only", async () => {
+	const { secrets, data, store } = setup();
 	secrets.failSet = true;
-	await store.clear();
-	assert.ok(!("fallbackRefreshToken" in data));
-	assert.equal(store.get(), null);
+	await store.adoptLegacy("OLD");
+	assert.equal(store.backend, "memory");
+	assert.equal(store.get(), "OLD");
+	assert.ok(!JSON.stringify(data).includes("OLD"));
+});
+
+test("a legacy token never replaces one already in SecretStorage", async () => {
+	const { secrets, store } = setup();
+	secrets.map.set(SECRET_ID, "NEW");
+	await store.adoptLegacy("OLD");
+	assert.equal(store.get(), "NEW");
 });
 
 test("an empty secret reads as null, and a throwing getSecret reads as null", () => {
@@ -103,12 +155,11 @@ test("an empty secret reads as null, and a throwing getSecret reads as null", ()
 	assert.equal(store.get(), null);
 });
 
-test("clear throws when SecretStorage can't overwrite the token, after removing the fallback", async () => {
-	const { secrets, data, store } = setup({ fallbackRefreshToken: "OLD" });
+test("clear throws when SecretStorage can't overwrite the token", async () => {
+	const { secrets, store } = setup();
 	secrets.map.set(SECRET_ID, "RT");
 	secrets.failSet = true;
 	await assert.rejects(store.clear(), (e: unknown) => e instanceof TokenClearError);
-	assert.ok(!("fallbackRefreshToken" in data));
 	assert.equal(store.get(), "RT");
 });
 

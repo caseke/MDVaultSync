@@ -5,26 +5,24 @@ import { RingLogger } from "./core/logger.ts";
 import type { Clock, EngineStatus, StateStore, SyncReport, Trigger } from "./core/ports.ts";
 import { TransformedRemoteContent } from "./core/remote-content.ts";
 import { IdentityTransform } from "./core/transform.ts";
-import { Diagnostics, platformName } from "./platform/diagnostics.ts";
+import { platformName } from "./platform/platform-name.ts";
 import { ObsidianVault, type FileManagerLike, type VaultLike } from "./platform/obsidian-vault.ts";
 import { registerVaultEvents, type VaultEventEmitter } from "./platform/vault-events.ts";
 import { PluginStateStore } from "./platform/plugin-state-store.ts";
-import { probeRename } from "./platform/rename-probe.ts";
 import { clearSession } from "./platform/sign-out.ts";
 import { isLeftoverInstall } from "./platform/leftover-install.ts";
 import { createRequestUrlTransport } from "./platform/request-url-transport.ts";
 import { PluginTokenStore, TokenClearError } from "./platform/token-store.ts";
 import { AuthClient, AuthError } from "./remote/auth.ts";
-import { PUT_HONORS_IF_MATCH, type DeltaForm } from "./remote/capabilities.ts";
+import { PUT_HONORS_IF_MATCH } from "./remote/capabilities.ts";
 import { classifyError } from "./remote/classify.ts";
 import { GraphClient } from "./remote/graph.ts";
 import { AuthorizingTransport } from "./remote/http.ts";
 import { RetryPolicy } from "./remote/retry.ts";
 import { TimeoutTransport } from "./remote/timeout.ts";
-import { defaultDeviceName, isValidClientId, pauseFromData, parseData, snapshotForSave, toEngineSettings, type PluginData } from "./settings.ts";
+import { defaultDeviceName, isValidClientId, legacyRefreshToken, pauseFromData, parseData, snapshotForSave, toEngineSettings, type PluginData } from "./settings.ts";
 import { AUTH_ERROR_MESSAGES, authErrorText } from "./ui/auth-messages.ts";
 import { ConfirmDeletesModal } from "./ui/confirm-deletes-modal.ts";
-import { DiagnosticsModal, FILE_REPLACE_TEXT } from "./ui/diagnostics-modal.ts";
 import { noticesFor, type NoticeSpec } from "./ui/notices.ts";
 import { PlanPreviewModal } from "./ui/plan-preview-modal.ts";
 import { QuotaCache } from "./ui/quota.ts";
@@ -66,6 +64,9 @@ function vaultPorts(app: App): { vault: VaultLike; fileManager: FileManagerLike 
 }
 
 /** Where a personal account removes an app's access [C-MSA-1]. */
+/** Shown at load after a memory-only sign-in ended with the previous session (D-5). */
+const SESSION_ONLY_TEXT =
+	"MDVaultSync: sign in again to sync. Obsidian's secret storage isn't working on this device, so your sign-in is kept only until Obsidian closes, never on disk.";
 const APP_ACCESS_URL = "https://account.microsoft.com/privacy/app-access";
 
 export default class MDVaultSyncPlugin extends Plugin {
@@ -90,7 +91,6 @@ export default class MDVaultSyncPlugin extends Plugin {
 	/** Device name used when the setting is empty: "iPad" or "Ubuntu" on the owner's devices (design §11). */
 	defaultDeviceName = "Device";
 	private pluginDir = "";
-	private diagnostics!: Diagnostics;
 	private statusBarEl: HTMLElement | null = null;
 	private ribbonEl: HTMLElement | null = null;
 	private timerId: number | null = null;
@@ -131,8 +131,12 @@ export default class MDVaultSyncPlugin extends Plugin {
 			get: () => this.data,
 			save: () => this.persist(),
 		});
-		// Before AuthClient reads the token: a sign-in left by an uninstalled copy is removed (R-AUTH-9).
+		// Before AuthClient reads the token: a 0.x plaintext token leaves data.json (D-5), and a sign-in left by an
+		// uninstalled copy is removed (R-AUTH-9).
+		await this.migrateLegacyToken(raw);
 		await this.clearLeftoverSignIn(!(await isLeftoverInstall(this.app.vault.adapter, this.pluginDir)));
+		// The last sign-in lived in memory only (D-5), so it ended when Obsidian closed: say why one is needed.
+		if (this.tokenStore.sessionOnly && this.tokenStore.get() === null) new Notice(SESSION_ONLY_TEXT, 0);
 		// requestUrl has no timeout: every request, the token endpoint's included, races a timer (design §6.1).
 		const transport = (this.timeouts = new TimeoutTransport(createRequestUrlTransport((p) => requestUrl(p)), (ms, fn) => {
 			const id = window.setTimeout(fn, ms);
@@ -152,16 +156,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 		const graphTransport = new AuthorizingTransport(transport, this.auth);
 		const retry = new RetryPolicy({ clock, logger: this.logger });
 		// Transfer URLs use the bare transport: no auth decorator, so they can never carry the token (T-I4).
-		const graphFor = (deltaForm?: DeltaForm) =>
-			new GraphClient({
-				transport: graphTransport,
-				transferTransport: transport,
-				retry,
-				clock,
-				logger: this.logger,
-				...(deltaForm ? { deltaForm } : {}),
-			});
-		this.graph = graphFor();
+		this.graph = new GraphClient({ transport: graphTransport, transferTransport: transport, retry, clock, logger: this.logger });
 		// Quota reads send once (no backoff, no Retry-After wait, no pause, no budget): a settings render never stalls
 		// or throttles a sync (M8 review). A failure is reused for a minute by QuotaCache.
 		const quotaGraph = new GraphClient({
@@ -205,13 +200,6 @@ export default class MDVaultSyncPlugin extends Plugin {
 			newDeviceId: () => crypto.randomUUID(),
 			logger: this.logger,
 		});
-
-		this.diagnostics = new Diagnostics(
-			this.app,
-			() => ({ graph: this.graph, graphFor, clock, pluginVersion: this.manifest.version }),
-			() => this.auth.status === "signed-in",
-			() => retry.resetBudget(),
-		);
 
 		this.settingTab = new MDVaultSyncSettingTab(this.app, this);
 		this.addSettingTab(this.settingTab);
@@ -266,17 +254,6 @@ export default class MDVaultSyncPlugin extends Plugin {
 			id: "sign-out",
 			name: "Sign out of OneDrive",
 			callback: () => void this.signOut(),
-		});
-		this.addCommand({
-			id: "run-diagnostics",
-			name: "Run OneDrive capability probe",
-			callback: () => void this.runDiagnostics(),
-		});
-		// M6 manual check [O-API-10]: does adapter.rename replace an existing file on this device?
-		this.addCommand({
-			id: "test-file-replace",
-			name: "Test file replace on this device",
-			callback: () => void this.testFileReplace(),
 		});
 	}
 
@@ -355,10 +332,6 @@ export default class MDVaultSyncPlugin extends Plugin {
 			console.error(`MDVaultSync: sync failed unexpectedly (${e instanceof Error ? e.name : "unknown"})`);
 			new Notice("Sync failed unexpectedly.");
 		}
-	}
-
-	async runDiagnostics(): Promise<void> {
-		await this.diagnostics.run();
 	}
 
 	/** Shows a prompt the engine waits on; the engine applies its own 10-minute timeout too (design §5.4). */
@@ -465,6 +438,22 @@ export default class MDVaultSyncPlugin extends Plugin {
 	}
 
 	/**
+	 * 0.x versions kept the refresh token in plaintext in data.json when SecretStorage failed. D-5 (changed in M9)
+	 * never writes a token to disk: move it into SecretStorage, or into memory for this session, then save data.json
+	 * without it. `data` never held it (parseData drops it), so any save removes it; this one does it at once.
+	 */
+	private async migrateLegacyToken(raw: unknown): Promise<void> {
+		const legacy = legacyRefreshToken(raw);
+		if (legacy === null) return;
+		try {
+			await this.tokenStore.adoptLegacy(legacy);
+			await this.persist();
+		} catch (e) {
+			console.error(`MDVaultSync: could not remove the old sign-in from data.json (${e instanceof Error ? e.name : "unknown"})`);
+		}
+	}
+
+	/**
 	 * Obsidian has no uninstall hook [O-API-19], and uninstalling leaves SecretStorage alone. A refresh token in an
 	 * empty plugin folder is therefore left over from a removed copy: clear it, and say where to revoke the grant
 	 * itself, which a public client can't do [I-TL-4] (R-AUTH-9).
@@ -488,14 +477,6 @@ export default class MDVaultSyncPlugin extends Plugin {
 			f.appendText(".");
 		});
 		new Notice(msg, 0);
-	}
-
-	/** Writes, renames and removes two files in the plugin folder and shows what adapter.rename did. */
-	private async testFileReplace(): Promise<void> {
-		const modal = new DiagnosticsModal(this.app, FILE_REPLACE_TEXT);
-		modal.open();
-		const result = await probeRename(this.app.vault.adapter, this.pluginDir);
-		modal.showResult(JSON.stringify({ ...result, platform: platformName(), pluginVersion: this.manifest.version }, null, 2));
 	}
 
 	/** Clears tokens and sync state; local files stay (R-AUTH-7). */

@@ -10,7 +10,7 @@ flowchart TB
     UI["UI layer<br/>settings tab, ribbon, status bar,<br/>notices, modals"]
     Main["main.ts<br/>Plugin lifecycle, triggers"]
     VA["ObsidianVault<br/>(implements VaultPort)"]
-    TS["TokenStore<br/>SecretStorage → data.json fallback"]
+    TS["TokenStore<br/>SecretStorage, else memory (D-5)"]
     Http["RequestUrlTransport<br/>(implements HttpTransport)"]
   end
   subgraph Core["Pure core (no 'obsidian' import, unit tested)"]
@@ -55,7 +55,7 @@ src/
   ui/        settings-tab.ts, plan-preview-modal.ts, confirm-deletes-modal.ts, report-view.ts, notices.ts
   platform/  obsidian-vault.ts, request-url-transport.ts, token-store.ts, plugin-state-store.ts, diagnostics.ts
   remote/    auth.ts, pkce.ts, http.ts (auth decorator), graph.ts, upload-session.ts, retry.ts,
-             validate.ts, errors.ts (GraphError, ResyncRequired), capabilities.ts, probe.ts (diagnostics, M3)
+             validate.ts, errors.ts (GraphError, ResyncRequired), capabilities.ts (M3 probe results; the probe itself was removed in M9)
   core/      ports.ts, engine.ts, planner.ts, executor.ts, remote-content.ts, upload-resume.ts,
              state.ts, remote-tree.ts, report.ts, paths.ts, exclude.ts, conflict-name.ts,
              quickxor.ts, transform.ts, logger.ts
@@ -188,10 +188,10 @@ export interface StateStore { load(): Promise<SyncState | null>; save(s: SyncSta
 // ---------- auth ----------
 export interface TokenStore {
   get(): string | null;
-  set(refreshToken: string): Promise<void>;   // async: the data.json fallback needs saveData
+  set(refreshToken: string): Promise<void>;   // async: saves the non-secret sessionOnlySignIn flag
   clear(): Promise<void>;
-  /** "secret-storage" = Obsidian SecretStorage (OS encryption NOT guaranteed, see §4); "plugin-data" = data.json fallback. */
-  readonly backend: "secret-storage" | "plugin-data";
+  /** "secret-storage" = Obsidian SecretStorage (OS encryption NOT guaranteed, see §4); "memory" = this session only (D-5). */
+  readonly backend: "secret-storage" | "memory";
 }
 export interface AccessTokenProvider { getAccessToken(): Promise<string>; } // single-flight refresh
 
@@ -254,7 +254,7 @@ export type OpKind = "auth.refresh" | "auth.signin" | "graph.request" | "sync.ru
 The report holds file paths because the user needs to see them. Paths are never written to logs (§9). The report lives only in local plugin state.
 
 ## 3. Lifecycle and triggers
-- **`onload`.** Load settings, construct modules, add commands (`sync-now`, `sync-preview`, `sign-in`, `sign-out`, `run-diagnostics`), add the ribbon icon, and add the status bar item when `Platform.isDesktopApp` [O-API-13]. Register the protocol handler `mdvaultsync-auth` [O-API-3].
+- **`onload`.** Load settings, construct modules, add commands (`sync-now`, `sync-preview`, `sign-in`, `sign-out`, `show-status`; M9 removed `run-diagnostics` and `test-file-replace`), add the ribbon icon, and add the status bar item when `Platform.isDesktopApp` [O-API-13]. Register the protocol handler `mdvaultsync-auth` [O-API-3].
 - **`workspace.onLayoutReady`.** Register vault events (create, modify, delete, rename) [O-API-12]. Schedule the startup sync 5 seconds later. Start the interval timer with `registerInterval(window.setInterval(...))`, set to `settings.intervalMinutes` (default 5, minimum 1, 0 means off).
 - **Vault events** append to `pendingLocal` (saved with the run's saves since M7, see below). Events are never dropped for syncable paths. Each event is recorded as a hint (`dirty`, `deleted`, `renamed`), and the scan resolves it: the file is re-hashed, and our own echo has the hash its sync record already holds, so the planner emits nothing. A real user edit has another hash and syncs normally, so a user edit made during our write can't be swallowed. (As built, M6–M7: the executor also records each write in `expectedWrites` (path → hash), and the scan clears that map; the decision itself rests on the record comparison, which covers echoes that arrive after the map was cleared too.)
 - **M7 (`platform/vault-events.ts`, `core/engine.ts`).** Events for hidden, configDir and excluded paths are ignored, because those paths are never synced; a rename into such a path is a delete, and one out of it a new file. A rename to a name OneDrive refuses stays a rename hint, so the planner can keep the record (§5.4). The scan consumes `expectedWrites` (it clears the map), so the map holds one run's writes at most; the echo itself needs no special case, because its hash equals the record's and the planner emits nothing. Echoes of our own `Vault.rename` and trash arrive as `renamed` / `deleted` hints for records that already moved or went, and plan nothing either (tested).
@@ -317,12 +317,12 @@ Each option is compared on the iPad (Obsidian for iOS) and on Ubuntu (Obsidian .
 
 **TokenStore.**
 - `set` calls `app.secretStorage.setSecret("mdvaultsync-refresh-token", rt)` [O-API-4] on every write, then reads it back.
-  - If that throws or the read-back differs, it writes `data.json.fallbackRefreshToken` with `await saveData` and sets `backend = "plugin-data"`. The settings tab then shows a standing warning (D-5).
-  - When SecretStorage works again, the next `set` (the next refresh) moves the token back and deletes the fallback field.
-  - The initial `backend` is `plugin-data` when `data.json` holds a fallback token, otherwise `secret-storage`.
+  - If that throws or the read-back differs, it overwrites the secret with `""`, keeps the token in memory and sets `backend = "memory"` (D-5, changed in M9). The non-secret `data.json.sessionOnlySignIn` flag is set, so the settings tab shows a standing warning and the next launch, which has no token, shows a notice saying why a sign-in is needed.
+  - When SecretStorage works again, the next `set` (the next refresh or sign-in) stores the token there and clears the flag.
+  - Migration from 0.x: `legacyRefreshToken` reads a `fallbackRefreshToken` from the raw `data.json` once; `adoptLegacy` moves it into SecretStorage (or memory), unless SecretStorage already holds one, and `main.ts` saves `data.json` without it. `parseData` never keeps the field.
   - SecretStorage gives no signal when the OS can't encrypt. For example, Linux with no keyring may store the secret in plaintext without throwing [O-API-6]. So even with `backend = "secret-storage"`, settings shows a neutral note: "Stored in Obsidian secret storage. Encryption depends on your device's keyring." (M2 wording; the obsidianmd sentence-case rule rejects "OS".)
   - M2 records what actually happens on Ubuntu with and without an unlocked keyring.
-- `clear` calls `setSecret(id, "")` (there is no delete method [O-API-4]) and removes the fallback field. If a token can still be read back afterwards, it throws, and sign-out shows "Sign-out is incomplete" instead of claiming success (M2 security review).
+- `clear` calls `setSecret(id, "")` (there is no delete method [O-API-4]), drops the in-memory token and clears the flag. If a token can still be read back afterwards, it throws, and sign-out shows "Sign-out is incomplete" instead of claiming success (M2 security review).
 - `get` treats `""` as null.
 
 **Sign-out:**
@@ -564,7 +564,7 @@ After the run, a notice lists every conflict path (D-9). It stays up until click
 - **401 refresh and retry.** This lives in `AuthorizingTransport` (`src/remote/http.ts`), below the retry policy. On a Graph 401 it calls `AuthClient.invalidateAccessToken(token)` and resends once with a fresh token; a second 401 goes back to the caller. `invalidateAccessToken` drops the cached token only if it is still the one that failed, so concurrent 401s cause one refresh. `ports.ts` is unchanged.
 - **What counts as a network error.** Only `NetworkError` (thrown by the requestUrl transport, defined in `src/remote/errors.ts`) is retried. Any other exception, such as an `AuthError` from the refresh, is rethrown at once (M3 review).
 - **Throttling.** Retries driven by Retry-After are bounded by the run budget, not by the 6-attempt cap. The shared pause covers every request that goes through the same `RetryPolicy`.
-- **Budget reset.** `RetryPolicy.resetBudget()` starts a new run. M6's engine calls it at the start of each sync; the diagnostics command calls it per probe.
+- **Budget reset.** `RetryPolicy.resetBudget()` starts a new run. M6's engine calls it at the start of each sync; (The M3 diagnostics command also called it per probe; it was removed in M9.)
 - **Request timeouts (M8, M7 carry-in "Long requests").** `requestUrl` takes no timeout, and one iPad request hung for about 24 minutes while its run held the single-flight lock (M7 owner check 8). `TimeoutTransport` (`src/remote/timeout.ts`) wraps the requestUrl transport once in `main.ts`, under both the authorizing and the transfer transport, so token requests time out too. Each request races a timer: 120 s, plus 1 s per started 64 KiB of request body (a 10 MiB fragment gets 280 s). A download sets `HttpRequest.timeoutMs` from the item's size the same way (100 MiB: about 29 minutes), since its body arrives in one response [O-API-2]. On timeout the request rejects `RequestTimeout` (no URL). It is not a `NetworkError`, so `RetryPolicy` doesn't retry it (owner's decision, M8 plan): the classifier maps it to `network`/`timeout`, the run ends `partial`, and the next run continues. A response arriving after the timeout is dropped. `requestUrl` can't be aborted, so a timed-out write may still land, even during or after the next run. Writes with a server-side precondition are safe whenever they land: replace, move and delete send `If-Match` (412), new files `conflictBehavior=fail` (409). **The exception is an upload session's final fragment**, which commits the file with no `If-Match` [G-UP-5]: after the next run uploaded a newer version, a late commit would overwrite it, and the run after that would download the old bytes over the edit (M8 security review, medium). The final fragment therefore carries `timeoutMs: NO_TIMEOUT` and keeps holding the single-flight lock until it answers, as every request did before M8. The trade-off: a commit that never answers holds the lock until Obsidian restarts (the pre-M8 behavior, now limited to the commit; the diagnostics probe's last fragment too). Timed-out requests still hanging are counted (`TimeoutTransport.stuck`); while 2 or more hang, unattended triggers (startup, interval) are skipped, because each holds a body of up to 10 MiB and a connection (M8 review, T-D6); **Sync now** still runs. The first skip of a pause shows a persistent notice (automatic sync paused; Sync now works; a restart clears it), so the pause is never silent; a hung request that never answers keeps the count up until a restart. A rerun already queued inside the engine isn't re-checked, so at most one more run starts (accepted, M8 re-review info). Token requests that time out surface as `AuthError("network")`. The timers are `window.setTimeout`. iOS doesn't run them while Obsidian is suspended, and an overdue timer fires on resume, so a request in flight across a long app switch may time out right after it; that run ends `partial` and the next one continues (not yet observed on the iPad).
 - **Transport split.** `GraphClient` uses two transports: the authorizing one for Graph API calls, and a bare `transferTransport` for download URLs and upload-session fragment, status and cancel requests. A tampered transfer URL therefore can't carry the token, even if it passed the allowlist.
 
@@ -650,7 +650,7 @@ All Graph and token JSON passes through hand-written type guards before use. Unk
 ## 10. UI
 - **Settings tab.** Uses `Setting` and group headings [O-GL-2]; no `innerHTML` [O-GL-3]. **M7:** one list of sections and `render` rows feeds both paths: `getSettingDefinitions()` for Obsidian 1.13+ (rendered and indexed for settings search by Obsidian), and `display()` through `SettingGroup` (since 1.11.0) for 1.11.4–1.12. Refresh uses `update()` behind `requireApiVersion("1.13.0")`; after a sync only the report row re-renders, so a field being typed in keeps its focus. Invalid input isn't saved and the row says why. Sections:
   - **Account:** signed-in status, Sign in, Sign out, Client ID (required), and the token-storage line (a warning when `backend = "plugin-data"`, otherwise the neutral SecretStorage note from §4). **M8 (T-D7):** when signed in, **OneDrive storage** shows used, total and free space from `GET /me/drive?$select=quota` [G-QT-1] (readable under the AppFolder scope, M3 probe), in binary units, as a warning at 10 % free or less and when full; the recycle bin counts toward it [G-DEL-2]. `QuotaCache` (`ui/quota.ts`) reads it at most every 5 minutes, reuses a failure for 1 minute (an offline settings tab doesn't call Graph on every render), shares a read in flight, and is cleared by sign-out and by a sync that failed with `quota`. Quota reads use their own `GraphClient` with a `RetryPolicy({ singleAttempt: true })`: one send, no backoff, no Retry-After wait, no global pause, no budget (M8 reviews); a 429 is just a failure, reused for a minute. If the scope can't read it (403), the line says so.
-  - **Sync:** device name (default "iPad" or "Ubuntu" from `Platform`, editable), interval in minutes, maximum file size in MiB (default 100), exclude patterns (one per line), "Preview changes before every sync" (dry run), mass-delete threshold %.
+  - **Sync:** device name (default from `Platform`: "iOS", "Linux", "Mac", "Windows", "Android", else "Device"; editable. M9: it was "iPad"/"Ubuntu", wrong on an iPhone or another Linux, and the distribution isn't knowable without Node file access), interval in minutes, maximum file size in MiB (default 100), exclude patterns (one per line), "Preview changes before every sync" (dry run), mass-delete threshold %.
   - **Last sync report:** time, result, counts, conflicts, skipped files with reasons, error codes.
   - **Diagnostics:** "Run Graph capability probe" and "Copy log". Since M3, the probe runs from the `run-diagnostics` command ("Run OneDrive capability probe"). The probe logic is `src/remote/probe.ts`, not `src/platform/diagnostics.ts`, because the R-ENG-4 lint rule allows RemotePort content calls only in `src/remote/**` and `remote-content.ts`, and so it can be unit tested. `platform/diagnostics.ts` only wires the command and `ui/diagnostics-modal.ts` shows the JSON. The settings button arrives with the rest of R-UI-1 in M7.
 - **Status bar** (desktop only, `!Platform.isMobile`): state and last sync time. Clicking it opens **Sync status** (the status line, then the last report).
@@ -683,7 +683,7 @@ All Graph and token JSON passes through hand-written type guards before use. Unk
 ## 12. Persisted files
 | File | Contents | Written via |
 |---|---|---|
-| `<configDir>/plugins/mdvaultsync/data.json` | settings, plus `fallbackRefreshToken` only when SecretStorage throws | `saveData` |
+| `<configDir>/plugins/mdvaultsync/data.json` | settings and the non-secret `sessionOnlySignIn` flag; never a token (D-5) | `saveData` |
 | `<configDir>/plugins/mdvaultsync/sync-state.json` | `SyncState` | `platform/plugin-state-store.ts`: adapter write to `sync-state.json.tmp`, then `adapter.rename`; if rename refuses to replace the file (throws, or returns with the temp file still there), remove then rename (`platform/atomic.ts`, [O-API-10], M6 manual check: rename throws on both Ubuntu and the iPad, so the fallback is the normal path; a crash between remove and rename leaves the bytes in `sync-state.json.tmp`, which `load` reads) |
 | SecretStorage `mdvaultsync-refresh-token` | refresh token | `secretStorage.setSecret` |
 

@@ -1,5 +1,6 @@
-// Persisted plugin data (`data.json` via loadData/saveData [O-API-15]): the client ID, the sync settings
-// (design §11, R-UI-1) and, only when SecretStorage failed, the fallback refresh token (D-5).
+// Persisted plugin data (`data.json` via loadData/saveData [O-API-15]): the client ID and the sync settings
+// (design §11, R-UI-1). It never holds a token (D-5, changed in M9): 0.x versions could write a plaintext
+// `fallbackRefreshToken`, which `legacyRefreshToken` reads once so main.ts can migrate it and drop it.
 import type { EngineSettings } from "./core/engine.ts";
 import { validateSegment } from "./core/paths.ts";
 import { DELTA_FORM, type DeltaForm } from "./remote/capabilities.ts";
@@ -7,8 +8,8 @@ import { DELTA_FORM, type DeltaForm } from "./remote/capabilities.ts";
 export interface PluginData {
 	/** Entra application (client) ID. A user setting with no default (R-AUTH-8, D-14). */
 	clientId: string;
-	/** Refresh token, present only when SecretStorage threw (D-5). */
-	fallbackRefreshToken?: string;
+	/** The last sign-in was kept in memory only because SecretStorage failed (D-5). Not a secret. */
+	sessionOnlySignIn: boolean;
 	/** Name used in conflict copies (D-9). "" means the platform default (see effectiveDeviceName). */
 	deviceName: string;
 	/** Minutes between syncs; 0 turns the timer off (R-TRIG-2). */
@@ -38,6 +39,7 @@ const FLOOR = intervalFloor(DELTA_FORM);
 
 export const DEFAULT_DATA: Readonly<PluginData> = Object.freeze({
 	clientId: "",
+	sessionOnlySignIn: false,
 	deviceName: "",
 	intervalMinutes: Math.max(5, FLOOR),
 	maxFileSizeMiB: 100,
@@ -87,9 +89,11 @@ export function parseDeviceName(raw: string): string | null {
 	return validateSegment(s, false) === null ? s : null;
 }
 
-/** Design §11: "iPad" or "Ubuntu" for the owner's devices; platformName() from platform/diagnostics.ts. */
+/** Design §11: the platform's name; platformName() from platform/platform-name.ts. */
 export function defaultDeviceName(platform: string): string {
-	const names: Record<string, string> = { ios: "iPad", linux: "Ubuntu", macos: "Mac", windows: "Windows", android: "Android" };
+	// The platform only: "iOS" covers the iPhone and the iPad, and the Linux distribution isn't knowable without
+	// Node file access, which mobile lacks (R-ENV-2) [O-SUB-4].
+	const names: Record<string, string> = { ios: "iOS", linux: "Linux", macos: "Mac", windows: "Windows", android: "Android" };
 	return Object.prototype.hasOwnProperty.call(names, platform) ? (names[platform] ?? "Device") : "Device";
 }
 
@@ -139,14 +143,24 @@ export function snapshotForSave(data: PluginData, patch: Partial<PluginData>, pa
 	return out;
 }
 
+/**
+ * The plaintext refresh token a 0.x version left in data.json, or null if there is no such field. "" means the
+ * field is there but unusable: it is still removed. Read once at load, never kept in `PluginData`.
+ */
+export function legacyRefreshToken(raw: unknown): string | null {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+	if (!Object.prototype.hasOwnProperty.call(raw, "fallbackRefreshToken")) return null;
+	const rt = (raw as Record<string, unknown>)["fallbackRefreshToken"];
+	return typeof rt === "string" ? rt : "";
+}
+
 /** data.json can be edited by hand or by another plugin (T-T6): keep only well-typed, in-range fields. */
 export function parseData(raw: unknown): PluginData {
 	const out: PluginData = { ...DEFAULT_DATA, excludePatterns: [] };
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return out;
 	const o = raw as Record<string, unknown>;
 	if (typeof o["clientId"] === "string") out.clientId = o["clientId"];
-	const rt = o["fallbackRefreshToken"];
-	if (typeof rt === "string" && rt.length > 0) out.fallbackRefreshToken = rt;
+	if (typeof o["sessionOnlySignIn"] === "boolean") out.sessionOnlySignIn = o["sessionOnlySignIn"];
 	const name = o["deviceName"];
 	if (typeof name === "string" && parseDeviceName(name) === name) out.deviceName = name;
 	const iv = o["intervalMinutes"];
