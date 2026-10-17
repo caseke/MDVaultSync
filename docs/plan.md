@@ -1183,7 +1183,7 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 ---
 
 ## M8: Hardening and end-to-end test matrix
-**Status:** awaiting-owner (2026-10-17, 0.6.4). The session work is done: lint, typecheck, 852 tests, build and audit pass (see **Verification output, 0.6.4**), the sentinel and notice-mapping tests pass, every threat-model row has a status, and the security-review passes are done and their findings fixed. Open: row 10 on 0.6.4 (every other row passed; see **Results**), and the owner's sign-off on the S5 redirect acceptance. M9 depends on this matrix.
+**Status:** done (2026-10-17, 0.6.4). Every matrix row passed on the devices it names (Ubuntu, Obsidian 1.14.4; iPad, Obsidian 1.14.5 (387)), the last one, row 10, on 0.6.4; see **Results**. Lint, typecheck, 852 tests, build and audit pass (**Verification output, 0.6.4**). The sentinel and notice-mapping tests pass, every threat-model row has a status, and the owner accepted the S5 redirect risk (2026-10-17). Every security-review pass is recorded, with its findings fixed or listed as open info.
 
 **Goal.** Close the remaining threat-model rows and prove v1 on real devices.
 
@@ -1343,18 +1343,20 @@ no forbidden network APIs
 - **10b pass:** the tab opens, Status says "Sign-in required", and **Sign in** works and sync resumes.
 - **Breadcrumb check** (Verbose logging on, console level Verbose): after you close settings, a `ui.settings` `refresh` line must not be followed by `account-…` or `signin-prepare` lines until you open the tab again.
 - If it still freezes, capture the stack (row 10 steps).
-- **Ubuntu** (Obsidian version: …): …
-- **iPad** (Obsidian version: …): …
+
+**Results, 0.6.4** (owner, 2026-10-17): **row 10 passes.** 10a and 10b pass; no freeze; no notice when the tab opens while signed in; a sign-out and a sign-in with settings open re-render the rows; no errors on either device.
+- **Ubuntu** (Obsidian 1.14.4): pass.
+- **iPad** (Obsidian 1.14.5 (387)): pass.
 
 **Carry-ins** (requirements handed over by earlier milestones; each names its source)
 - **Redirects** (M3 final review, O-API-2): `requestUrl` follows redirects from an allowlisted transfer host without re-checking the target. No token can go along, because the transfer transport is bare, and download bytes are length- and hash-checked. Cover this in the hardening review.
 
-**Acceptance criteria**
-- Every matrix row passes on the devices its **Devices** column names, with results recorded under **Results**. (Some rows need one device by their scenario, such as the iPad force-quit or the Ubuntu-only file names.)
-- The sentinel test passes.
-- The notice-mapping test passes.
-- Every threat-model row is marked implemented, or has a recorded reason.
-- `npm audit --audit-level=high` is clean.
+**Acceptance criteria** (all met, 2026-10-17)
+- ☑ Every matrix row passes on the devices its **Devices** column names, with results recorded under **Results**. (Some rows need one device by their scenario, such as the iPad force-quit or the Ubuntu-only file names.) Rows 1, 3, 4, 9 and 11 passed on 0.6.0; rows 2, 5 (as 5a), 6, 7, 8 and 12 on 0.6.1; row 10 on 0.6.4.
+- ☑ The sentinel test passes (`test/logging.sentinel.test.ts`).
+- ☑ The notice-mapping test passes (`test/notices.test.ts`).
+- ☑ Every threat-model row is marked implemented, or has a recorded reason (the Status column in docs/threat-model.md; S5 accepted by the owner).
+- ☑ `npm audit --audit-level=high` is clean (**Verification output, 0.6.4**).
 
 **Verify**
 ```bash
@@ -1438,7 +1440,7 @@ Planning times on this host were 0.97–1.29 s, against 0.66–0.80 s on 0.6.0. 
 - **Long requests (M7):** timeouts as above; the owner chose "timeout, no retry" in the plan approval.
 - **Notice table (M7):** done, with the mapping test.
 - **Sentinel test (M7):** it runs a full fake sync through `Engine` with the M7 hooks (`onStatus` → `statusText`, `onReport` → `noticesFor`) attached.
-- **Redirects (M3):** reviewed under threat-model S5/T5: accepted, because the transfer transport is bare (no token can go along), downloads are length- and hash-checked, and the redirect comes from Microsoft's own host. **Owner sign-off needed.**
+- **Redirects (M3):** reviewed under threat-model S5/T5: accepted, because the transfer transport is bare (no token can go along), downloads are length- and hash-checked, and the redirect comes from Microsoft's own host. **Accepted by the owner, 2026-10-17.**
 - Not done (optional, owner's call, unchanged from M7): the per-fragment `live()` check in `RemoteContent.resume`; re-hashing after a download write. Settings re-render on 1.13+ (`update()`) was covered by M7 check 11.
 
 **Security review** (`security-reviewer` agent; base 4b14335, then 1b8482a):
@@ -1447,13 +1449,15 @@ Planning times on this host were 0.97–1.29 s, against 0.66–0.80 s on 0.6.0. 
   - Fixed, low: requests hung past their timeout piled up (each holds a body of up to 10 MiB and a connection). Now they are counted, and unattended runs pause at 2.
   - Fixed, low: quota reads shared the sync's `RetryPolicy` (backoff, budget, pause), and failures weren't cached.
   - Fixed, info: the iOS timer wording in design §6.1; the I3 status wording; the `fetch` field in `QuotaCache` renamed `read`.
-  - Open, info: the S5 redirect acceptance needs the owner's sign-off.
+  - Open, info: the S5 redirect acceptance needed the owner's sign-off (given 2026-10-17).
 - **Re-review of the fixes.** The medium is confirmed fixed, and `stuck` can't drift below zero. No high or medium findings.
   - Fixed, low: a request that never answers kept the pause on silently. The first skip now shows a persistent notice.
   - Fixed, low: `maxAttempts: 1` still waited on Retry-After. Quota reads now use `singleAttempt` (no wait, pause or budget).
   - Open, info (no action): an engine rerun already queued isn't re-checked against `stuck` (at most one more run). A commit fragment that never answers holds the lock until a restart (the pre-M8 behavior, now limited to the commit; the probe's last fragment too). The commit-fragment test checks the flag, not a simulated late commit. A plugin reload while a commit is on the wire can still race the new instance (pre-M8, unchanged).
 
 **Notes for M9**
+- **Obsidian 1.14 differs from its d.ts in the settings tab** (design §10). (1) It builds `getSettingDefinitions()` at load and on `update()`, and reuses the result when the tab opens. (2) It calls `render` for rows whose `visible` is false. So rows decide everything at render time and guard themselves. Anyone touching `src/ui/settings-tab.ts` must keep both rules.
+- The S5 redirect risk is accepted and stays out of the README's residual-risk list (§4); the README may mention it under "how transfers are protected" if useful.
 - README: the residual risks (threat-model §4), the T-T3 and T-I5 statements, revoking access (T-I1), `gh attestation verify` (T-T7); the tag ruleset (T-T8, owner).
 - Request timeouts and the stuck-request pause are new user-visible behavior; the settings reference should mention **OneDrive storage**.
 
@@ -1524,17 +1528,17 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-CD-3, R-CD-4 | M4, M5 | ☑ (M4 2026-10-12: QuickXorHash; M5 2026-10-12: FileRecord validated, change detection by hash → cTag → size/eTag, unchanged content never planned for transfer) |
 | R-ORDER | M6 | ☑ (M6, 2026-10-12: pull side before push side, moves first; tested) |
 | R-CC-1, R-CC-2 | M3, M6 | ☑ (M3 part done 2026-10-12: If-Match on replace, move, delete and replace sessions; conflictBehavior=fail on new files and folders; 412 → GraphError; M6 part done 2026-10-12: PUT with If-Match per the probe, sessions above 10 MiB with the commit-time eTag re-check, 412 re-read: metadata-only retry, else conflict; tested) |
-| R-CONF-1…4 | M4, M5, M6, M7 | ☑ (M4 part done 2026-10-12: conflict-copy naming for R-CONF-1; M5 part done 2026-10-12: conflicts only when both sides differ (R-CONF-3, property-tested), no-history pairs counted in `differsNoHistory`, report conflicts list; M6 part done 2026-10-12: conflict procedure with pendingConflicts and crash reuse, copy uploaded, pre-write re-check (R-CONF-4); the notice is M7. M7 part done 2026-10-12 (owner checks passed 2026-10-12): one persistent notice lists every conflict copy (R-CONF-2); the preview groups no-history conflicts (R-CONF-3); tested) |
+| R-CONF-1…4 | M4, M5, M6, M7 | ☑ (M4 part done 2026-10-12: conflict-copy naming for R-CONF-1; M5 part done 2026-10-12: conflicts only when both sides differ (R-CONF-3, property-tested), no-history pairs counted in `differsNoHistory`, report conflicts list; M6 part done 2026-10-12: conflict procedure with pendingConflicts and crash reuse, copy uploaded, pre-write re-check (R-CONF-4); the notice is M7. M7 part done 2026-10-12 (owner checks passed 2026-10-12): one persistent notice lists every conflict copy (R-CONF-2); the preview groups no-history conflicts (R-CONF-3); tested; M8 2026-10-17: identical bytes are adopted, not copied, even when OneDrive lists no hash (byte compare)) |
 | R-DEL-1…3 | M5, M6 | ☑ (M5 part done 2026-10-12: deletes planned both ways with If-Match, edits beat deletes (R-DEL-2), folder deletes only with zero children incl. skipped (R-DEL-3); M6 part done 2026-10-12: remote delete with If-Match (404 forget, 412 download back), local delete via FileManager.trashFile, folders only when empty; tested with fakes) |
 | R-MOVE-1 | M5, M6 | ☑ (M5 part done 2026-10-12: renames detected by id, event or unique hash; folder renames collapse to one move; M6 part done 2026-10-12: PATCH by id with If-Match and eTag chaining, Vault.rename locally, folder moves re-path records; tested with fakes) |
 | R-FIRST-1, R-FIRST-2 | M5, M7 | ☑ (M5 part done 2026-10-12: union mode never deletes (property-tested); malformed state, approot change and a missing approot id all force it. M7 part done 2026-10-12 (owner checks passed 2026-10-12): preview modal before the first sync, on the Preview sync command and with the setting on; Cancel and timeout run nothing; tested) |
 | R-GUARD-1 | M5, M7 | ☑ (M5 part done 2026-10-12: `deleteCount`, `exceedsDeleteGuard` boundary, declined deletes suppressed until either side changes or "Sync now". M7 part done 2026-10-12 (owner checks passed 2026-10-12): confirm modal with "Delete N files" / "Skip deletes this time", skip on close or timeout, threshold setting 1–100 %) |
-| R-PATH-1…4 | M4, M6 | ☑ (M4 part done 2026-10-12: NFC and collision detection, naming rules, 400-character limit and containment rules, unit tested; the pre-write re-check is M6; M6 part done 2026-10-12: containment and name rules re-checked before every local write, move, trash and mkdir, in the executor and in ObsidianVault) |
+| R-PATH-1…4 | M4, M6 | ☑ (M4 part done 2026-10-12: NFC and collision detection, naming rules, 400-character limit and containment rules, unit tested; the pre-write re-check is M6; M6 part done 2026-10-12: containment and name rules re-checked before every local write, move, trash and mkdir, in the executor and in ObsidianVault; M8 2026-10-17: a drive-letter-like name (`a:b.md`) is reported invalid-name; still refused before every write) |
 | R-IO-1, R-IO-2 | M6 | ☑ (M6 2026-10-12: temp-then-rename and hash-before-write implemented and tested; adapter.rename refuses to overwrite on Ubuntu and the iPad, and the remove-then-rename fallback passed on both) |
 | R-NET-1 | M2, M3 | ☑ (M2 and M3, 2026-10-12: auth and Graph go only through the requestUrl transport; lint and the CI script enforce it) |
-| R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested) |
+| R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested; M8 2026-10-17: request timeouts (not retried; the commit fragment never times out), quota reads never retry) |
 | R-RES-2, R-RES-3 | M3, M6 | ☑ (M3 part done 2026-10-12: 10 MiB upload-session primitives, status and 404 handling; a 12 MiB two-fragment round trip passed on both devices; persistence and resume are M6; M6 part done 2026-10-12: sessions persisted before the first fragment and resumed from nextExpectedRanges, 404 restarts; saves at most 1 s after an op and before every destructive op; crash injection after every mutating call converges) |
-| R-UI-1…3 | M2, M7 | ☑ (M2 part done 2026-10-12: Account section. M7 part done 2026-10-12 (owner checks passed 2026-10-12): every R-UI-1 field; status bar on desktop with the state and last sync time; on mobile the ribbon icon shows the state and Show sync status the time (R-UI-2 amended 2026-10-12, 0.5.1); notices for errors and conflicts only; tested in the pure modules) |
+| R-UI-1…3 | M2, M7 | ☑ (M2 part done 2026-10-12: Account section. M7 part done 2026-10-12 (owner checks passed 2026-10-12): every R-UI-1 field; status bar on desktop with the state and last sync time; on mobile the ribbon icon shows the state and Show sync status the time (R-UI-2 amended 2026-10-12, 0.5.1); notices for errors and conflicts only; tested in the pure modules; M8 2026-10-17: the OneDrive storage line (T-D7), the Verbose logging toggle, error notice text for every code, and settings rows that follow the sign-in state (Obsidian caches definitions)) |
 | R-SEC-1, R-SEC-2 | M2 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 M2 part (SecretStorage observed on both devices, including a locked GNOME keyring) — README residual-risk text is owed in M9 |
 | R-SEC-3 | M3, M8 | ☑ (M3 part done 2026-10-12: typed redacting logger, unit tested; M8 part done 2026-10-13: the sentinel test runs full syncs over the production stack and finds no name, content, token, URL or server message in the ring buffer or any console call) |
 | R-SEC-4 | M3, M4 | ☐ (M3 part done 2026-10-12: Graph JSON, ids, names, sizes, tags, hashes, links and transfer URLs validated; paths are M4) — M4 part done 2026-10-12: remote-derived paths validated by `remoteToVaultPath` |

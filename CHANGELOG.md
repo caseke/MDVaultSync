@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Milestone 8 is complete: the owner's end-to-end checks passed on the iPad and Ubuntu (0.6.4).
+
 0.6.4: no more "You're already signed in" notice when opening settings.
 
 ### Fixed
