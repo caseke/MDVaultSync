@@ -126,3 +126,15 @@ test("the release job re-checks the tag, attests, and creates only a draft", () 
 	assert.ok(createLine.some((l) => l.includes('flags="--draft"')), "draft flag");
 	assert.ok(createLine.some((l) => l.includes("$flags")), "flags used by gh release create");
 });
+
+test("only 0.x tags are pre-releases, so 1.0.0 and later are full (draft) releases BRAT installs as latest [O-BRAT-1]", () => {
+	const create = steps("release").find((x) => x.includes("gh release create")) ?? "";
+	const cases = create.split("\n").filter((l) => l.includes("case "));
+	assert.deepEqual(cases, ['case "$TAG" in 0.*) flags="$flags --prerelease" ;; esac']);
+	assert.equal((create.match(/--prerelease/g) ?? []).length, 1);
+});
+
+test("gh release create refuses a tag that doesn't exist on GitHub (--verify-tag)", () => {
+	const create = steps("release").find((x) => x.includes("gh release create")) ?? "";
+	assert.match(create, /gh release create "\$TAG" \$flags .*--verify-tag/);
+});

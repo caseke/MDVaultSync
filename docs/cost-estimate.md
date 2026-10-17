@@ -30,7 +30,7 @@ Fact IDs refer to [research.md](research.md). "SUMMARY" means the fact came from
 2. Don't create any Azure resources (VMs, storage accounts and so on). App registrations aren't Azure resources and are never billed.
 3. Leave the spending limit on. Ignore or decline the "upgrade to pay-as-you-go" prompts.
 4. On day 30 the subscription is disabled. This is expected and harmless here, because the Entra directory remains [C-AZ-4].
-5. If Azure says the account isn't eligible for a free account, it offers pay-as-you-go instead, which has **no spending limit**. That still costs $0 with no resources created, but a mistake would be billed. See entra-setup.md "If Azure says you're not eligible". An existing subscription's directory works too.
+5. If Azure says the account isn't eligible for a free account, it offers pay-as-you-go instead, which has **no spending limit**. That still costs $0 with no resources created, but a mistake would be billed. See the README's Microsoft Entra setup, step 1, "If Azure says you're not eligible". An existing subscription's directory works too.
 6. Optional: remove the card from the billing profile after the subscription is disabled, if the portal allows it. This is not verified; check it when you get there.
 
 ## To re-check (search summaries or inferences)

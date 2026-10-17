@@ -48,3 +48,10 @@ test("no sample-plugin names remain [O-SUB-3]", () => {
 		assert.doesNotMatch(readFileSync(file, "utf8"), banned, file);
 	}
 });
+
+test("CHANGELOG.md has a dated section for the manifest version", () => {
+	const version = String(readJson("manifest.json")["version"]);
+	const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
+	const escaped = version.replace(/\./g, "\\.");
+	assert.match(changelog, new RegExp(`^## \\[${escaped}\\] - \\d{4}-\\d{2}-\\d{2}$`, "m"));
+});

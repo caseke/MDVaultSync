@@ -7,128 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Milestone 8 is complete: the owner's end-to-end checks passed on the iPad and Ubuntu (0.6.4).
+## [1.0.0] - 2026-10-17
 
-0.6.4: no more "You're already signed in" notice when opening settings.
-
-### Fixed
-
-- In 0.6.3, opening the MDVaultSync settings while signed in showed "You're already signed in. Sign out first to use a different account." every time. Obsidian prepares hidden settings rows too, and the hidden **Sign in** row tried to start a sign-in. Hidden rows now do nothing.
-
-0.6.3: a fix for the settings freeze (to be confirmed on both devices).
-
-### Fixed
-
-- If you signed out with the command, or your Microsoft account removed this app's access, while settings were closed, opening the MDVaultSync settings could freeze Obsidian. Obsidian kept showing the settings as they were when you were signed in, including a storage check that can't work without a sign-in. The settings now always show the rows for your current state, and the storage line doesn't check anything until you're signed in.
-
-0.6.2: the settings freeze after access was removed (in progress).
-
-### Fixed
-
-- After this app's access was removed at your Microsoft account, opening the MDVaultSync settings could freeze Obsidian. The settings tab no longer redraws itself while it's closed. This is a likely cause, not a confirmed one; the next device check decides it.
+The first stable release: MDVaultSync now syncs a vault between your devices through your OneDrive. It passed the owner's end-to-end checks on an iPad and an Ubuntu desktop. This section sums up everything since 0.3.6; the notes of each 0.4.0–0.6.4 test build are in this file's history.
 
 ### Added
 
-- With **Verbose logging** on, the settings tab writes short markers to the developer console (no names or tokens), to find where a freeze stops.
-
-0.6.1: fixes from the owner's first pass of the Milestone 8 device checks.
-
-### Fixed
-
-- After a large upload was cut off at the very end (for example by airplane mode), the next sync could make a conflict copy of a file that was identical on both sides. A sync now compares the two versions before it makes a copy, and only keeps both when they really differ.
-- A file named like `a:b.md` was reported as "would land outside the vault". It's now reported as an invalid name (OneDrive doesn't allow `:`). It was never uploaded either way. Renaming a synced note to such a name now keeps its OneDrive copy, as other invalid names already did, instead of deleting it there.
-
-### Added
-
-- **Verbose logging** in Settings → Diagnostics writes each log line to the developer console too (the same content as **Copy log**: no file names, contents or tokens).
-- The log now marks first-sync merges and records each step of a sign-in renewal, to help find the cause of a freeze seen after the app's access was removed.
-
-0.6.0: Milestone 8, hardening. The owner's end-to-end checks on both devices are still to come.
-
-### Added
-
-- Settings → Account shows **OneDrive storage**: used, total and free space. It warns when 10 % or less is free, and when the drive is full. The recycle bin counts toward it.
-- A full OneDrive now gives a clear notice: sync stops, and the notice says to free up space, including the recycle bin.
-- Every error a sync can meet now has a readable notice text.
+- **Syncing.** A sync runs about 5 seconds after Obsidian opens, then every 5 minutes (adjustable, or off). **Sync now** (command or ribbon button) syncs at once. Only one sync runs at a time; a trigger during a sync queues at most one more.
+- **Each sync** applies OneDrive's changes here first, then sends this device's changes up. Renames and moves, including whole folders, are applied as moves, so OneDrive keeps its version history. Unchanged files are never transferred, and up to four files transfer at a time.
+- **A preview before the first sync** on each device, and on demand with **Preview sync** or before every sync with a setting. The first sync on a device, after signing in again, or after the OneDrive folder is recreated only adds files and never deletes. Files that differ on both sides with no sync history are listed in their own group, so the conflict copies they get are no surprise.
+- **Conflicts keep both versions.** The OneDrive version keeps the name; this device's version is saved as a conflict copy such as `Note (conflict iPad 2026-10-12 140203).md` and uploaded, so every device has it. One notice lists every conflict copy. Identical files are never made into conflicts: they're compared byte for byte first. A note you edit while a sync runs is never overwritten or deleted by that sync.
+- **Safe deletes.** Deletes go to the OneDrive recycle bin or this device's trash. An edit wins over a delete. If a sync would delete more than 25 % of your synced files (adjustable), it asks first; skipped deletes aren't proposed again until a file changes or you select **Sync now**.
+- **Safe writes.** Every download is checked against OneDrive's fingerprint, written to a hidden temporary file, then moved into place. Nothing is ever written into Obsidian's settings folder, a hidden folder, or outside the vault.
+- **Large files and interruptions.** Files over 10 MB upload in pieces, and an interrupted upload continues where it stopped, after a restart too. Progress is saved as the sync goes, so a sync stopped by iPadOS or a lost connection resumes without losing work.
+- **Skipped files are reported, never renamed:** names OneDrive refuses, paths over 400 characters, names that clash by letter case or Unicode form, files over the size cap, and excluded or hidden files.
+- **Settings:** device name (used in conflict copy names), sync interval, maximum file size, exclude patterns (gitignore style), preview before every sync, the delete threshold, the last sync report with a **Sync now** button, **OneDrive storage** (used, total and free; warns at 10 % free), and **Verbose logging** under Diagnostics.
+- **Sync state at a glance:** the status bar (desktop) and the ribbon button's icon (every device) show the state; **Show sync status** shows the state, the last sync time and the last report.
+- **Readable notices** for every error a sync can meet, including a full OneDrive. A sync with nothing wrong stays quiet.
+- **README:** the complete guide, including the Microsoft Entra setup (moved from `docs/entra-setup.md`), a settings and commands reference, how sync behaves, the residual security risks, how to verify a release with `gh attestation verify`, and how to sign out and uninstall.
+- `docs/community-checklist.md`: the Obsidian community directory requirements, checked one by one.
 
 ### Changed
 
-- A request that OneDrive doesn't answer now gives up after a while: 2 minutes, plus more for large files (a 10 MB piece of an upload gets about 5 minutes). Before, a stalled request could hold up syncing for as long as it hung (about 24 minutes once on the iPad). The sync ends as "partial" and the next one carries on. The last piece of a large upload is the exception: it always waits for OneDrive's answer, so a late answer can never overwrite a newer edit.
-- While two or more requests are still hanging after giving up, automatic syncs (startup and interval) wait, and a notice says so once. **Sync now** still runs, and restarting Obsidian clears it.
+- A request OneDrive doesn't answer gives up after 2 minutes, plus more for large transfers, and the sync ends `partial`; the next one carries on. The last piece of a large upload always waits for its answer, so a late answer can't overwrite a newer edit. While 2 or more requests still hang, automatic syncs wait, with one notice; **Sync now** still runs.
+- If the saved exclude patterns can't be read, sync pauses with a notice until you check them, instead of syncing with no exclusions.
+- Signing out also deletes the sync state and closes any open sync preview or delete prompt. A OneDrive sign-in left behind by an uninstalled copy is removed when the plugin is installed again, with a notice.
+- Releases from 1.0.0 on are full releases, not pre-releases.
+
+### Fixed
+
+- Opening the MDVaultSync settings after this app's access was removed, or after signing out with the command, could freeze Obsidian (0.6.0–0.6.3). The settings now always show the rows for the current state.
 
 ### Security
 
-- A new test runs whole syncs with marker text in file names, contents, sign-in tokens and server messages, and checks that none of it reaches the plugin's log or the developer console.
-
-0.5.1: the sync state on the iPad.
-
-Milestone 7 is complete: the owner's checks passed on the iPad and Ubuntu.
-
-### Fixed
-
-- The iPad had no way to see the sync state at a glance: it has no status bar, and the ribbon button's tooltip needs a mouse to hover. The ribbon button's icon now shows the state on every device (arrows when synced, a loader while syncing, an hourglass when the sync waits for you, a warning after an error, a sign-in arrow when you need to sign in).
-
-### Added
-
-- A **Show sync status** command shows the current state, the time of the last sync and the last sync report. Clicking the status bar on desktop opens the same window.
-
-Milestone 7 (0.5.0): sync is switched on. The plugin now syncs by itself and can be used day to day; the owner's device checks are still to come.
-
-### Added
-
-- Sync runs about 5 seconds after Obsidian opens, then every 5 minutes (change it, or turn it off, in settings). **Sync now** (command or the ribbon button) syncs at once, and **Preview sync** shows what would change and does nothing unless you select Run.
-- The first sync on a device always shows the preview first, and you can turn on a preview before every sync. Files that differ on both sides with no sync history are listed in their own group, so the conflict copies they get are no surprise.
-- If a sync would delete more than 25 % of your synced files (adjustable), it asks first. "Skip deletes this time" syncs everything else and doesn't ask about those deletes again until a file changes or you select Sync now.
-- After a sync with conflicts, one notice lists every conflict copy and stays until you dismiss it. Errors raise a short notice; a sync with nothing wrong stays quiet, and a problem that repeats on its own doesn't notice again every few minutes.
-- The status bar (desktop) and the ribbon button's tooltip (iPad) show the sync state and the time of the last successful sync. Clicking the status bar opens the last sync report.
-- New settings: device name (used in conflict copy names), sync interval, maximum file size, exclude patterns, preview before every sync, and the delete threshold. Values that aren't valid aren't saved, and the setting says why. On Obsidian 1.13 and later they appear in the settings search.
-- The settings page shows the last sync report (what changed, conflicts, skipped files with the reason, problems), a **Sync now** button, the OneDrive capability probe and **Copy log**.
 - File names in the preview, report and notices show hidden or direction-changing characters as codes, so a name can't disguise itself.
-
-### Changed
-
-- If the saved exclude patterns can't be read (for example after a hand edit, or a damaged plugin data file), sync pauses with a notice until you check them in settings and select **Save and resume sync**, instead of syncing with no exclusions.
-- Signing out also closes any open sync preview or delete prompt, and disabling or updating the plugin during a sync stops it from starting anything new.
-
-Milestone 6 (0.4.0, 0.4.1): the part that carries out a sync plan, safely and so it can pick up where it stopped. Sync still isn't switched on in the app (that is milestone 7), so the only visible changes are a new diagnostics command and sign-out clearing the saved sync state.
-
-### Added
-
-- Carrying out the sync plan: OneDrive changes are applied here first, then this device's changes are sent up; renames and moves come before everything else, and up to four files transfer at a time.
-- Every download is checked against OneDrive's fingerprint before it replaces a file, and is written to a hidden temporary file first, then moved into place. Every upload's result is checked the same way.
-- Nothing is ever written into Obsidian's settings folder, a hidden folder, or outside the vault: the path is checked again right before each write.
-- A note you edit while a sync is running is never overwritten or deleted by that sync. The change becomes a conflict copy, or waits for the next sync.
-- Conflicts keep both versions: your version is saved as a conflict copy before the OneDrive version replaces the note, and the copy is uploaded so every device has it. If the app is closed in the middle, the next sync reuses the same copy instead of making another.
-- Large files (over 10 MB) upload in pieces. An interrupted upload continues where it stopped after a restart, or starts over if OneDrive dropped it.
-- Progress is saved at most a second after each step and right before anything is overwritten or deleted, so a sync stopped by iPadOS or a lost connection resumes without redoing or losing work.
-- Sync triggers that overlap never run two syncs at once; at most one more sync is queued.
-- A "Test file replace on this device" command, for checking how this device replaces files (results go in the build plan). On both Ubuntu and the iPad, Obsidian can't rename one file over another, so the plugin removes the old file and then moves the new one into place.
-
-### Changed
-
-- A OneDrive sign-in left behind by an uninstalled copy of the plugin is now removed when the plugin is installed again, with a notice linking to the page where you can also remove the app's access from your Microsoft account. Obsidian gives plugins no way to clean up at uninstall, and the sign-in is kept in Obsidian's secret storage, which uninstalling doesn't clear.
-- Signing out now also deletes the saved sync state file. Your notes are untouched, and the next sign-in starts with a safe merge that deletes nothing.
-
-Milestone 5: the sync planner, which decides what each sync will do. Sync isn't wired up yet, so nothing changes in the app.
-
-### Added
-
-- The sync plan: for every file it compares the last synced version with this device and OneDrive, then decides to upload, download, move, delete, keep both as a conflict copy, or skip with a reason.
-- Edits always win over deletes, and the first sync on a device (or after the OneDrive folder is recreated) only adds files, never deletes.
-- Renames and moves on either side are applied as moves, including whole folders, so OneDrive's version history is kept.
-- Files skipped for any reason (name rules, size, exclusions, clashing names) never cause a delete on the other side, and an OneDrive folder is deleted only when it is truly empty.
-- The deletes count toward the "confirm large deletes" check, and deletes you declined aren't proposed again until the file changes or you press "Sync now".
-- The saved sync state is checked when it is loaded; a damaged or edited file makes the next sync a safe merge that deletes nothing.
-- A per-sync report of every file touched, conflicts, skips and errors.
-
-Milestone 4: the sync engine's building blocks.
-
-### Added
-
-- File fingerprints (QuickXorHash), the same ones OneDrive computes, so a later version can skip files that haven't changed. Checked against OneDrive's own values and an independent implementation.
-- File name rules: names OneDrive rejects, paths over 400 characters, names that clash by letter case or Unicode form, and remote paths that would land outside the vault, in Obsidian's settings folder, or in a hidden folder are all detected for skipping. Files are never renamed.
-- Exclude patterns in gitignore style (`*`, `**`, `?`, a trailing `/`) for keeping folders or file types out of sync.
-- Conflict copy names such as `Note (conflict iPad 2026-10-12 140203).md`.
+- A test runs whole syncs with marker text in file names, contents, tokens and server messages, and checks that none of it reaches the plugin's log or the developer console.
 
 ## [0.3.6] - 2026-10-12
 
