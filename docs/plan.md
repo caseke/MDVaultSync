@@ -1460,7 +1460,7 @@ Planning times on this host were 0.97–1.29 s, against 0.66–0.80 s on 0.6.0. 
 ---
 
 ## M9: BRAT release 1.0.0 and README with the Entra guide
-**Status:** not started
+**Status:** awaiting-owner (2026-10-17, 1.0.0). The session part is done: README, community checklist, version 1.0.0 and CHANGELOG; lint, typecheck, 866 tests, build and audit pass (**Verification output**). The release itself (tag, draft, publish, `gh attestation verify`), the tag ruleset, the BRAT installs and the round trip are owner steps 1–7 below; M9 is `done` when they pass.
 
 **Goal.** A first release, attested and built in CI, installable through BRAT on both devices.
 
@@ -1516,37 +1516,114 @@ Planning times on this host were 0.97–1.29 s, against 0.66–0.80 s on 0.6.0. 
 - **Performance margin** (M8): planning a 5,000-file vault took 0.97–1.29 s on the slower container host, against a 2 s limit (`test/planner.perf.test.ts`). If CI ever runs on a slower host, that test is the first to watch.
 - **Matrix row 5b** (M8): passed by design as 5a (neither name synced, so both are skipped). The tracked-name case (5b) was never run on a device; the planner tests cover it.
 
-**Owner actions**
-- Add a tag protection (ruleset) for release tags.
-- Publish the draft release after checking the assets.
-- Install through BRAT on the iPad and on Ubuntu.
-- Re-test sign-in 30 or more days after the Azure sign-up (cost-estimate "to re-check").
+**Owner actions** (in this order; record each result under **Owner results**)
+1. **Merge** this branch into `main` by pull request (the directory and BRAT read `manifest.json` from the default branch [O-SUB-1]).
+2. **Tag ruleset** (T-T8) [C-GH-6]. On GitHub: repository **Settings → Rules → Rulesets → New ruleset → New tag ruleset**.
+   - **Ruleset name:** `Release tags`. **Enforcement status:** Active.
+   - **Bypass list:** **Add bypass** → **Repository admin** (that's you) → *Always allow*.
+   - **Target tags:** **Add target → Include by pattern** → `*.*.*`.
+   - **Rules:** tick **Restrict creations**, **Restrict updates** and **Restrict deletions**. Leave the rest unticked.
+   - **Create.** Check it: `gh api repos/caseke/MDVaultSync/rulesets --jq '.[] | {name, target, enforcement}'` lists `Release tags`, `tag`, `active`.
+   The portal labels come from GitHub's docs, not from a live look; if one differs, use the nearest match and note it here.
+3. **Tag and push** the merge commit on `main` (the version is already 1.0.0 in the branch, so don't run `npm version`):
+   ```bash
+   git switch main && git pull
+   node -p 'require("./manifest.json").version'      # must print 1.0.0
+   git tag -a 1.0.0 -m 1.0.0 && git push origin 1.0.0
+   ```
+   The **Release** workflow runs (Actions tab). Pass when both jobs are green and **Releases** has a draft `1.0.0`, **not** marked pre-release, with exactly `main.js`, `manifest.json` and `styles.css`.
+4. **Check the draft, then publish it.** Paste the CHANGELOG `[1.0.0]` section into the release notes (below the generated "Verify:" line), select **Set as the latest release**, and **Publish release**.
+5. **Verify the attestation** (T-T7):
+   ```bash
+   cd "$(mktemp -d)"
+   gh release download 1.0.0 -R caseke/MDVaultSync -p main.js
+   gh attestation verify main.js -R caseke/MDVaultSync
+   gh attestation verify main.js -R caseke/MDVaultSync --signer-workflow caseke/MDVaultSync/.github/workflows/release.yml
+   ```
+   Pass when both print `✓ Verification succeeded!` (paste the last lines below).
+6. **BRAT on both devices.** On Ubuntu and on the iPad, run **BRAT: Check for updates to all beta plugins** (or add `caseke/MDVaultSync` on a fresh install). **Settings → Community plugins** shows MDVaultSync **1.0.0**.
+7. **Round trip.** On Ubuntu, create a note `M9 check.md` with one line and run **Sync now**. On the iPad, run **Sync now**: the note appears. Add a line on the iPad, sync, then sync Ubuntu: the line arrives. Delete the note on Ubuntu and sync both: it's in the iPad's trash (as Obsidian's **Deleted files** setting says) and in the OneDrive recycle bin. Pass when each step shows the expected result and no conflict copy appears.
+8. **Optional:** the community.obsidian.md **Review branch** preview, steps in [community-checklist.md](community-checklist.md).
+9. **Later:** re-test sign-in 30 or more days after the Azure sign-up (cost-estimate "to re-check"), when the free subscription is disabled. Pass when **Sign in** still works on one device. This doesn't block 1.0.0.
 
 **Acceptance criteria**
-- Tag `1.0.0` produces a draft release with 3 assets and an attestation.
-- `gh attestation verify` succeeds on the downloaded `main.js`.
-- BRAT installs 1.0.0 on both devices, and a sync round trip works.
-- Every SPEC requirement is ticked in the table below.
+- Tag `1.0.0` produces a draft release with 3 assets and an attestation. *(owner step 3)*
+- `gh attestation verify` succeeds on the downloaded `main.js`. *(owner step 5)*
+- BRAT installs 1.0.0 on both devices, and a sync round trip works. *(owner steps 6–7)*
+- Every SPEC requirement is ticked in the table below. *(all ticked except R-SEC-5, which waits on step 5)*
 
-**Verify**
+**Verify** (session part; the release part is owner steps 3–5)
 ```bash
 npm run lint && npm run typecheck && npm test && npm run build
-npm version 1.0.0          # runs version-bump.mjs → manifest.json + versions.json; .npmrc tag-version-prefix="" makes tag 1.0.0
-git push --follow-tags     # owner, on main after merge; pushes commit + tag 1.0.0, triggering release.yml
-gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation verify main.js -R caseke/MDVaultSync
+npm audit --audit-level=high
+scripts/check-network-apis.sh
+npm version 1.0.0 --no-git-tag-version   # done in the session: version-bump.mjs → manifest.json + versions.json
 ```
+*Changed in M9:* the plan had `npm version 1.0.0` and `git push --follow-tags` on `main` after the merge. The version is bumped in the branch instead, as for 0.6.x, so the pull request carries the 1.0.0 manifest and CHANGELOG; `npm version 1.0.0` on `main` would then fail ("Version not changed"). The owner tags the merge commit (step 3).
 
-**Verification output**
+**Verification output** (2026-10-17, Node 22.22, container)
 ```
-(paste here)
+$ npm run lint                  (exit 0; 0 errors, 0 warnings)
+$ npm run typecheck             (exit 0)
+$ npm test
+# tests 866
+# suites 8
+# pass 866
+# fail 0
+$ npm run build                 (exit 0)
+$ npm audit --audit-level=high  (exit 0; 3 moderate, dev-only, unchanged)
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+$ npm run build; sha256sum main.js   (twice)
+d36b59004f0ea8db0a7f084786bcce236712b4be8a5fb983f55729cfd4b77f6e  main.js
+d36b59004f0ea8db0a7f084786bcce236712b4be8a5fb983f55729cfd4b77f6e  main.js
 ```
+The two builds give the same `main.js`, which the community directory's build verification relies on [O-SUB-5].
+
+**What was built**
+- `README.md`, complete: what it does and doesn't; the disclosures [O-POL-1], [O-POL-2]; installing with BRAT; the full **Microsoft Entra setup**; first sync; a settings reference and a commands list; how sync works (conflict naming, identical files never become conflicts, deletes, renames, skipped names including `:` and case collisions, timeouts and the pause, how transfers are protected, including the S5 redirect); what never syncs; security and residual risks (threat-model §4 verbatim, plus T-I5, T-T3, T-I1, T-I2); verifying a release; sign-out and uninstall; troubleshooting.
+- `docs/entra-setup.md` now points to the README section. The guide moved rather than being copied, so there is one copy to keep current (a deviation from the **Files** list, approved in the plan). The "Before you start" text no longer says "until 1.0.0".
+- `docs/community-checklist.md` (new): 19 items from [O-SUB-1]…[O-SUB-5] and [O-POL-1]…[O-POL-4], all pass or owner-pending; the Review branch preview isn't run (needs the owner's login).
+- `release.yml`: reviewed, unchanged. A `1.0.0` tag gives a normal draft release (only `0.*` tags are pre-releases), which BRAT installs as the latest [O-BRAT-1].
+- `docs/research.md`: O-SUB-7 (the re-check; `docs.obsidian.md` and `cli.github.com` are blocked here, so web-search results were used), C-GH-5 (`gh attestation verify` flags), C-GH-6 (tag rulesets).
+- Version 1.0.0; CHANGELOG `[1.0.0]` sums up 0.4.0–0.6.4 for users.
+
+**Tests added:** `test/readme.test.ts` (11): the disclosures; the Entra guide's steps, redirect URI, scopes and account type, and the pointer in entra-setup.md; BRAT; every settings row and command name, parsed from `settings-tab.ts` and `main.ts`, appears in the README (a setting added later without docs fails it); conflict naming tied to `conflict-name.ts`; the M8 behavior notes; exclusions; every §4 risk verbatim from `threat-model.md`; both verify commands; sign-out and uninstall; no stale pre-release text and no broken relative link. `test/workflows.test.ts` (2): only `0.*` is a pre-release; `--verify-tag`. These two pin existing behavior and passed at once. `test/manifest.test.ts` (1): CHANGELOG has a dated section for the manifest version. The README tests (but the disclosures one, which the M1 README already met) and the CHANGELOG test failed before the docs were written.
+
+**Carry-ins closed**
+- **Start from `main`:** the branch starts at the PR #10 merge (e0a4efa); `[Unreleased]` became `[1.0.0]`.
+- **README items, settings reference, behavior notes:** all in the README, and tested.
+- **S5 redirect:** under **How transfers are protected**, not under the risks. The reopen condition stays in threat-model S5.
+- **Obsidian 1.14 settings-tab behavior, performance margin, matrix row 5b:** no settings or planner change in M9, so nothing to keep; they stay recorded in M8 for later work.
+- **Open items, not blocking 1.0.0:** none picked; they stay open (listed under **Open after 1.0.0**).
+
+**Open after 1.0.0** (owner's choice; unchanged from the M7 and M8 reviews)
+- checking `live()` between fragments inside `RemoteContent.resume`;
+- re-hashing after a download write in `recordDownload`;
+- a prepared but untapped sign-in has no expiry;
+- a conflict copy written by a crashed attempt uploads as an ordinary file;
+- wiring tests for the settings visibility predicates in `settings-tab.ts`.
+
+**Security review:** SECURITY_REVIEW_PLACEHOLDER
+
+**Owner results**
+| Step | Result |
+|---|---|
+| 1 Merge | (owner) |
+| 2 Tag ruleset | (owner) |
+| 3 Tag 1.0.0 → draft, 3 assets, not pre-release | (owner) |
+| 4 Published | (owner) |
+| 5 `gh attestation verify` (both forms) | (owner) |
+| 6 BRAT 1.0.0 on Ubuntu / iPad | (owner) |
+| 7 Round trip | (owner) |
+| 9 Sign-in after 30+ days | (owner, later) |
 
 ---
 
 ## Requirement traceability
 | Requirement | Milestone | Done |
 |---|---|---|
-| R-ENV-1…4 | M1, M2 | ☐ (M2 part done 2026-10-12: personal accounts only via /consumers, iPad and Ubuntu sign-in verified, minAppVersion 1.11.4) |
+| R-ENV-1…4 | M1, M2 | ☑ (M2 part done 2026-10-12: personal accounts only via /consumers, iPad and Ubuntu sign-in verified, minAppVersion 1.11.4. M8 2026-10-17: the end-to-end matrix passed on the iPad and Ubuntu, including concurrent edits (rows 11, 12, R-ENV-4); `isDesktopOnly: false` and minAppVersion tested in `test/manifest.test.ts`) |
 | R-AUTH-9 | M6 (follow-up) | ☑ (2026-10-12: a token in SecretStorage is cleared at load, with a notice, only when the plugin folder holds neither data.json nor sync-state.json (checked on disk); unit tested. Owner checks 2026-10-12: reinstall passed on Ubuntu and the iPad (0.4.1); a corrupt data.json keeps the sign-in and the file (Ubuntu)) |
 | R-AUTH-1…8 | M2 | ☑ (M2, 2026-10-12; R-AUTH-3 withdrawn. R-AUTH-7 token clear verified on Ubuntu; clearing real sync state is verified with the M6 StateStore; M6 2026-10-12: sign-out clears sync-state.json through PluginStateStore and a running sync can't write it back; tested) |
 | R-SCOPE-1…4 | M4, M5, M7 | ☑ (M7 part done 2026-10-12 (owner checks passed): maximum file size and exclude patterns settings, validated; unreadable patterns pause sync instead of excluding nothing. M4 part done 2026-10-12: configDir, hidden and user-glob exclusion (R-SCOPE-2); `remoteToVaultPath` returns the skip reason for hidden or excluded remote paths (R-SCOPE-4 rules). M5 part done 2026-10-12: size cap skips `too-large` (R-SCOPE-3), excluded or hidden remote items are skipped and reported, never downloaded (R-SCOPE-4)) |
@@ -1567,9 +1644,9 @@ gh release download 1.0.0 -R caseke/MDVaultSync -p main.js && gh attestation ver
 | R-RES-1 | M3 | ☑ (M3, 2026-10-12: Retry-After with a global pause, full-jitter backoff, run budget; unit tested; M8 2026-10-17: request timeouts (not retried; the commit fragment never times out), quota reads never retry) |
 | R-RES-2, R-RES-3 | M3, M6 | ☑ (M3 part done 2026-10-12: 10 MiB upload-session primitives, status and 404 handling; a 12 MiB two-fragment round trip passed on both devices; persistence and resume are M6; M6 part done 2026-10-12: sessions persisted before the first fragment and resumed from nextExpectedRanges, 404 restarts; saves at most 1 s after an op and before every destructive op; crash injection after every mutating call converges) |
 | R-UI-1…3 | M2, M7 | ☑ (M2 part done 2026-10-12: Account section. M7 part done 2026-10-12 (owner checks passed 2026-10-12): every R-UI-1 field; status bar on desktop with the state and last sync time; on mobile the ribbon icon shows the state and Show sync status the time (R-UI-2 amended 2026-10-12, 0.5.1); notices for errors and conflicts only; tested in the pure modules; M8 2026-10-17: the OneDrive storage line (T-D7), the Verbose logging toggle, error notice text for every code, and settings rows that follow the sign-in state (Obsidian caches definitions)) |
-| R-SEC-1, R-SEC-2 | M2 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 M2 part (SecretStorage observed on both devices, including a locked GNOME keyring) — README residual-risk text is owed in M9 |
+| R-SEC-1, R-SEC-2 | M2, M9 | ☑ R-SEC-1 (unit tested); ☑ R-SEC-2 (M2: SecretStorage observed on both devices, including a locked GNOME keyring; M9 2026-10-17: the residual risks are in the README, copied verbatim from threat-model §4 and tested in `test/readme.test.ts`) |
 | R-SEC-3 | M3, M8 | ☑ (M3 part done 2026-10-12: typed redacting logger, unit tested; M8 part done 2026-10-13: the sentinel test runs full syncs over the production stack and finds no name, content, token, URL or server message in the ring buffer or any console call) |
-| R-SEC-4 | M3, M4 | ☐ (M3 part done 2026-10-12: Graph JSON, ids, names, sizes, tags, hashes, links and transfer URLs validated; paths are M4) — M4 part done 2026-10-12: remote-derived paths validated by `remoteToVaultPath` |
-| R-SEC-5 | M1, M9 | ☐ (M1 part done: lockfile, Dependabot, CodeQL, audit, SHA pins, and secret scanning and push protection verified 2026-10-12; release attestation is M9) |
+| R-SEC-4 | M3, M4 | ☑ (M3 part done 2026-10-12: Graph JSON, ids, names, sizes, tags, hashes, links and transfer URLs validated; M4 part done 2026-10-12: remote-derived paths validated by `remoteToVaultPath`) |
+| R-SEC-5 | M1, M9 | ☐ (M1 part done: lockfile, Dependabot, CodeQL, audit, SHA pins, and secret scanning and push protection verified 2026-10-12. M9 session part 2026-10-17: release.yml reviewed for 1.0.0, attestation over the 3 files, tests in `test/workflows.test.ts`. Ticked when owner step 5, `gh attestation verify` on the published 1.0.0 `main.js`, passes) |
 | R-SEC-6 | M1 | ☑ (M1, 2026-10-12) |
-| R-ENG-1…5 | M1 onward | ☐ |
+| R-ENG-1…5 | M1 onward | ☑ (2026-10-17: R-ENG-1 strict TypeScript from the sample structure (M1); R-ENG-2 `eslint-plugin-obsidianmd` recommended in every milestone, README disclosures (M9); R-ENG-3 `src/core` and `src/remote` import no `obsidian` (lint rule, `test/lint-rules.test.ts`); R-ENG-4 the `ContentTransform` seam with the M6 non-identity test; R-ENG-5 lint, typecheck and tests pass with output pasted in every milestone M1–M9) |
