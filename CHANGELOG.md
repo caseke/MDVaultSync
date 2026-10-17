@@ -18,7 +18,7 @@ The first stable release: MDVaultSync now syncs a vault between your devices thr
 - **A preview before the first sync** on each device, and on demand with **Preview sync** or before every sync with a setting. The first sync on a device, after signing in again, or after the OneDrive folder is recreated only adds files and never deletes. Files that differ on both sides with no sync history are listed in their own group, so the conflict copies they get are no surprise.
 - **Conflicts keep both versions.** The OneDrive version keeps the name; this device's version is saved as a conflict copy such as `Note (conflict iPad 2026-10-12 140203).md` and uploaded, so every device has it. One notice lists every conflict copy. Identical files are never made into conflicts: they're compared byte for byte first. A note you edit while a sync runs is never overwritten or deleted by that sync.
 - **Safe deletes.** Deletes go to the OneDrive recycle bin or this device's trash. An edit wins over a delete. If a sync would delete more than 25 % of your synced files (adjustable), it asks first; skipped deletes aren't proposed again until a file changes or you select **Sync now**.
-- **Safe writes.** Every download is checked against OneDrive's fingerprint, written to a hidden temporary file, then moved into place. Nothing is ever written into Obsidian's settings folder, a hidden folder, or outside the vault.
+- **Safe writes.** Every download is checked against its size and, when OneDrive lists one, its fingerprint, written to a hidden temporary file, then moved into place. Nothing is ever written into Obsidian's settings folder, a hidden folder, or outside the vault.
 - **Large files and interruptions.** Files over 10 MB upload in pieces, and an interrupted upload continues where it stopped, after a restart too. Progress is saved as the sync goes, so a sync stopped by iPadOS or a lost connection resumes without losing work.
 - **Skipped files are reported, never renamed:** names OneDrive refuses, paths over 400 characters, names that clash by letter case or Unicode form, files over the size cap, and excluded or hidden files.
 - **Settings:** device name (used in conflict copy names), sync interval, maximum file size, exclude patterns (gitignore style), preview before every sync, the delete threshold, the last sync report with a **Sync now** button, **OneDrive storage** (used, total and free; warns at 10 % free), and **Verbose logging** under Diagnostics.
@@ -26,6 +26,7 @@ The first stable release: MDVaultSync now syncs a vault between your devices thr
 - **Readable notices** for every error a sync can meet, including a full OneDrive. A sync with nothing wrong stays quiet.
 - **README:** the complete guide, including the Microsoft Entra setup (moved from `docs/entra-setup.md`), a settings and commands reference, how sync behaves, the residual security risks, how to verify a release with `gh attestation verify`, and how to sign out and uninstall.
 - `docs/community-checklist.md`: the Obsidian community directory requirements, checked one by one.
+- The release workflow refuses a version tag on a commit that isn't on `main`.
 
 ### Changed
 

@@ -138,3 +138,14 @@ test("gh release create refuses a tag that doesn't exist on GitHub (--verify-tag
 	const create = steps("release").find((x) => x.includes("gh release create")) ?? "";
 	assert.match(create, /gh release create "\$TAG" \$flags .*--verify-tag/);
 });
+
+test("the release job refuses a tag on a commit that isn't on main, before attesting (T-T8)", () => {
+	const s = steps("release");
+	const onMain = s.findIndex((x) => x.includes("name: Tagged commit must be on main"));
+	const attest = s.findIndex((x) => x.includes("uses: actions/attest@"));
+	assert.ok(onMain >= 0 && attest > onMain, "main check exists and precedes attest");
+	const step = s[onMain] ?? "";
+	assert.match(step, /gh api "repos\/\$GH_REPO\/compare\/main\.\.\.\$GITHUB_SHA" --jq \.status/);
+	assert.match(step, /if \[ "\$status" != "behind" \] && \[ "\$status" != "identical" \]; then/);
+	assert.match(step, /exit 1/);
+});

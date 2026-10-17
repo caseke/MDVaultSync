@@ -1460,7 +1460,7 @@ Planning times on this host were 0.97–1.29 s, against 0.66–0.80 s on 0.6.0. 
 ---
 
 ## M9: BRAT release 1.0.0 and README with the Entra guide
-**Status:** awaiting-owner (2026-10-17, 1.0.0). The session part is done: README, community checklist, version 1.0.0 and CHANGELOG; lint, typecheck, 866 tests, build and audit pass (**Verification output**). The release itself (tag, draft, publish, `gh attestation verify`), the tag ruleset, the BRAT installs and the round trip are owner steps 1–7 below; M9 is `done` when they pass.
+**Status:** awaiting-owner (2026-10-17, 1.0.0). The session part is done: README, community checklist, version 1.0.0 and CHANGELOG; lint, typecheck, 868 tests, build and audit pass (**Verification output**). The release itself (tag, draft, publish, `gh attestation verify`), the tag ruleset, the BRAT installs and the round trip are owner steps 1–7 below; M9 is `done` when they pass.
 
 **Goal.** A first release, attested and built in CI, installable through BRAT on both devices.
 
@@ -1561,14 +1561,14 @@ npm version 1.0.0 --no-git-tag-version   # done in the session: version-bump.mjs
 ```
 *Changed in M9:* the plan had `npm version 1.0.0` and `git push --follow-tags` on `main` after the merge. The version is bumped in the branch instead, as for 0.6.x, so the pull request carries the 1.0.0 manifest and CHANGELOG; `npm version 1.0.0` on `main` would then fail ("Version not changed"). The owner tags the merge commit (step 3).
 
-**Verification output** (2026-10-17, Node 22.22, container)
+**Verification output** (2026-10-17, Node 22.22, container; after the review fixes)
 ```
 $ npm run lint                  (exit 0; 0 errors, 0 warnings)
 $ npm run typecheck             (exit 0)
 $ npm test
-# tests 866
+# tests 868
 # suites 8
-# pass 866
+# pass 868
 # fail 0
 $ npm run build                 (exit 0)
 $ npm audit --audit-level=high  (exit 0; 3 moderate, dev-only, unchanged)
@@ -1584,11 +1584,11 @@ The two builds give the same `main.js`, which the community directory's build ve
 - `README.md`, complete: what it does and doesn't; the disclosures [O-POL-1], [O-POL-2]; installing with BRAT; the full **Microsoft Entra setup**; first sync; a settings reference and a commands list; how sync works (conflict naming, identical files never become conflicts, deletes, renames, skipped names including `:` and case collisions, timeouts and the pause, how transfers are protected, including the S5 redirect); what never syncs; security and residual risks (threat-model §4 verbatim, plus T-I5, T-T3, T-I1, T-I2); verifying a release; sign-out and uninstall; troubleshooting.
 - `docs/entra-setup.md` now points to the README section. The guide moved rather than being copied, so there is one copy to keep current (a deviation from the **Files** list, approved in the plan). The "Before you start" text no longer says "until 1.0.0".
 - `docs/community-checklist.md` (new): 19 items from [O-SUB-1]…[O-SUB-5] and [O-POL-1]…[O-POL-4], all pass or owner-pending; the Review branch preview isn't run (needs the owner's login).
-- `release.yml`: reviewed, unchanged. A `1.0.0` tag gives a normal draft release (only `0.*` tags are pre-releases), which BRAT installs as the latest [O-BRAT-1].
+- `release.yml`: reviewed. A `1.0.0` tag gives a normal draft release (only `0.*` tags are pre-releases), which BRAT installs as the latest [O-BRAT-1]. New step (security review): the release job refuses a tag whose commit isn't on `main` (GitHub compare status `behind` or `identical`), before attesting. **So from now on, tag only after merging**: the 0.6.x habit of tagging a branch commit before the merge now fails the release job.
 - `docs/research.md`: O-SUB-7 (the re-check; `docs.obsidian.md` and `cli.github.com` are blocked here, so web-search results were used), C-GH-5 (`gh attestation verify` flags), C-GH-6 (tag rulesets).
 - Version 1.0.0; CHANGELOG `[1.0.0]` sums up 0.4.0–0.6.4 for users.
 
-**Tests added:** `test/readme.test.ts` (11): the disclosures; the Entra guide's steps, redirect URI, scopes and account type, and the pointer in entra-setup.md; BRAT; every settings row and command name, parsed from `settings-tab.ts` and `main.ts`, appears in the README (a setting added later without docs fails it); conflict naming tied to `conflict-name.ts`; the M8 behavior notes; exclusions; every §4 risk verbatim from `threat-model.md`; both verify commands; sign-out and uninstall; no stale pre-release text and no broken relative link. `test/workflows.test.ts` (2): only `0.*` is a pre-release; `--verify-tag`. These two pin existing behavior and passed at once. `test/manifest.test.ts` (1): CHANGELOG has a dated section for the manifest version. The README tests (but the disclosures one, which the M1 README already met) and the CHANGELOG test failed before the docs were written.
+**Tests added:** `test/readme.test.ts` (12; the 12th, the one-sync-service warning, came with the review fix): the disclosures; the Entra guide's steps, redirect URI, scopes and account type, and the pointer in entra-setup.md; BRAT; every settings row and command name, parsed from `settings-tab.ts` and `main.ts`, appears in the README (a setting added later without docs fails it); conflict naming tied to `conflict-name.ts`; the M8 behavior notes; exclusions; every §4 risk verbatim from `threat-model.md`; both verify commands; sign-out and uninstall; no stale pre-release text and no broken relative link. `test/workflows.test.ts` (3): only `0.*` is a pre-release; `--verify-tag` (these two pin existing behavior and passed at once); the commit must be on `main` (written before the step, failed first). `test/manifest.test.ts` (1): CHANGELOG has a dated section for the manifest version. The README tests (but the disclosures one, which the M1 README already met) and the CHANGELOG test failed before the docs were written.
 
 **Carry-ins closed**
 - **Start from `main`:** the branch starts at the PR #10 merge (e0a4efa); `[Unreleased]` became `[1.0.0]`.
@@ -1604,7 +1604,20 @@ The two builds give the same `main.js`, which the community directory's build ve
 - a conflict copy written by a crashed attempt uploads as an ordinary file;
 - wiring tests for the settings visibility predicates in `settings-tab.ts`.
 
-**Security review:** SECURITY_REVIEW_PLACEHOLDER
+**Security review** (`security-reviewer` agent; base e0a4efa, commits 942360a and 1511526):
+- No high findings. release.yml for 1.0.0 checked item by item with no problem (permissions, trigger, tag check before `npm ci`, tag re-check, attestation of all 3 files, draft only, pre-release only for `0.*`, SHA pins). The README's host list, Authorization claims, log claims, naming rules, settings, commands, sign-out and uninstall text match the code. The Entra guide matches the M2-verified text.
+- Fixed, medium: the disclosure said the plugin's settings and sync state stay "on this device only", which holds only when nothing else syncs the vault folder. iCloud, Obsidian Sync, Dropbox or Syncthing would carry `sync-state.json` (valid state, so no union fallback: a sync could act on another device's history, T-D1) and possibly a fallback token in `data.json`. The disclosure now says "this device's plugin folder", Install warns to use only one sync service per vault (and to keep an iPad vault out of iCloud Drive), and **Token storage** names the `data.json` exposure. Tested.
+- Fixed, low:
+  - "Both can be restored" now says local trash depends on **Deleted files** and the recycle bin keeps items for a limited time.
+  - "Checked against size and fingerprint" now says the fingerprint is checked when OneDrive provides one (README and CHANGELOG).
+  - The security section names the `data.json` fallback for the refresh token.
+  - Step 5 says what to do if the sign-in opens in Obsidian's Web viewer (T-S3).
+  - Uninstall without signing out: remove the app's access, since the token stays readable until a reinstall (T-I1, T-I2).
+  - Updating safely: turn off BRAT's startup auto-update and verify each release before updating (T-T8).
+  - release.yml: a tag on a commit not on `main` is refused (above). The release-environment reviewer gate is not added (optional below).
+  - The conflict-naming test now calls `conflictCopyPath`; the behavior and settings tests build their numbers from the code's constants (`API_TIMEOUT_MS`, `STUCK_LIMIT`, `FRAGMENT`, `DEFAULT_DATA`, `MAX_PATTERN_LINES`, `LOW_SPACE_FRACTION`); the disclosure test takes the hosts from `AUTHORITY` and `GRAPH_BASE`, and fails if `TRANSFER_HOST_SUFFIXES` changes.
+- Fixed, info: "Device" as the default on other platforms, and a unique name for two devices of one kind; MB means 1024 × 1024 bytes; the pause also ends when OneDrive answers; the byte compare may download a file without a fingerprint; verify the files from `gh release download`, not the installed `manifest.json`; names over 255 characters; the ruleset's admin bypass recorded in threat-model T8.
+- Open, optional (owner): run the release job in a `release` environment with a required reviewer (T-E4); add `--source-ref refs/tags/<version>` to the README's verify command once the owner confirms the installed gh supports it.
 
 **Owner results**
 | Step | Result |

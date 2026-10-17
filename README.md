@@ -18,7 +18,7 @@ These are required by the [Obsidian developer policies](https://docs.obsidian.md
   All requests go through Obsidian's own network API. Nothing else is contacted.
 - **Account required.** You need a personal Microsoft account with OneDrive. Work and school accounts aren't supported. You also register your own free Microsoft Entra app to get a client ID; [Microsoft Entra setup](#microsoft-entra-setup) below shows how.
 - **Files outside the vault.** The plugin reads and writes only:
-  - files inside your vault. It never syncs the Obsidian config folder or hidden files. It keeps its own settings and sync state in its plugin folder inside the config folder, on this device only;
+  - files inside your vault. It never syncs the Obsidian config folder or hidden files. It keeps its own settings and sync state in this device's plugin folder, inside the config folder;
   - its own App Folder in your OneDrive (`Apps/<your app name>`). The permission it asks for, `Files.ReadWrite.AppFolder`, can't see the rest of your OneDrive.
 
   This is how your devices share the vault.
@@ -35,6 +35,8 @@ MDVaultSync isn't in Obsidian's community plugin directory yet. Install it with 
 To update later, run **BRAT: Check for updates to all beta plugins**. Do this on each device; every device should run the same version.
 
 Then follow [Microsoft Entra setup](#microsoft-entra-setup) once, and connect each device with step 5.
+
+**Use only one sync service per vault.** Don't use MDVaultSync on a vault that iCloud Drive, Obsidian Sync, Dropbox, Syncthing or any other tool also syncs. On the iPad, keep the vault out of iCloud Drive (create it with *Store in iCloud* off). Another service would copy MDVaultSync's own data between devices: its sync state, which is only valid on the device that wrote it and could make a sync act on another device's history, and possibly its sign-in token (see **Token storage**). Both sync services would also fight over the same files.
 
 **Try it on a test vault first**, or back up your vault before the first sync. The first sync on a device only adds files and never deletes, and it shows you its plan before it runs (see [First sync](#first-sync)).
 
@@ -104,7 +106,7 @@ Do this on each device, with the same client ID.
 
 1. In Obsidian, open **Settings → MDVaultSync**. Paste the client ID into **Application (client) ID**.
 2. Choose **Sign in**.
-   - Your default browser opens Microsoft's sign-in page.
+   - Your default browser opens Microsoft's sign-in page. On desktop, if it opens inside Obsidian instead (the **Web viewer** core plugin can open external links), turn off Web viewer's option to open external links and sign in again: sign in only in your real browser, where you can see the address.
    - The consent screen says the app is **unverified**. That's expected for an app you registered yourself [I-REG-6].
    - The consent screen should show "Have full access to the application's folder". If it asks for anything more, stop and check step 4.
 3. After you approve, the browser asks to open Obsidian. Allow it. Settings should show you as signed in, and the first sync starts with a preview (see [First sync](#first-sync)).
@@ -153,12 +155,12 @@ The same merge happens if the OneDrive app folder is deleted or recreated.
 - **OneDrive storage** (signed in only): used, total and free space in your OneDrive. It warns when 10 % or less is free, and when the drive is full. Files in the OneDrive recycle bin count toward it, including the ones MDVaultSync deleted.
 - **Sign in**: opens Microsoft's sign-in page in your browser, then returns to Obsidian.
 - **Sign out**: removes the stored sign-in and the sync state from this device. Your local files are untouched, and the OneDrive copy stays. See [Sign out and uninstall](#sign-out-and-uninstall).
-- **Token storage**: where the sign-in token is kept. Normally Obsidian's secret storage; encryption then depends on your device's keyring. If secret storage fails on a device, the token is kept unencrypted in the plugin's data file, and this row shows a standing warning.
+- **Token storage**: where the sign-in token is kept. Normally Obsidian's secret storage; encryption then depends on your device's keyring. If secret storage fails on a device, the token is kept unencrypted in the plugin's data file (`data.json` in the plugin folder), and this row shows a standing warning. That file never syncs through MDVaultSync, but it does through any other tool that syncs the vault folder or backs up the device.
 
 ### Sync
-- **Device name**: used in conflict copy names. Leave it empty for the default: "iPad" on iOS (any iPhone or iPad), "Ubuntu" on Linux, "Mac", "Windows" or "Android" elsewhere.
+- **Device name**: used in conflict copy names. Leave it empty for the default: "iPad" on iOS (any iPhone or iPad), "Ubuntu" on Linux, "Mac", "Windows" or "Android", and "Device" on anything else. If you sync two devices of the same kind, give each its own name so you can tell their conflict copies apart.
 - **Sync interval**: minutes between automatic syncs, 1 to 1440 (default 5). 0 turns automatic sync off; a sync still runs about 5 seconds after Obsidian starts.
-- **Maximum file size**: in megabytes, 1 to 1024 (default 100). Larger files are skipped and listed in the sync report as `too-large`.
+- **Maximum file size**: in megabytes, 1 to 1024 (default 100). Here and below, 1 MB means 1024 × 1024 bytes. Larger files are skipped and listed in the sync report as `too-large`.
 - **Exclude patterns**: one pattern per line, like a `.gitignore` file. `*` matches any characters except `/`, `?` one character, and `**` as a whole segment any number of folders. A pattern without a `/` matches a name at any depth; one with a `/` is anchored to the vault root. A trailing `/` matches folders only, and excluding a folder excludes everything in it. `#` starts a comment. `!` lines and backslash escapes aren't supported; such patterns never match. Matching is case-sensitive. At most 200 lines. If the saved patterns can't be read, sync pauses until you check them and select **Save and resume sync**, rather than syncing with no exclusions.
 - **Preview changes before every sync**: shows every planned change and waits for **Run**. The first sync on a device always shows it.
 - **Confirm large deletes**: if a sync would delete more than this share of the synced files (1 to 100 %, default 25), it asks first and lists the deletes. **Skip deletes this time** (or leaving the prompt for 10 minutes) syncs everything else and doesn't ask about those deletes again until a file changes or you run **Sync now**.
@@ -184,7 +186,7 @@ None has a default hotkey; you can assign one in **Settings → Hotkeys**.
 **Sync state at a glance.** On desktop, the status bar shows the state and the time of the last sync. On every device, the ribbon button's icon shows the state: arrows when synced, a loader while syncing, an hourglass when the sync waits for you, a warning after an error, and a sign-in arrow when you need to sign in. A successful sync with no conflicts is silent; errors and conflicts raise a notice.
 
 ## How sync works
-Syncs run about 5 seconds after Obsidian starts, on the interval, and on **Sync now**. Only one runs at a time; a trigger during a sync queues at most one more. Each sync applies OneDrive's changes on this device first, then uploads this device's changes. Unchanged files are never transferred.
+Syncs run about 5 seconds after Obsidian starts, on the interval, and on **Sync now**. Only one runs at a time; a trigger during a sync queues at most one more. Each sync applies OneDrive's changes on this device first, then uploads this device's changes. Unchanged files are never transferred, except that a file OneDrive lists without a fingerprint may be downloaded once to compare it byte for byte.
 
 ### Conflicts
 A conflict is a file changed on both sides, with different content. Nothing is lost:
@@ -198,7 +200,7 @@ A conflict is a file changed on both sides, with different content. Nothing is l
 Merging the two versions is up to you; delete the conflict copy when you're done.
 
 ### Deletes and renames
-- Deletes go both ways. A file deleted on OneDrive goes to this device's trash (it follows Obsidian's **Deleted files** setting). A file deleted here goes to the OneDrive recycle bin. Both can be restored.
+- Deletes go both ways. A file deleted on OneDrive goes to this device's trash, as Obsidian's **Deleted files** setting says; it can be restored unless that setting is *Permanently delete*. A file deleted here goes to the OneDrive recycle bin, which keeps it for a limited time (Microsoft empties it after a while) and counts toward your storage.
 - An edit wins over a delete: if one side deleted a file and the other edited it, the edited file comes back.
 - Renames and moves are applied as renames on the other side, including whole folders, so OneDrive's version history is kept.
 - A OneDrive folder is deleted only when it is truly empty, including files this device skips.
@@ -206,14 +208,14 @@ Merging the two versions is up to you; delete the conflict copy when you're done
 ### Skipped files
 Skipped files are listed in the sync report with the reason. They are never renamed, and skipping a file never deletes it on the other side.
 
-- Names OneDrive refuses are skipped: a name with `:`, `*`, `?`, `"`, `<`, `>`, `|` or `\`, a leading or trailing space, a leading `~`, or a folder name ending in `.` (`invalid-name`); reserved names such as `CON`, `desktop.ini` or anything containing `_vti_` (`reserved-name`); and paths over 400 characters, counting the OneDrive app folder (`path-too-long`).
+- Names OneDrive refuses are skipped: a name over 255 characters or with `:`, `*`, `?`, `"`, `<`, `>`, `|` or `\`, a leading or trailing space, a leading `~`, or a folder name ending in `.` (`invalid-name`); reserved names such as `CON`, `desktop.ini` or anything containing `_vti_` (`reserved-name`); and paths over 400 characters, counting the OneDrive app folder (`path-too-long`).
 - Two files whose names differ only in letter case (`Note.md` and `note.md`, possible on Linux) can't both exist in OneDrive. If one of them is already synced, it keeps syncing and the other is skipped. If neither is synced yet, both are skipped (`case-collision`).
 - Two names that look identical but use different Unicode forms are both skipped (`unicode-collision`).
 - Files larger than **Maximum file size** (`too-large`).
 
 ### Slow or lost connections
 - A request that OneDrive doesn't answer gives up after 2 minutes, plus more time for large transfers (about 5 minutes for a 10 MB piece of an upload). The sync then ends `partial`, and the next one carries on where it stopped. The final piece of a large upload is the exception: it always waits for OneDrive's answer, so a late answer can never overwrite a newer edit.
-- While 2 or more requests are still hanging after giving up, automatic syncs (startup and interval) pause, and a notice says so once. **Sync now** still runs. Restarting Obsidian clears it.
+- While 2 or more requests are still hanging after giving up, automatic syncs (startup and interval) pause, and a notice says so once. **Sync now** still runs. The pause ends once OneDrive answers the hanging requests, or when you restart Obsidian.
 - When OneDrive asks the plugin to slow down, it waits as long as OneDrive asks, and retries other temporary errors with increasing pauses.
 - Files over 10 MB upload in pieces. An interrupted upload continues where it stopped, after a restart too.
 - Progress is saved as the sync goes, so a sync cut off by iPadOS, a lost connection or a crash resumes without losing work.
@@ -223,7 +225,7 @@ Skipped files are listed in the sync report with the reason. They are never rena
 - Every request uses HTTPS through Obsidian's network API.
 - Your sign-in token is sent only to `graph.microsoft.com` (and to Microsoft's sign-in service when it is refreshed), never to the upload and download hosts.
 - Upload and download addresses must be HTTPS and on a short list of Microsoft OneDrive hosts. If one of those hosts redirects a transfer, Obsidian follows the redirect without the plugin seeing it; no token goes along, and downloads are still checked.
-- Every download is checked against OneDrive's size and fingerprint (QuickXorHash), written to a hidden temporary file, and only then moved into place. Every upload's result is checked the same way.
+- Every download is checked against its size and, when OneDrive provides one, its fingerprint (QuickXorHash), written to a hidden temporary file, and only then moved into place. Every upload's result is checked the same way. OneDrive lists no fingerprint for some files, such as empty ones; those are checked by size only.
 - Nothing from OneDrive is ever written outside the vault, into Obsidian's config folder, or into a hidden folder: each path is checked again right before the write.
 
 ## What never syncs
@@ -235,7 +237,7 @@ Skipped files are listed in the sync report with the reason. They are never rena
 Files in OneDrive that would land in one of these places on this device aren't downloaded; they're listed in the sync report.
 
 ## Security and residual risks
-MDVaultSync asks for the smallest permission OneDrive offers, `Files.ReadWrite.AppFolder`: it reaches only its own app folder. Its access token lives in memory only, and its refresh token is stored in Obsidian's secret storage. The plugin never opens, renders or runs the contents of your files; it only moves bytes. Rendering a note is Obsidian's job, with the same risk as any file you add to a vault.
+MDVaultSync asks for the smallest permission OneDrive offers, `Files.ReadWrite.AppFolder`: it reaches only its own app folder. Its access token lives in memory only. Its refresh token is stored in Obsidian's secret storage, or, if that fails on a device, unencrypted in the plugin's data file, with a standing warning in settings. The plugin never opens, renders or runs the contents of your files; it only moves bytes. Rendering a note is Obsidian's job, with the same risk as any file you add to a vault.
 
 The risks that remain, stated plainly:
 1. Any other Obsidian plugin you install can read MDVaultSync's refresh token and your vault. This is true of every Obsidian plugin. The token reaches only the MDVaultSync folder in your OneDrive.
@@ -265,12 +267,14 @@ For a stricter check, require that the release workflow signed it:
 gh attestation verify main.js -R caseke/MDVaultSync --signer-workflow caseke/MDVaultSync/.github/workflows/release.yml
 ```
 
-The same works for `manifest.json` and `styles.css`. The installed copy is in `<vault>/<config folder>/plugins/mdvaultsync/`.
+The same works for `manifest.json` and `styles.css`. Verify the files from `gh release download`: the installed copy is in `<vault>/<config folder>/plugins/mdvaultsync/`, and its `main.js` should match, but BRAT may not store `manifest.json` byte for byte.
+
+**Updating safely.** A release is only as trustworthy as the account that publishes it. If you'd rather check each version before it runs, turn off BRAT's automatic update check at startup, update by hand with **BRAT: Check for updates to all beta plugins**, and verify the new release first.
 
 ## Sign out and uninstall
 - **Sign out** (settings or the command) removes the stored sign-in and the sync state from this device. Your notes stay, and so does the copy in OneDrive. Signing in again starts with a first-sync merge (see [First sync](#first-sync)).
 - Signing out on one device doesn't affect the others. To remove the app's access for every device, remove MDVaultSync at https://account.microsoft.com/privacy/app-access.
-- **To uninstall:** sign out first, then disable and uninstall the plugin in **Settings → Community plugins** (and remove it from BRAT's list). Obsidian gives plugins no uninstall step, and uninstalling doesn't clear Obsidian's secret storage, so a sign-in left there is removed the next time MDVaultSync is installed, with a notice. Signing out first removes it at once.
+- **To uninstall:** sign out first, then disable and uninstall the plugin in **Settings → Community plugins** (and remove it from BRAT's list). Obsidian gives plugins no uninstall step, and uninstalling doesn't clear Obsidian's secret storage, so a sign-in left there is removed the next time MDVaultSync is installed, with a notice. Signing out first removes it at once. If you uninstalled without signing out, remove the app's access at https://account.microsoft.com/privacy/app-access as well: until the next install, the sign-in stays in secret storage, where other plugins can read it, and stays valid at Microsoft.
 - Your files in OneDrive (`Apps/<your app name>`) are not deleted. Delete that folder in OneDrive if you no longer want them; to delete the app registration too, see [Removing access](#removing-access).
 
 ## Troubleshooting
