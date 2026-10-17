@@ -65,6 +65,18 @@ export class PluginTokenStore implements TokenStore {
 		return this.current === "memory" && !!this.readSecret();
 	}
 
+	/**
+	 * What the settings row must explain (M9 review):
+	 * - "memory": this session's sign-in, or the last one, lives in memory only;
+	 * - "memory-stale": as "memory", and SecretStorage still holds an older token it wouldn't overwrite;
+	 * - "older-secret": the last sign-in was memory-only, and this launch read an older token from SecretStorage.
+	 */
+	get storageWarning(): "none" | "memory" | "memory-stale" | "older-secret" {
+		if (this.current === "memory") return this.staleSecret ? "memory-stale" : "memory";
+		if (!this.data.get().sessionOnlySignIn) return "none";
+		return this.get() === null ? "memory" : "older-secret";
+	}
+
 	/** Tries SecretStorage first on every write, so a keyring that starts working takes the token over. */
 	async set(refreshToken: string): Promise<void> {
 		if (this.trySecret(refreshToken) && this.readSecret() === refreshToken) {
@@ -100,7 +112,9 @@ export class PluginTokenStore implements TokenStore {
 		try {
 			await this.setFlag(false);
 		} catch {
-			// The flag isn't secret: failing to save it must not make sign-out report a token it removed.
+			// The flag isn't secret: failing to save it must not make sign-out report a token it removed. Keep it off
+			// in memory, so the next successful save writes it off too.
+			this.data.get().sessionOnlySignIn = false;
 		}
 		if (this.readSecret()) throw new TokenClearError();
 	}
@@ -154,8 +168,8 @@ export class PluginTokenStore implements TokenStore {
  */
 export async function migrateLegacyToken(
 	raw: unknown,
-	store: Pick<PluginTokenStore, "adoptLegacy">,
-	persist: () => Promise<void>,
+	store: Pick<PluginTokenStore, "adoptLegacy" | "backend">,
+	persist: (patch: Partial<PluginData>) => Promise<void>,
 ): Promise<"none" | "removed" | "save-failed"> {
 	const legacy = legacyRefreshToken(raw);
 	if (legacy === null) return "none";
@@ -165,7 +179,8 @@ export async function migrateLegacyToken(
 		// Only the flag save can fail here; the strip below is what matters.
 	}
 	try {
-		await persist();
+		// The flag is written with the strip, so a failed flag save inside adoptLegacy can't leave it wrong on disk.
+		await persist({ sessionOnlySignIn: store.backend === "memory" });
 		return "removed";
 	} catch {
 		return "save-failed";

@@ -242,9 +242,11 @@ function migrationSetup(failSecret: boolean, failSave: boolean) {
 	const { secrets, data, store } = setup();
 	secrets.failSet = failSecret;
 	const written: Record<string, unknown>[] = [];
-	const persist = () => {
+	// Like main.ts persist: the patch lands in data only after a successful write.
+	const persist = (patch: Partial<PluginData> = {}) => {
 		if (failSave) return Promise.reject(new Error("disk"));
-		written.push({ ...data });
+		written.push({ ...data, ...patch });
+		Object.assign(data, patch);
 		return Promise.resolve();
 	};
 	return { secrets, data, store, written, persist };
@@ -275,4 +277,61 @@ test("migration removes an unusable legacy field too", async () => {
 test("migration reports a failed save, so the caller can warn", async () => {
 	const m = migrationSetup(true, true);
 	assert.equal(await migrateLegacyToken({ fallbackRefreshToken: "OLD" }, m.store, m.persist), "save-failed");
+});
+
+test("migration records a memory-only adopt even when the flag's own save failed", async () => {
+	const secrets = new FakeSecrets();
+	secrets.failSet = true;
+	const data: PluginData = { ...DEFAULT_DATA };
+	let saves = 0;
+	const store = new PluginTokenStore(secrets, {
+		get: () => data,
+		save: () => (saves++ === 0 ? Promise.reject(new Error("disk")) : Promise.resolve()),
+	});
+	const written: Record<string, unknown>[] = [];
+	const persist = (patch: Partial<PluginData> = {}) => {
+		written.push({ ...data, ...patch });
+		Object.assign(data, patch);
+		return Promise.resolve();
+	};
+	assert.equal(await migrateLegacyToken({ fallbackRefreshToken: "OLD" }, store, persist), "removed");
+	assert.equal(store.backend, "memory");
+	assert.equal(written[written.length - 1]?.["sessionOnlySignIn"], true);
+	assert.ok(!JSON.stringify(written).includes("OLD"));
+});
+
+test("clear leaves the flag off even when its save fails", async () => {
+	const secrets = new FakeSecrets();
+	const data: PluginData = { ...DEFAULT_DATA, sessionOnlySignIn: true };
+	const store = new PluginTokenStore(secrets, { get: () => data, save: () => Promise.reject(new Error("disk")) });
+	await store.clear();
+	assert.equal(data.sessionOnlySignIn, false);
+	assert.equal(store.storageWarning, "none");
+});
+
+test("storageWarning names each case the settings row explains", async () => {
+	const ok = setup();
+	await ok.store.set("RT");
+	assert.equal(ok.store.storageWarning, "none");
+
+	const mem = setup();
+	mem.secrets.failSet = true;
+	await mem.store.set("RT");
+	assert.equal(mem.store.storageWarning, "memory");
+
+	const stale = setup();
+	stale.secrets.map.set(SECRET_ID, "OLD");
+	stale.secrets.dropWrites = true;
+	await stale.store.set("RT");
+	assert.equal(stale.store.storageWarning, "memory-stale");
+
+	// Next launch: the flag is still set, and SecretStorage hands back the older token it kept.
+	const relaunched = new PluginTokenStore(stale.secrets, { get: () => stale.data, save: () => Promise.resolve() });
+	assert.equal(relaunched.get(), "OLD");
+	assert.equal(relaunched.storageWarning, "older-secret");
+
+	// Next launch with nothing in SecretStorage: the launch notice covers it, and the row says memory only.
+	const gone = new PluginTokenStore(mem.secrets, { get: () => mem.data, save: () => Promise.resolve() });
+	assert.equal(gone.get(), null);
+	assert.equal(gone.storageWarning, "memory");
 });

@@ -1460,7 +1460,7 @@ Planning times on this host were 0.97–1.29 s, against 0.66–0.80 s on 0.6.0. 
 ---
 
 ## M9: BRAT release 1.0.0 and README with the Entra guide
-**Status:** awaiting-owner (2026-10-17, 1.0.0). The session part is done: README, community checklist, version 1.0.0 and CHANGELOG; lint, typecheck, 872 tests, build and audit pass (**Verification output**, after the owner-notes follow-up and its review). The release itself (tag, draft, publish, `gh attestation verify`), the tag ruleset, the BRAT installs and the round trip are owner steps 1–7 below; M9 is `done` when they pass.
+**Status:** awaiting-owner (2026-10-17, 1.0.0). The session part is done: README, community checklist, version 1.0.0 and CHANGELOG; lint, typecheck, 875 tests, build and audit pass (**Verification output**, after the owner-notes follow-up and both review passes). The release itself (tag, draft, publish, `gh attestation verify`), the tag ruleset, the BRAT installs and the round trip are owner steps 1–7 below; M9 is `done` when they pass.
 
 **Goal.** A first release, attested and built in CI, installable through BRAT on both devices.
 
@@ -1565,22 +1565,22 @@ npm version 1.0.0 --no-git-tag-version   # done in the session: version-bump.mjs
 ```
 *Changed in M9:* the plan had `npm version 1.0.0` and `git push --follow-tags` on `main` after the merge. The version is bumped in the branch instead, as for 0.6.x, so the pull request carries the 1.0.0 manifest and CHANGELOG; `npm version 1.0.0` on `main` would then fail ("Version not changed"). The owner tags the merge commit (step 3).
 
-**Verification output** (2026-10-17, Node 22.22, container; after the owner-notes follow-up and its review fixes)
+**Verification output** (2026-10-17, Node 22.22, container; after the owner-notes follow-up and both review passes)
 ```
 $ npm run lint                  (exit 0; 0 errors, 0 warnings)
 $ npm run typecheck             (exit 0)
 $ npm test
-# tests 872
+# tests 875
 # suites 8
-# pass 872
+# pass 875
 # fail 0
 $ npm run build                 (exit 0)
 $ npm audit --audit-level=high  (exit 0; 3 moderate, dev-only, unchanged)
 $ scripts/check-network-apis.sh
 no forbidden network APIs
 $ npm run build; sha256sum main.js   (twice)
-1d473fb238fcb8b15df362b81db4708c167faae9e57ab92231d96a2a89b6d5b6  main.js
-1d473fb238fcb8b15df362b81db4708c167faae9e57ab92231d96a2a89b6d5b6  main.js
+7ecf487d2cf4a5eeceac53f7353621180726d22d777d482956911b35288ea7e4  main.js
+7ecf487d2cf4a5eeceac53f7353621180726d22d777d482956911b35288ea7e4  main.js
 ```
 Before the follow-up (after the first review fixes): 868 tests passing, `main.js` sha256 `d36b5900…77f6e` both times. The count fell by the removed probe tests and rose by the new token, migration, copy and README tests.
 The two builds give the same `main.js`, which the community directory's build verification relies on [O-SUB-5].
@@ -1624,6 +1624,14 @@ Triage of the 9 notes: 1, 2, 3, 4a, 5 and 7 before the tag; 4b, 6 and 8 after (b
     - Stale comments in `main.ts` and `capabilities.ts`, and design §1 and §10.
     - SPEC R-AUTH-5 covers a write SecretStorage doesn't keep.
     - Threat-model D3 notes the removed file-replace test.
+  - **Re-review** (commit 9520075): every finding fixed. No high or medium.
+    - Fixed, low:
+      - If the flag's own save failed during a memory-only migration, the strip-save could write `sessionOnlySignIn: false`. The migration now writes the flag from the store's backend in the same save (tested).
+      - At the next launch after a stale-secret session, the row said "memory only" while signed in with the older token. `TokenStore.storageWarning` now names four cases and the row has text for each (tested).
+      - A `writeText` that returns no promise now counts as manual, not copied (tested).
+    - Fixed, info:
+      - After a failed flag save, `clear` keeps the flag off in memory, so a later save writes it off (tested).
+      - Design §10 names `storageWarning`.
 
 **Open after 1.0.0** (owner's choice; the M7 and M8 review items, plus owner notes 4b, 6 and 8)
 - **Duplicate device names (note 4b).** No data-safety effect: copies carry a timestamp to the second and get ` 2` on a clash. Detecting duplicates needs a shared registry file in the app folder (new remote data, validation and threat-model rows).

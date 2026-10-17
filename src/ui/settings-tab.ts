@@ -24,6 +24,19 @@ import { refreshAction } from "./settings-refresh.ts";
 import { LogModal } from "./log-modal.ts";
 import { renderReport } from "./report-view.ts";
 
+/** The Token storage row when Obsidian's secret storage didn't keep the sign-in (D-5). */
+const TOKEN_WARNING_TEXT: Record<"memory" | "memory-stale" | "older-secret", string> = {
+	memory:
+		"Obsidian secret storage isn't working on this device, so your sign-in is kept in memory only, never on disk. " +
+		"You'll need to sign in again each time Obsidian starts.",
+	"memory-stale":
+		"Obsidian secret storage isn't working on this device, so your sign-in is kept in memory only, never on disk. " +
+		"An older sign-in is still in secret storage and couldn't be replaced; Sign out removes it once secret storage works, or remove this app's access at your Microsoft account.",
+	"older-secret":
+		"Signed in with an older sign-in found in Obsidian secret storage: last session's sign-in couldn't replace it. " +
+		"If sync reports a sign-in problem, sign out and sign in again.",
+};
+
 const STATUS_TEXT: Record<AuthStatus, string> = {
 	"signed-out": "Signed out.",
 	"signed-in": "Signed in to OneDrive.",
@@ -269,15 +282,9 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 			{
 				name: "Token storage",
 				render: (s) => {
-					if (this.plugin.tokenStore.sessionOnly) {
-						setDescError(
-							s,
-							"Obsidian secret storage isn't working on this device, so your sign-in is kept in memory only, " +
-								"never on disk. You'll need to sign in again each time Obsidian starts." +
-								(this.plugin.tokenStore.staleSecret
-									? " An older sign-in is still in secret storage and couldn't be replaced; Sign out removes it once secret storage works, or remove this app's access at your Microsoft account."
-									: ""),
-						);
+					const warning = this.plugin.tokenStore.storageWarning;
+					if (warning !== "none") {
+						setDescError(s, TOKEN_WARNING_TEXT[warning]);
 					} else {
 						s.setDesc("Stored in Obsidian secret storage. Encryption depends on your device's keyring.");
 					}

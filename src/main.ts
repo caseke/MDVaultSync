@@ -136,7 +136,7 @@ export default class MDVaultSyncPlugin extends Plugin {
 		});
 		// Before AuthClient reads the token: a 0.x plaintext token leaves data.json (D-5), and a sign-in left by an
 		// uninstalled copy is removed (R-AUTH-9).
-		if ((await migrateLegacyToken(raw, this.tokenStore, () => this.persist())) === "save-failed") {
+		if ((await migrateLegacyToken(raw, this.tokenStore, (p) => this.persist(p))) === "save-failed") {
 			console.error("MDVaultSync: could not remove the old sign-in from data.json");
 			const msg = createFragment((f) => {
 				f.appendText(LEGACY_SAVE_FAILED_TEXT);
