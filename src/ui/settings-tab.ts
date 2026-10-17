@@ -17,6 +17,7 @@ import {
 	parseThreshold,
 	type PluginData,
 } from "../settings.ts";
+import { accountRowVisible, type AccountRow } from "./account-rows.ts";
 import { quotaText } from "./quota.ts";
 import { RecentCounter } from "./recent-counter.ts";
 import { refreshAction } from "./settings-refresh.ts";
@@ -31,7 +32,14 @@ const STATUS_TEXT: Record<AuthStatus, string> = {
 interface Row {
 	name: string;
 	desc?: string;
-	render(setting: Setting): void;
+	/**
+	 * Evaluated at render time (Obsidian 1.13+ evaluates `visible` on every render; the fallback renderer when it
+	 * builds). Obsidian reuses the definitions built at load, so nothing that depends on state may be decided
+	 * when the rows are listed (M8 matrix row 10).
+	 */
+	visible?: () => boolean;
+	/** May return a cleanup, run before the row is torn down (1.13+). */
+	render(setting: Setting): void | (() => void);
 }
 
 interface Section {
@@ -51,6 +59,8 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 	private shown = false;
 	/** Bumped on every sign-in control render, so a slow prepare can't fill in an outdated link. */
 	private renderId = 0;
+	/** The Sign in row, so a client ID change can rebuild just its control. */
+	private signInSetting: Setting | null = null;
 	/** The rendered report, refreshed alone after each sync so typing in another field keeps its focus. */
 	private reportEl: HTMLElement | null = null;
 	private readonly refreshes = new RecentCounter(1_000);
@@ -63,15 +73,21 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 	/** Re-render after auth or sync changes: update() on 1.13+, the fallback renderer before. */
 	refresh(): void {
 		this.crumb("refresh", this.refreshes.hit(Date.now()));
-		// Only while the tab is on screen: rendering prepares a sign-in, and only hide() discards it (R-SEC-1). A
-		// closed tab isn't re-rendered (M8 matrix row 10); it renders afresh when it next opens.
+		// 1.13+: always rebuild the definitions Obsidian caches, even while the tab is closed. It reuses them when
+		// the tab opens (it doesn't call getSettingDefinitions() again; M8 matrix row 10), and update() on a
+		// closed tab only stores them, rendering nothing (observed: `defs` at load, no row renders).
+		if (requireApiVersion("1.13.0")) {
+			this.update();
+			return;
+		}
+		// The fallback renderer draws at once, which prepares a sign-in that only hide() discards (R-SEC-1): only
+		// while the tab is on screen.
 		const connected = this.containerEl.isConnected;
 		if (refreshAction({ onScreen: this.shown, connected }) === "skip") {
 			this.crumb(connected ? "refresh-skipped-hidden" : "refresh-skipped-detached");
 			return;
 		}
-		if (requireApiVersion("1.13.0")) this.update();
-		else this.renderFallback();
+		this.renderFallback();
 	}
 
 	/** After a sync: re-render only the report, if it is on screen. */
@@ -90,13 +106,14 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 	}
 
 	/** Wraps a row's render with start and end breadcrumbs, `<section>-<index>`. */
-	private tracked(section: string, i: number, r: Row): (setting: Setting) => void {
+	private tracked(section: string, i: number, r: Row): (setting: Setting) => void | (() => void) {
 		return (setting) => {
 			// A row renders only while the tab is on screen; hide() clears this again.
 			this.shown = true;
 			this.crumb(`${section}-${i}`);
-			r.render(setting);
+			const cleanup = r.render(setting);
 			this.crumb(`${section}-${i}-done`);
+			return cleanup;
 		};
 	}
 
@@ -117,6 +134,7 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 			items: s.rows.map((r, i) => ({
 				name: r.name,
 				...(r.desc !== undefined ? { desc: r.desc } : {}),
+				...(r.visible !== undefined ? { visible: r.visible } : {}),
 				render: this.tracked(s.id, i, r),
 			})),
 		}));
@@ -137,6 +155,7 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 		for (const s of this.sections()) {
 			const group = new SettingGroup(containerEl).setHeading(s.heading);
 			for (const [i, r] of s.rows.entries()) {
+				if (r.visible && !r.visible()) continue;
 				group.addSetting((setting) => {
 					setting.setName(r.name);
 					if (r.desc !== undefined) setting.setDesc(r.desc);
@@ -164,14 +183,15 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 
 	private accountRows(): Row[] {
 		const auth = this.plugin.auth;
-		const signedIn = auth.status === "signed-in";
-		let signInSetting: Setting | null = null;
+		// Read at render time, never here: these definitions outlive the state they were built in (row 10).
+		const signedIn = () => auth.status === "signed-in";
+		const shows = (row: AccountRow) => () => accountRowVisible(row, auth.status);
 		const idDesc = (value: string) => {
-			if (signedIn) return "Sign out to change it. The sign-in belongs to this ID.";
+			if (signedIn()) return "Sign out to change it. The sign-in belongs to this ID.";
 			if (value === "") return "From your app registration in Microsoft Entra. See the setup guide in the README.";
 			return isValidClientId(value) ? "Saved." : "Not a valid ID. It looks like 00000000-0000-0000-0000-000000000000.";
 		};
-		const rows: Row[] = [
+		return [
 			{
 				name: "Status",
 				render: (s) => {
@@ -186,61 +206,71 @@ export class MDVaultSyncSettingTab extends PluginSettingTab {
 						text
 							.setPlaceholder("00000000-0000-0000-0000-000000000000")
 							.setValue(this.plugin.data.clientId)
-							.setDisabled(signedIn)
+							.setDisabled(signedIn())
 							.onChange(async (raw) => {
 								const value = raw.trim();
 								s.setDesc(idDesc(value));
 								if (value === "" || isValidClientId(value)) {
 									await this.save({ clientId: value });
 									// Rebuild only the sign-in control, so the text field keeps focus.
-									if (signInSetting) this.renderSignInControl(signInSetting);
+									if (this.signInSetting && !signedIn()) this.renderSignInControl(this.signInSetting);
 								}
 							}),
 					);
 				},
 			},
-		];
-		if (signedIn) {
-			rows.push({
+			{
 				name: "OneDrive storage",
+				visible: shows("storage"),
 				render: (s) => this.renderQuota(s),
-			});
-			rows.push({
+			},
+			{
 				name: "Sign out",
 				desc: "Removes the stored sign-in and sync state from this device. Local files are untouched.",
+				visible: shows("sign-out"),
 				render: (s) => {
 					s.addButton((b) => b.setButtonText("Sign out").onClick(() => void this.plugin.signOut()));
 				},
-			});
-		} else {
-			rows.push({
+			},
+			{
 				name: "Sign in",
 				desc: "Opens Microsoft's sign-in page in your browser, then returns to Obsidian.",
+				visible: shows("sign-in"),
 				render: (s) => {
-					signInSetting = s;
+					this.signInSetting = s;
 					this.renderSignInControl(s);
+					// Torn down (a re-render, or the tab closing): drop the untapped link's verifier and state (R-SEC-1).
+					return () => {
+						if (this.signInSetting === s) this.signInSetting = null;
+						this.renderId++;
+						this.plugin.auth.discardPrepared();
+					};
 				},
-			});
-		}
-		rows.push({
-			name: "Token storage",
-			render: (s) => {
-				if (this.plugin.tokenStore.backend === "plugin-data") {
-					setDescError(
-						s,
-						"Obsidian secret storage failed on this device, so the sign-in token is stored unencrypted " +
-							"in this plugin's data file. Use device encryption, and sign in again once secret storage works.",
-					);
-				} else {
-					s.setDesc("Stored in Obsidian secret storage. Encryption depends on your device's keyring.");
-				}
 			},
-		});
-		return rows;
+			{
+				name: "Token storage",
+				render: (s) => {
+					if (this.plugin.tokenStore.backend === "plugin-data") {
+						setDescError(
+							s,
+							"Obsidian secret storage failed on this device, so the sign-in token is stored unencrypted " +
+								"in this plugin's data file. Use device encryption, and sign in again once secret storage works.",
+						);
+					} else {
+						s.setDesc("Stored in Obsidian secret storage. Encryption depends on your device's keyring.");
+					}
+				},
+			},
+		];
 	}
 
 	/** Used and free space (T-D7) [G-QT-1]. Read at most every 5 minutes (QuotaCache); a failure shows no detail. */
 	private renderQuota(setting: Setting): void {
+		// Never a Graph read without a sign-in: in the stale layout this read was the last step before the freeze.
+		if (this.plugin.auth.status !== "signed-in") {
+			setting.setDesc("Sign in to see storage.");
+			return;
+		}
 		setting.setDesc("Loading…");
 		this.plugin.quota.get().then(
 			(q) => {

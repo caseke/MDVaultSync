@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+0.6.3: the settings freeze, fixed at its cause.
+
+### Fixed
+
+- If you signed out with the command, or your Microsoft account removed this app's access, while settings were closed, opening the MDVaultSync settings could freeze Obsidian. Obsidian kept showing the settings as they were when you were signed in, including a storage check that can't work without a sign-in. The settings now always show the rows for your current state, and the storage line doesn't check anything until you're signed in.
+
 0.6.2: the settings freeze after access was removed (in progress).
 
 ### Fixed

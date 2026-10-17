@@ -1,5 +1,5 @@
-// When the settings tab may re-render (M8 matrix row 10): only while it is on screen. A status change while the
-// tab is closed (a revoked grant seen by a background sync) must not call update() on a closed tab.
+// When the fallback settings renderer (Obsidian before 1.13) may redraw: only while the tab is on screen, since
+// drawing prepares a sign-in (R-SEC-1). On 1.13+ the tab always calls update() (M8 matrix row 10).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { refreshAction } from "../src/ui/settings-refresh.ts";
