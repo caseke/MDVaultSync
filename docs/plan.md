@@ -1501,7 +1501,7 @@ Planning times on this host were 0.97–1.29 s, against 0.66–0.80 s on 0.6.0. 
   - conflict naming, including that identical files are never turned into conflicts;
   - names OneDrive refuses, such as `:` in a name, are skipped and listed;
   - with two names that differ only in letter case and neither synced yet, both are skipped (R-PATH-2).
-- **S5 redirect** (M3 carry-in, accepted by the owner 2026-10-17): it stays off the README's residual-risk list; the README may mention it under how transfers are protected.
+- **S5 redirect** (M3 carry-in, accepted by the owner 2026-10-17): it stays off the README's residual-risk list; the README may mention it under how transfers are protected. **Reopen S5** if the transfer-host allowlist (design §8) ever gains a domain where outsiders can create subdomains, such as `.sharepoint.com`: an outsider-owned allowed host could then redirect uploads.
 - **Obsidian 1.14 settings-tab behavior** (M8 row 10; design §10; research [O-API-21], [O-API-22]). It differs from its d.ts in two ways:
   - it builds `getSettingDefinitions()` at load and on `update()`, and reuses that copy when the tab opens;
   - it calls `render` for rows whose `visible` is false.
