@@ -145,7 +145,8 @@ test("the release job refuses a tag on a commit that isn't on main, before attes
 	const attest = s.findIndex((x) => x.includes("uses: actions/attest@"));
 	assert.ok(onMain >= 0 && attest > onMain, "main check exists and precedes attest");
 	const step = s[onMain] ?? "";
-	assert.match(step, /gh api "repos\/\$GH_REPO\/compare\/main\.\.\.\$GITHUB_SHA" --jq \.status/);
+	assert.match(step, /base="\$\(gh api "repos\/\$GH_REPO\/branches\/main" --jq \.commit\.sha\)"/);
+	assert.match(step, /gh api "repos\/\$GH_REPO\/compare\/\$base\.\.\.\$GITHUB_SHA" --jq \.status/);
 	assert.match(step, /if \[ "\$status" != "behind" \] && \[ "\$status" != "identical" \]; then/);
 	assert.match(step, /exit 1/);
 });

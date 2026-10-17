@@ -88,8 +88,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          # "behind" or "identical": the built commit is main or an ancestor of it (T-T8).
-          status="$(gh api "repos/$GH_REPO/compare/main...$GITHUB_SHA" --jq .status)"
+          # "behind" or "identical": the built commit is main or an ancestor of it (T-T8). The branch is
+          # resolved by the branches API, so a tag named "main" can't stand in for it.
+          base="$(gh api "repos/$GH_REPO/branches/main" --jq .commit.sha)"
+          status="$(gh api "repos/$GH_REPO/compare/$base...$GITHUB_SHA" --jq .status)"
           if [ "$status" != "behind" ] && [ "$status" != "identical" ]; then
             echo "::error::$GITHUB_SHA is not on main (compare status: $status)"
             exit 1
