@@ -1183,7 +1183,7 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 ---
 
 ## M8: Hardening and end-to-end test matrix
-**Status:** awaiting-owner (2026-10-13). The session work is done: lint, typecheck, 833 tests, build and audit pass (see **Verification output**), the sentinel and notice-mapping tests pass, every threat-model row has a status, and the security-review passes are done and their findings fixed. Open: the re-runs on 0.6.1 of rows 2, 5b, 6, 7 → 8, 10 and 12 (the 0.6.0 results and verdicts are under **Results**), and the owner's sign-off on the S5 redirect acceptance. M9 depends on this matrix.
+**Status:** awaiting-owner (2026-10-17, 0.6.1). The session work is done: lint, typecheck, 843 tests, build and audit pass (see **Verification output**), the sentinel and notice-mapping tests pass, every threat-model row has a status, and the security-review passes are done and their findings fixed. Open: the re-runs on 0.6.1 of rows 2, 5b, 6, 7 → 8, 10 and 12 (the 0.6.0 results and verdicts are under **Results**), and the owner's sign-off on the S5 redirect acceptance. M9 depends on this matrix.
 
 **Goal.** Close the remaining threat-model rows and prove v1 on real devices.
 
@@ -1229,7 +1229,7 @@ The Obsidian-facing files (main.ts, the modals, the settings tab) import `obsidi
 | 1, 3, 4, 7, 9, 11 | Pass | Stand. |
 | 2 | Fail: an extra conflict copy | **Bug, fixed in 0.6.1.** Re-run. Most likely the commit of the 30 MB upload landed but its answer was lost to airplane mode; the next run found the file with no sync record and no hash in OneDrive's listing, so the pair counted as "differs, no history", and the conflict procedure wrote the copy before comparing bytes. Reproduced in `test/engine.test.ts`. The procedure now compares first (design §5.5 step 0). |
 | 5 | Fail: neither note synced, both `case-collision` | **As specified** (R-PATH-2: with neither name tracked, both are skipped; nothing is guessed or renamed). The row's wording was wrong. Recorded as **5a: pass**; **5b** (a tracked name) is new. |
-| 6 | Fail: reported "would land outside the vault" | **Bug (reason only; the file was safely skipped), fixed in 0.6.1.** The drive-letter check (`C:`) ran before the name rules. Now `invalid-name`. Re-run. |
+| 6 | Fail: reported "would land outside the vault" | **Bug, fixed in 0.6.1.** The drive-letter check (`C:`) ran before the name rules, so the file was reported `outside-vault`; it was safely skipped either way. Now `invalid-name`. One side effect, safer (M8 review): a synced note renamed to such a name now keeps its OneDrive copy, as other invalid names already did, instead of counting as a local delete. Re-run. |
 | 8 | Fail: iPad download + 2 uploads + a no-history conflict | **Most likely carried over from row 7.** That plan is exactly a first-sync merge (it never deletes, and it matches by path), which a device runs once after the app folder changes. If the iPad's first sync after row 7 happened in row 8, this is by design. 0.6.1 marks such runs in the log (`"code":"union"`). Re-run 7 → 8 with the new precondition. |
 | 10 | Fail: both devices froze after the restart | **Not explained by the code.** The same revoked-grant path runs without hanging in the tests, so it involves something only the app has. 0.6.1 adds refresh breadcrumbs and the Verbose logging toggle; re-run with the console open. |
 | 12 | Unclear: the iPad edit arrived before typing started | **Test setup**: the download didn't race the typing. New steps. Re-run. |
@@ -1271,6 +1271,47 @@ $ scripts/check-network-apis.sh
 no forbidden network APIs
 ```
 The planning times are the slowest of 3 runs of `plan()` on a 5,000-file, 250-folder fake vault (`test/planner.perf.test.ts`); the limit is 2,000 ms. The engine's `sync.plan` log event now carries `durationMs`, so the time on a real vault shows in **Copy log**.
+
+**Verification output, 0.6.1** (2026-10-17, after the 0.6.1 review fixes; Node 22.22, container)
+```
+$ npm run lint                  (exit 0; 0 errors, 0 warnings)
+$ npm run typecheck             (exit 0)
+$ npm test
+# tests 843
+# suites 8
+# pass 843
+# fail 0
+$ npm run build                 (exit 0)
+$ npm audit --audit-level=high  (exit 0; 3 moderate, dev-only, unchanged)
+$ scripts/check-network-apis.sh
+no forbidden network APIs
+```
+Planning times on this host were 0.97–1.29 s, against 0.66–0.80 s on 0.6.0. The 0.6.0 code (stashed) measured the same 0.98–1.13 s on this host, so the rise comes from the host, not from 0.6.1. The margin to the 2 s limit is now about 1.5×.
+
+**0.6.1 changes** (after the owner's first pass; verdicts under **Results**):
+- **Row 2** (`src/core/executor.ts`, design §5.5 step 0): the conflict procedure compares both versions before it writes a copy: the item's hash, or the downloaded bytes byte for byte when OneDrive lists no hash. Identical files are recorded as synced, with no copy. Tests:
+  - the lost commit answer;
+  - different bytes;
+  - the same bytes;
+  - an edit made during the download (it uploads on the next run);
+  - an XOR transform;
+  - a constructed QuickXorHash collision (two different 200-byte files with equal hashes), which must still give a copy.
+- **Row 6** (`src/core/paths.ts`, planner): `containmentSkipReason` reports a drive-letter name as `invalid-name`. `containmentProblem` (the pre-write re-check) still refuses it.
+- **Rows 7–8** (engine): `sync.plan` logs `code: "union"` for first-sync merges.
+- **Row 10:**
+  - `AuthClient` logs `auth.refresh` breadcrumbs (design §9).
+  - Settings → Diagnostics has the **Verbose logging** toggle. Design §9 specified it from the start, but it was never built.
+- Version 0.6.1.
+
+**0.6.1 security review** (`security-reviewer` agent; base 49ab5c3, commit e784e25):
+- No high or medium findings. The step-0 adopt can't lose or mask local bytes (an edit after the read leaves mtime 0, so the next scan re-hashes). The drive-letter refusal holds at every local write. The breadcrumbs and the console mirror carry codes only.
+- Fixed, low:
+  - With the remote bytes already downloaded, step 0 still decided by QuickXorHash, which a writer to the App Folder could collide. It now compares bytes, and the collision test proves it.
+  - Edge cases are now tested: an edit during the download, a non-identity transform, and the collision.
+  - The sentinel run now gives `AuthClient` the logger, so the breadcrumbs pass the sentinel check and the console capture.
+  - A bad token answer or a failed token store left `start` as the last breadcrumb, which looks like a hang. These now log `failed-local`.
+- Fixed, info: the clear step can no longer skip the sign-in-required notice if the logger throws. The row-6 verdict and the CHANGELOG now say that a rename to such a name keeps the OneDrive copy.
+- Open, info: a copy an earlier, crashed attempt wrote stays on disk and uploads as an ordinary file (design §5.5 step 0).
 
 **What was built**
 - `src/remote/timeout.ts` (new): `TimeoutTransport` wraps the requestUrl transport once in `main.ts`, under both the authorizing and the transfer transport. 120 s, plus 1 s per started 64 KiB of body; `GraphClient.download` sets `HttpRequest.timeoutMs` (new optional field, `ports.ts`) from the item size. `RequestTimeout` (no URL) isn't retried; `classify.ts` maps it to `network`/`timeout`, so the run ends `partial`. An upload session's final fragment carries `NO_TIMEOUT` (see **Security review**). `stuck` counts timed-out requests still hanging; at 2, unattended triggers skip, with a one-time notice (`ui/triggers.ts`).

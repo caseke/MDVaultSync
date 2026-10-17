@@ -103,7 +103,7 @@ function device(net: Network, logger: RingLogger, name: string, setTimer: SetTim
 	const clock = new ManualClock();
 	const httpClock = new FakeClock();
 	const transport = new TimeoutTransport(net, setTimer);
-	const auth = new AuthClient({ transport, tokens: new MemoryTokens(`${REFRESH}-0`), clock: httpClock, getClientId: () => CLIENT_ID });
+	const auth = new AuthClient({ transport, tokens: new MemoryTokens(`${REFRESH}-0`), clock: httpClock, getClientId: () => CLIENT_ID, logger });
 	const retry = new RetryPolicy({ clock: httpClock, random: () => 0.5, logger });
 	const graph = new GraphClient({ transport: new AuthorizingTransport(transport, auth), transferTransport: transport, retry, clock: httpClock, logger });
 	const transform = new IdentityTransform();
@@ -240,7 +240,7 @@ test("no sentinel name, content or token reaches the log ring buffer or the cons
 
 		// The runs reached every phase and the logged failure paths (successful ops aren't logged one by one).
 		const ops = new Set<string>(logger.entries().map((e) => e.op));
-		for (const op of ["graph.request", "sync.run", "sync.pull", "sync.scan", "sync.plan", "sync.exec", "op.upload-new", "retry.backoff", "state.save"]) {
+		for (const op of ["auth.refresh", "graph.request", "sync.run", "sync.pull", "sync.scan", "sync.plan", "sync.exec", "op.upload-new", "retry.backoff", "state.save"]) {
 			assert.ok(ops.has(op), `the log has ${op}`);
 		}
 		assert.ok(

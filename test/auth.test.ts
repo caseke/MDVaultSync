@@ -655,3 +655,19 @@ test("refresh breadcrumbs: start, the outcome and the token clear are logged by 
 		["start", "network", "start", "failed"],
 	);
 });
+
+test("refresh breadcrumbs: a bad 2xx answer and a failed token store each log their own exit (M8 review)", async () => {
+	const http = new FakeHttp();
+	const tokens = new MemoryTokenStore();
+	tokens.value = "RT";
+	const clock = new FakeClock();
+	const log = new RingLogger({ now: () => 0 });
+	const auth = new AuthClient({ transport: http, tokens, clock, getClientId: () => CLIENT_ID, logger: log });
+	http.enqueueJson(200, { token_type: "Bearer" });
+	await assert.rejects(auth.getAccessToken());
+	tokens.set = () => Promise.reject(new Error("keyring"));
+	http.enqueueJson(200, tokenBody());
+	await assert.rejects(auth.getAccessToken());
+	const codes = log.entries().filter((e) => e.op === "auth.refresh").map((e) => e.code);
+	assert.deepEqual(codes, ["start", "failed-local", "start", "failed-local"]);
+});

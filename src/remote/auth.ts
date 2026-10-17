@@ -299,10 +299,13 @@ export class AuthClient implements AccessTokenProvider {
 				this.access = null;
 				this.signInRequired = true;
 				// If the clear fails, status still reads sign-in-required and the dead token is never sent again.
-				await this.tokens.clear().then(
-					() => this.logger.event("auth.refresh", { code: "cleared" }),
-					() => this.logger.event("auth.refresh", { code: "clear-failed" }),
-				);
+				await this.tokens
+					.clear()
+					.then(
+						() => this.logger.event("auth.refresh", { code: "cleared" }),
+						() => this.logger.event("auth.refresh", { code: "clear-failed" }),
+					)
+					.catch(() => undefined);
 				this.notify();
 				this.logger.event("auth.refresh", { code: "notified" });
 				throw new AuthError("sign-in-required", code);
@@ -310,13 +313,21 @@ export class AuthClient implements AccessTokenProvider {
 			this.logger.event("auth.refresh", { code: "failed", status: res.status });
 			throw new AuthError("token-request-failed", code);
 		}
-		const tok = parseOrThrow(res.body, false);
-		// The rotated refresh token replaces the stored one before the access token is used [I-TL-3].
-		await this.storeRefreshToken(tok, epoch);
-		this.cacheAccess(tok);
+		let token: string;
+		try {
+			const tok = parseOrThrow(res.body, false);
+			// The rotated refresh token replaces the stored one before the access token is used [I-TL-3].
+			await this.storeRefreshToken(tok, epoch);
+			this.cacheAccess(tok);
+			token = tok.accessToken;
+		} catch (e) {
+			// A bad answer, a failed token store or a sign-out meanwhile: the last breadcrumb never reads "start".
+			this.logger.event("auth.refresh", { code: "failed-local" });
+			throw e;
+		}
 		this.logger.event("auth.refresh", { code: "ok" });
 		this.notify();
-		return tok.accessToken;
+		return token;
 	}
 
 	private async storeRefreshToken(tok: TokenResponse, epoch: number): Promise<void> {

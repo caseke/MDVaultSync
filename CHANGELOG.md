@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - After a large upload was cut off at the very end (for example by airplane mode), the next sync could make a conflict copy of a file that was identical on both sides. A sync now compares the two versions before it makes a copy, and only keeps both when they really differ.
-- A file named like `a:b.md` was reported as "would land outside the vault". It's now reported as an invalid name (OneDrive doesn't allow `:`). It was never uploaded either way.
+- A file named like `a:b.md` was reported as "would land outside the vault". It's now reported as an invalid name (OneDrive doesn't allow `:`). It was never uploaded either way. Renaming a synced note to such a name now keeps its OneDrive copy, as other invalid names already did, instead of deleting it there.
 
 ### Added
 
